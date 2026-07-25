@@ -1,0 +1,468 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+
+use Compta\Core\Auth\UserRepository;
+use Compta\Core\Config\AppConfig;
+use Compta\Core\Database\BackupService;
+use Compta\Core\Database\ConnectionFactory;
+use Compta\Core\Database\IntegrityChecker;
+use Compta\Core\Database\MigrationRunner;
+use Compta\Core\Diagnostics\Doctor;
+use Compta\Core\Audit\AuditLogger;
+use Compta\Modules\Dossiers\ScopeManager;
+use Compta\Modules\Compta\AccountingSetupService;
+use Compta\Modules\Compta\PlanSeeder;
+use Compta\Modules\Tresorerie\BankImportService;
+use Compta\Modules\Tresorerie\TreasuryAccountService;
+use Compta\Modules\Tresorerie\TreasuryStateService;
+use Compta\Modules\Tva\Ech0217ExportService;
+use Compta\Modules\Tva\Ech0217Validator;
+use Compta\Modules\Tva\VatStatementService;
+
+require dirname(__DIR__) . '/bootstrap/autoload.php';
+
+$root = dirname(__DIR__);
+$command = $argv[1] ?? 'help';
+$options = [];
+foreach (array_slice($argv, 2) as $argument) {
+    if (str_starts_with($argument, '--')) {
+        [$key, $value] = array_pad(explode('=', substr($argument, 2), 2), 2, true);
+        $options[$key] = $value;
+    }
+}
+
+if ($command === 'help') {
+    exit(help());
+}
+if ($command === 'test') {
+    exit(runTests($root, is_string($options['suite'] ?? null) ? $options['suite'] : 'all'));
+}
+if ($command === 'qualify') {
+    require $root . '/tools/qualification.php';
+    exit(runQualification($root));
+}
+
+$config = AppConfig::load($root);
+$pdo = ConnectionFactory::sqlite($config->string('database_path'));
+$migrations = new MigrationRunner($pdo, $root . '/database/migrations');
+
+try {
+    $exit = match ($command) {
+        'app:doctor' => doctor($config, $pdo, $migrations),
+        'db:migrate' => migrate($config, $pdo, $migrations, $options),
+        'db:integrity' => integrity($pdo),
+        'user:create-admin' => createAdmin($pdo, $options),
+        'organisation:create' => createOrganisation($pdo, $options),
+        'dossier:create' => createDossier($pdo, $options),
+        'exercice:create' => createExercise($pdo, $options),
+        'role:grant' => grantRole($pdo, $options),
+        'compta:plan-seed' => seedAccountingPlan($pdo, $root),
+        'compta:plan-install' => installAccountingPlan($pdo, $root, $options),
+        'compta:periode-create' => createAccountingPeriod($pdo, $options),
+        'compta:journal-create' => createAccountingJournal($pdo, $options),
+        'tresorerie:compte-create' => createTreasuryAccount($pdo, $options),
+        'tresorerie:import-preview' => previewBankImport($pdo, $options),
+        'tresorerie:import-confirm' => confirmBankImport($pdo, $options),
+        'tresorerie:etat' => treasuryState($pdo, $options),
+        'tva:periode-create' => createVatPeriod($pdo, $options),
+        'tva:decompte-prepare' => prepareVatStatement($pdo, $options),
+        'tva:decompte-control' => controlVatStatement($pdo, $options),
+        'tva:ech-export' => exportVatStatement($pdo, $root, $options),
+        'tva:decompte-declare' => declareVatStatement($pdo, $options),
+        default => help(),
+    };
+} catch (Throwable $e) {
+    fwrite(STDERR, "ERREUR: {$e->getMessage()}\n");
+    $exit = 1;
+}
+exit($exit);
+
+function help(): int
+{
+    echo <<<TXT
+Compta — commandes du socle
+
+  app:doctor
+  db:migrate --plan
+  db:migrate --apply --backup
+  db:integrity
+  user:create-admin --email=admin@example.test
+  organisation:create --nom="École" --nature=pedagogique
+  dossier:create --organisation=1 --nom="Mandat" --slug=mandat --type=exercice
+  exercice:create --dossier=1 --libelle=2026 --debut=2026-01-01 --fin=2026-12-31
+  role:grant --utilisateur=1 --role=lecteur --scope=dossier --scope-id=1
+  compta:plan-seed
+  compta:plan-install --organisation=1 --dossier=1 --variante=personne_morale [--association] [--projets] [--fonds-affectes]
+  compta:periode-create --organisation=1 --dossier=1 --exercice=1 --libelle=2026 --debut=2026-01-01 --fin=2026-12-31
+  compta:journal-create --organisation=1 --dossier=1 --code=OD --libelle="Opérations diverses" --type=general
+  tresorerie:compte-create --organisation=1 --dossier=1 --compte=42 --libelle=PostFinance --type=poste [--iban=CH...] [--monnaie=CHF]
+  tresorerie:import-preview --organisation=1 --dossier=1 --tresorerie=1 --fichier=/chemin/releve.xml
+  tresorerie:import-confirm --organisation=1 --dossier=1 --import=1
+  tresorerie:etat --organisation=1 --dossier=1 --tresorerie=1 [--date=2026-12-31]
+  tva:periode-create --organisation=1 --dossier=1 --debut=2026-01-01 --fin=2026-03-31
+  tva:decompte-prepare --organisation=1 --dossier=1 --periode=1 [--rectifie=1]
+  tva:decompte-control --organisation=1 --dossier=1 --decompte=1
+  tva:ech-export --organisation=1 --dossier=1 --decompte=1 --sortie=/chemin/tva.xml
+  tva:decompte-declare --organisation=1 --dossier=1 --decompte=1
+  test [--suite=quick|integration|all]
+  qualify
+
+TXT;
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function migrate(AppConfig $config, PDO $pdo, MigrationRunner $runner, array $options): int
+{
+    if (isset($options['plan']) || !isset($options['apply'])) {
+        foreach ($runner->plan() as $item) {
+            printf("%-8s %-10s %s\n", $item['version'], $item['status'], $item['file']);
+        }
+        return 0;
+    }
+    if (!isset($options['backup'])) {
+        throw new RuntimeException('L’application exige --backup avant une migration.');
+    }
+    $backup = BackupService::create(
+        $pdo,
+        $config->string('storage_path') . '/backups',
+        $config->string('instance_id')
+    );
+    echo "Sauvegarde vérifiée : {$backup}\n";
+    $applied = $runner->apply();
+    echo $applied === [] ? "Aucune migration à appliquer.\n" : 'Appliquées : ' . implode(', ', $applied) . "\n";
+    return IntegrityChecker::check($pdo)['ok'] ? 0 : 1;
+}
+
+function integrity(PDO $pdo): int
+{
+    $result = IntegrityChecker::check($pdo);
+    echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+    return $result['ok'] ? 0 : 1;
+}
+
+function doctor(AppConfig $config, PDO $pdo, MigrationRunner $runner): int
+{
+    $hasError = false;
+    foreach ((new Doctor($config, $pdo, $runner))->run() as $item) {
+        $symbol = match ($item['level']) {
+            'ok' => 'OK ',
+            'warning' => 'ATT',
+            default => 'ERR',
+        };
+        printf("[%s] %-24s %s\n", $symbol, $item['label'], $item['message']);
+        $hasError = $hasError || $item['level'] === 'error';
+    }
+    return $hasError ? 1 : 0;
+}
+
+/** @param array<string, mixed> $options */
+function createAdmin(PDO $pdo, array $options): int
+{
+    $email = is_string($options['email'] ?? null) ? trim($options['email']) : '';
+    $password = getenv('COMPTA_ADMIN_PASSWORD') ?: '';
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        throw new RuntimeException('Utilisez --email=adresse-valide.');
+    }
+    if (strlen($password) < 12) {
+        throw new RuntimeException('Définissez COMPTA_ADMIN_PASSWORD (12 caractères minimum).');
+    }
+    $users = new UserRepository($pdo);
+    $pdo->beginTransaction();
+    try {
+        $userId = $users->create($email, $password);
+        $stmt = $pdo->prepare(
+            "INSERT INTO utilisateur_roles_installation (utilisateur_id, role_id)
+             SELECT :user, id FROM roles WHERE code = 'administrateur'"
+        );
+        $stmt->execute(['user' => $userId]);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+    echo "Administrateur créé : {$email}\n";
+    return 0;
+}
+
+function runTests(string $root, string $suite = 'all'): int
+{
+    if (!in_array($suite, ['quick', 'integration', 'all'], true)) {
+        fwrite(STDERR, "Suite inconnue : {$suite}\n");
+        return 2;
+    }
+    passthru(
+        PHP_BINARY . ' ' . escapeshellarg($root . '/tests/run.php')
+            . ' --suite=' . escapeshellarg($suite),
+        $status
+    );
+    return $status;
+}
+
+/** @param array<string, mixed> $options */
+function createOrganisation(PDO $pdo, array $options): int
+{
+    $id = (new ScopeManager($pdo, new AuditLogger($pdo)))->createOrganisation(
+        optionString($options, 'nom'),
+        optionString($options, 'nature')
+    );
+    echo "Organisation créée : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function createDossier(PDO $pdo, array $options): int
+{
+    $id = (new ScopeManager($pdo, new AuditLogger($pdo)))->createDossier(
+        optionInt($options, 'organisation'),
+        optionString($options, 'nom'),
+        optionString($options, 'slug'),
+        optionString($options, 'type')
+    );
+    echo "Dossier créé : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function createExercise(PDO $pdo, array $options): int
+{
+    $id = (new ScopeManager($pdo, new AuditLogger($pdo)))->createExercise(
+        optionInt($options, 'dossier'),
+        optionString($options, 'libelle'),
+        optionString($options, 'debut'),
+        optionString($options, 'fin')
+    );
+    echo "Exercice créé : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function grantRole(PDO $pdo, array $options): int
+{
+    $scopeId = isset($options['scope-id']) ? optionInt($options, 'scope-id') : null;
+    (new ScopeManager($pdo, new AuditLogger($pdo)))->grantRole(
+        optionInt($options, 'utilisateur'),
+        optionString($options, 'role'),
+        optionString($options, 'scope'),
+        $scopeId
+    );
+    echo "Rôle attribué.\n";
+    return 0;
+}
+
+function seedAccountingPlan(PDO $pdo, string $root): int
+{
+    $models = (new PlanSeeder($pdo, $root . '/database/seeds'))->seedCatalog();
+    echo 'Catalogue de plans chargé : VEB #' . $models['veb']
+        . ', association #' . $models['association'] . "\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function installAccountingPlan(PDO $pdo, string $root, array $options): int
+{
+    $count = (new PlanSeeder($pdo, $root . '/database/seeds'))->installForDossier(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        is_string($options['variante'] ?? null)
+            ? $options['variante']
+            : 'personne_morale',
+        isset($options['association']),
+        [
+            'projets' => isset($options['projets']),
+            'fonds_affectes' => isset($options['fonds-affectes']),
+        ]
+    );
+    echo "Plan installé : {$count} compte(s) ajouté(s).\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function createAccountingPeriod(PDO $pdo, array $options): int
+{
+    $id = (new AccountingSetupService($pdo, new AuditLogger($pdo)))->createPeriod(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'exercice'),
+        optionString($options, 'libelle'),
+        optionString($options, 'debut'),
+        optionString($options, 'fin')
+    );
+    echo "Période créée : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function createAccountingJournal(PDO $pdo, array $options): int
+{
+    $id = (new AccountingSetupService($pdo, new AuditLogger($pdo)))->createJournal(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionString($options, 'code'),
+        optionString($options, 'libelle'),
+        is_string($options['type'] ?? null) ? $options['type'] : 'general'
+    );
+    echo "Journal créé : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function createTreasuryAccount(PDO $pdo, array $options): int
+{
+    $id = (new TreasuryAccountService($pdo, new AuditLogger($pdo)))->create([
+        'organisation_id' => optionInt($options, 'organisation'),
+        'dossier_id' => optionInt($options, 'dossier'),
+        'compte_comptable_id' => optionInt($options, 'compte'),
+        'libelle' => optionString($options, 'libelle'),
+        'type' => optionString($options, 'type'),
+        'iban' => is_string($options['iban'] ?? null) ? $options['iban'] : '',
+        'bic' => is_string($options['bic'] ?? null) ? $options['bic'] : '',
+        'monnaie' => is_string($options['monnaie'] ?? null) ? $options['monnaie'] : 'CHF',
+    ]);
+    echo "Compte de trésorerie créé : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function previewBankImport(PDO $pdo, array $options): int
+{
+    $path = optionString($options, 'fichier');
+    $content = file_get_contents($path);
+    if ($content === false) {
+        throw new RuntimeException("Fichier bancaire illisible : {$path}");
+    }
+    $result = (new BankImportService($pdo, new AuditLogger($pdo)))->preview(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'tresorerie'),
+        basename($path),
+        $content
+    );
+    echo json_encode(
+        $result,
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    ) . "\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function confirmBankImport(PDO $pdo, array $options): int
+{
+    $result = (new BankImportService($pdo, new AuditLogger($pdo)))->confirm(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'import')
+    );
+    echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function treasuryState(PDO $pdo, array $options): int
+{
+    $result = (new TreasuryStateService($pdo))->state(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'tresorerie'),
+        is_string($options['date'] ?? null) ? $options['date'] : ''
+    );
+    echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function createVatPeriod(PDO $pdo, array $options): int
+{
+    $id = (new VatStatementService($pdo, new AuditLogger($pdo)))->createPeriod(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionString($options, 'debut'),
+        optionString($options, 'fin')
+    );
+    echo "Période TVA créée : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function prepareVatStatement(PDO $pdo, array $options): int
+{
+    $id = (new VatStatementService($pdo, new AuditLogger($pdo)))->prepare(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'periode'),
+        isset($options['rectifie']) ? optionInt($options, 'rectifie') : null
+    );
+    echo "Décompte TVA préparé : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function controlVatStatement(PDO $pdo, array $options): int
+{
+    (new VatStatementService($pdo, new AuditLogger($pdo)))->control(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'decompte')
+    );
+    echo "Décompte TVA contrôlé et rapproché du grand livre.\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function exportVatStatement(PDO $pdo, string $root, array $options): int
+{
+    $result = (new Ech0217ExportService(
+        $pdo,
+        new AuditLogger($pdo),
+        new Ech0217Validator(
+            $root . '/resources/xsd/ech-0217-2-0-0-current-profile.xsd'
+        ),
+        trim((string) file_get_contents($root . '/VERSION'))
+    ))->export(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'decompte')
+    );
+    $path = optionString($options, 'sortie');
+    if (file_put_contents($path, $result['xml'], LOCK_EX) === false) {
+        throw new RuntimeException("Impossible d’écrire l’export : {$path}");
+    }
+    echo "eCH-0217 2.0.0 validé et exporté : {$path}\n";
+    echo "Non transmis : importez-le manuellement dans Décompte TVA pro.\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function declareVatStatement(PDO $pdo, array $options): int
+{
+    (new VatStatementService($pdo, new AuditLogger($pdo)))->markDeclared(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        optionInt($options, 'decompte')
+    );
+    echo "Décompte marqué déclaré sur confirmation opérateur.\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function optionString(array $options, string $key): string
+{
+    $value = $options[$key] ?? '';
+    if (!is_string($value) || trim($value) === '') {
+        throw new RuntimeException("Option --{$key} requise.");
+    }
+    return trim($value);
+}
+
+/** @param array<string, mixed> $options */
+function optionInt(array $options, string $key): int
+{
+    $value = filter_var($options[$key] ?? null, FILTER_VALIDATE_INT);
+    if ($value === false || $value < 1) {
+        throw new RuntimeException("Option --{$key} entière positive requise.");
+    }
+    return $value;
+}

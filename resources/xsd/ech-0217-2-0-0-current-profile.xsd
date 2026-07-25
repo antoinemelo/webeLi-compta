@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Profil local hors ligne des structures eCH-0217 2.0.0 utilisées par Compta.
+  Dérivé du XSD officiel vérifié le 2026-07-25 :
+  https://www.ech.ch/fr/ech/ech-0217/2.0.0
+  Il couvre effectiveReportingMethod et simpleTaxRateMethod (périodes dès 2025).
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+  xmlns:eCH-0217="http://www.ech.ch/xmlns/eCH-0217/2"
+  xmlns:eCH-0058="http://www.ech.ch/xmlns/eCH-0058/5"
+  xmlns:eCH-0108="http://www.ech.ch/xmlns/eCH-0108/7"
+  targetNamespace="http://www.ech.ch/xmlns/eCH-0217/2"
+  elementFormDefault="qualified" version="2.0">
+  <xs:import namespace="http://www.ech.ch/xmlns/eCH-0058/5"
+    schemaLocation="ech-0058-5-local.xsd"/>
+  <xs:import namespace="http://www.ech.ch/xmlns/eCH-0108/7"
+    schemaLocation="ech-0108-7-local.xsd"/>
+  <xs:simpleType name="amountType">
+    <xs:restriction base="xs:decimal"><xs:fractionDigits value="2"/></xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="percentType">
+    <xs:restriction base="xs:decimal">
+      <xs:minInclusive value="0"/><xs:maxInclusive value="100"/>
+      <xs:fractionDigits value="2"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:complexType name="turnoverTaxRateType">
+    <xs:sequence>
+      <xs:element name="taxRate" type="eCH-0217:percentType"/>
+      <xs:element name="turnover" type="eCH-0217:amountType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="activityIDTurnoverTaxRateType">
+    <xs:sequence>
+      <xs:element name="activityID">
+        <xs:simpleType><xs:restriction base="xs:token">
+          <xs:minLength value="5"/><xs:maxLength value="5"/>
+        </xs:restriction></xs:simpleType>
+      </xs:element>
+      <xs:element name="taxRate" type="eCH-0217:percentType"/>
+      <xs:element name="turnover" type="eCH-0217:amountType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="variousDeductionType">
+    <xs:sequence>
+      <xs:element name="amountVariousDeduction" type="eCH-0217:amountType"/>
+      <xs:element name="descriptionVariousDeduction">
+        <xs:simpleType><xs:restriction base="xs:token">
+          <xs:minLength value="0"/><xs:maxLength value="50"/>
+        </xs:restriction></xs:simpleType>
+      </xs:element>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="generalInformationType">
+    <xs:sequence>
+      <xs:element name="uid" type="eCH-0108:uidType"/>
+      <xs:element name="organisationName" type="eCH-0108:unitNameType"/>
+      <xs:element name="generationTime" type="xs:dateTime"/>
+      <xs:element name="reportingPeriodFrom" type="xs:date"/>
+      <xs:element name="reportingPeriodTill" type="xs:date"/>
+      <xs:element name="typeOfSubmission">
+        <xs:simpleType><xs:restriction base="xs:int">
+          <xs:enumeration value="1"/><xs:enumeration value="2"/><xs:enumeration value="3"/>
+        </xs:restriction></xs:simpleType>
+      </xs:element>
+      <xs:element name="formOfReporting">
+        <xs:simpleType><xs:restriction base="xs:int">
+          <xs:enumeration value="1"/><xs:enumeration value="2"/>
+        </xs:restriction></xs:simpleType>
+      </xs:element>
+      <xs:element name="businessReferenceId" type="eCH-0058:businessReferenceIdType"/>
+      <xs:element name="sendingApplication" type="eCH-0058:sendingApplicationType"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="turnoverComputationType">
+    <xs:sequence>
+      <xs:element name="totalConsideration" type="eCH-0217:amountType"/>
+      <xs:element name="suppliesToForeignCountries" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="suppliesAbroad" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="transferNotificationProcedure" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="suppliesExemptFromTax" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="reductionOfConsideration" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="variousDeduction" type="eCH-0217:variousDeductionType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="effectiveReportingMethodType">
+    <xs:sequence>
+      <xs:element name="grossOrNet">
+        <xs:simpleType><xs:restriction base="xs:int">
+          <xs:enumeration value="1"/><xs:enumeration value="2"/>
+        </xs:restriction></xs:simpleType>
+      </xs:element>
+      <xs:element name="opted" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="suppliesPerTaxRate" type="eCH-0217:turnoverTaxRateType"
+        minOccurs="0" maxOccurs="100"/>
+      <xs:element name="acquisitionTax" type="eCH-0217:turnoverTaxRateType"
+        minOccurs="0" maxOccurs="100"/>
+      <xs:element name="inputTaxMaterialAndServices" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="inputTaxInvestments" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="subsequentInputTaxDeduction" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="inputTaxCorrections" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="inputTaxReductions" type="eCH-0217:amountType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="simpleTaxRateMethodType">
+    <xs:sequence>
+      <xs:element name="suppliesPerTaxRate" type="eCH-0217:activityIDTurnoverTaxRateType"
+        minOccurs="0" maxOccurs="100"/>
+      <xs:element name="acquisitionTax" type="eCH-0217:turnoverTaxRateType"
+        minOccurs="0" maxOccurs="100"/>
+      <xs:element name="inputTaxCorrections" type="eCH-0217:amountType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="otherFlowsOfFundsType">
+    <xs:sequence>
+      <xs:element name="subsidies" type="eCH-0217:amountType" minOccurs="0"/>
+      <xs:element name="donations" type="eCH-0217:amountType" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="VATDeclaration">
+    <xs:complexType><xs:sequence>
+      <xs:element name="generalInformation" type="eCH-0217:generalInformationType"/>
+      <xs:element name="turnoverComputation" type="eCH-0217:turnoverComputationType"/>
+      <xs:choice>
+        <xs:element name="effectiveReportingMethod" type="eCH-0217:effectiveReportingMethodType"/>
+        <xs:element name="simpleTaxRateMethod" type="eCH-0217:simpleTaxRateMethodType"/>
+      </xs:choice>
+      <xs:element name="payableTax" type="eCH-0217:amountType"/>
+      <xs:element name="otherFlowsOfFunds" type="eCH-0217:otherFlowsOfFundsType" minOccurs="0"/>
+    </xs:sequence></xs:complexType>
+  </xs:element>
+</xs:schema>

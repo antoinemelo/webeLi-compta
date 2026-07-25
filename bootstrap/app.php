@@ -1,0 +1,78 @@
+<?php
+declare(strict_types=1);
+
+use Compta\Core\Audit\AuditLogger;
+use Compta\Core\Auth\AccessControl;
+use Compta\Core\Auth\AuthService;
+use Compta\Core\Auth\LoginThrottle;
+use Compta\Core\Auth\UserRepository;
+use Compta\Core\Config\AppConfig;
+use Compta\Core\Database\ConnectionFactory;
+use Compta\Core\Http\View;
+use Compta\Core\Http\WebApplication;
+use Compta\Core\Security\Csrf;
+use Compta\Core\Security\NativeSessionStore;
+use Compta\Modules\Compta\ChartOfAccountsService;
+use Compta\Modules\Compta\EntryService;
+use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Facturation\BillingService;
+use Compta\Modules\Facturation\ContactService;
+use Compta\Modules\Facturation\AttachmentService;
+use Compta\Modules\Facturation\InvoicePdfService;
+use Compta\Modules\Facturation\PaymentService;
+use Compta\Modules\Salaires\PayrollCertificateService;
+use Compta\Modules\Salaires\PayrollConfigurationService;
+use Compta\Modules\Salaires\PayrollImportService;
+use Compta\Modules\Salaires\PayrollPaymentService;
+use Compta\Modules\Salaires\PayrollService;
+use Compta\Modules\Pedagogie\PedagogyService;
+
+require __DIR__ . '/autoload.php';
+
+$root = dirname(__DIR__);
+$config = AppConfig::load($root);
+$pdo = ConnectionFactory::sqlite($config->string('database_path'));
+$session = new NativeSessionStore($config);
+$session->start();
+$users = new UserRepository($pdo);
+$audit = new AuditLogger($pdo);
+$entries = new EntryService($pdo, $audit);
+$payrolls = new PayrollService($pdo, $audit, $entries);
+
+return [
+    'config' => $config,
+    'pdo' => $pdo,
+    'session' => $session,
+    'web' => new WebApplication(
+        $config,
+        new View($root . '/templates', $config),
+        $session,
+        new Csrf($session),
+        new AuthService(
+            $users,
+            new LoginThrottle(
+                $pdo,
+                $config->int('login_max_attempts'),
+                $config->int('login_window_seconds')
+            ),
+            $audit,
+            $session
+        ),
+        new AccessControl($pdo),
+        $audit,
+        new ReportingService($pdo),
+        new ChartOfAccountsService($pdo, $audit),
+        $entries,
+        new ContactService($pdo, $audit),
+        new BillingService($pdo, $audit, $entries),
+        new PaymentService($pdo, $audit, $entries),
+        new InvoicePdfService($pdo, $audit),
+        new AttachmentService($pdo, $audit),
+        new PayrollConfigurationService($pdo, $audit),
+        $payrolls,
+        new PayrollPaymentService($pdo, $audit, $entries),
+        new PayrollCertificateService($pdo, $audit),
+        new PayrollImportService($pdo, $audit, $payrolls),
+        new PedagogyService($pdo, $audit, $entries)
+    ),
+];

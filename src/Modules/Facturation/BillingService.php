@@ -1,0 +1,813 @@
+<?php
+declare(strict_types=1);
+
+namespace Compta\Modules\Facturation;
+
+use Compta\Core\Audit\AuditLogger;
+use Compta\Modules\Compta\EntryService;
+use Compta\Modules\Tva\VatCalculator;
+use Compta\Modules\Tva\VatLineService;
+use PDO;
+use Throwable;
+
+final class BillingService
+{
+    private bool $transactionActive = false;
+    private ContactService $contacts;
+    private VatLineService $vat;
+
+    public function __construct(
+        private readonly PDO $pdo,
+        private readonly AuditLogger $audit,
+        private readonly EntryService $entries,
+    ) {
+        $this->contacts = new ContactService($pdo, $audit);
+        $this->vat = new VatLineService($pdo, $audit);
+    }
+
+    /**
+     * @param list<array{
+     *   libelle:string,quantite_milli:int,prix_unitaire_centimes:int,
+     *   mode_saisie:string,compte_id:int,code_tva_id:int,date_prestation:string,
+     *   deduction_bp?:?int,motif_correction?:string,tdfn_id?:?int
+     * }> $lines
+     */
+    public function createDraft(
+        int $organisationId,
+        int $dossierId,
+        string $type,
+        int $contactId,
+        string $documentDate,
+        string $dueDate,
+        array $lines,
+        ?int $collectiveAccountId = null,
+        string $externalNumber = '',
+        ?int $originDocumentId = null,
+        ?int $attachmentId = null,
+        ?int $actorId = null,
+    ): int {
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $type,
+            $contactId,
+            $documentDate,
+            $dueDate,
+            $lines,
+            $collectiveAccountId,
+            $externalNumber,
+            $originDocumentId,
+            $attachmentId,
+            $actorId
+        ): int {
+            $this->assertType($type);
+            $this->assertDate($documentDate);
+            $this->assertDate($dueDate);
+            if ($dueDate < $documentDate || $lines === []) {
+                throw new BillingException('Dates ou lignes du document invalides.');
+            }
+            if (
+                str_contains($type, 'fournisseur')
+                && trim($externalNumber) === ''
+            ) {
+                throw new BillingException('Le numéro de facture fournisseur est requis.');
+            }
+            $contact = $this->contacts->snapshot($organisationId, $dossierId, $contactId);
+            $snapshot = json_encode($contact, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+            $address = json_encode(
+                $contact['adresse'],
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
+            );
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO documents_financiers
+                 (organisation_id, dossier_id, contact_id, type, date_document,
+                  date_echeance, adresse_snapshot_json, contact_snapshot_json,
+                  compte_collectif_id, numero_externe, document_origine_id,
+                  justificatif_id, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([
+                $organisationId, $dossierId, $contactId, $type,
+                $documentDate, $dueDate, $address, $snapshot,
+                $collectiveAccountId, trim($externalNumber),
+                $originDocumentId, $attachmentId, $actorId,
+            ]);
+            $id = (int) $this->pdo->lastInsertId();
+            $this->replaceLines($organisationId, $dossierId, $id, $lines, 1);
+            $this->audit->log(
+                'facturation.document_brouillon_cree',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'document_financier',
+                (string) $id,
+                ['type' => $type]
+            );
+            return $id;
+        }, true);
+    }
+
+    /**
+     * @param list<array<string,mixed>> $lines
+     */
+    public function replaceLines(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        array $lines,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $documentId,
+            $lines,
+            $expectedVersion,
+            $actorId
+        ): void {
+            $document = $this->document($organisationId, $dossierId, $documentId);
+            if (
+                $document['statut'] !== 'brouillon'
+                || (int) $document['version'] !== $expectedVersion
+                || $lines === []
+            ) {
+                throw new BillingException(
+                    'Brouillon absent, émis ou modifié par un autre utilisateur.'
+                );
+            }
+            $this->pdo->prepare('DELETE FROM lignes_document WHERE document_id = ?')
+                ->execute([$documentId]);
+            $insert = $this->pdo->prepare(
+                'INSERT INTO lignes_document
+                 (document_id, ordre, libelle, quantite_milli,
+                  prix_unitaire_centimes, mode_saisie, compte_id, code_tva_id,
+                  date_prestation, deduction_bp, motif_correction, tdfn_id,
+                  base_nette_centimes, tva_centimes, total_brut_centimes,
+                  taux_tva_snapshot_bp, code_tva_snapshot,
+                  traitement_tva_snapshot, nature_tva_snapshot,
+                  chiffre_afc_snapshot, deduction_snapshot_bp,
+                  tva_deductible_centimes, activite_tdfn_snapshot,
+                  taux_tdfn_snapshot_bp)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            );
+            $net = 0;
+            $vat = 0;
+            $gross = 0;
+            $sign = str_starts_with((string) $document['type'], 'avoir_') ? -1 : 1;
+            foreach (array_values($lines) as $index => $line) {
+                $quantity = (int) ($line['quantite_milli'] ?? 0);
+                $unitPrice = (int) ($line['prix_unitaire_centimes'] ?? -1);
+                $label = trim((string) ($line['libelle'] ?? ''));
+                if ($quantity <= 0 || $unitPrice < 0 || $label === '') {
+                    throw new BillingException('Ligne de document invalide.');
+                }
+                $amount = $sign * VatCalculator::divideRounded(
+                    $unitPrice * $quantity,
+                    1000
+                );
+                $quote = $this->vat->quote(
+                    $organisationId,
+                    $dossierId,
+                    (int) $line['code_tva_id'],
+                    (string) $line['date_prestation'],
+                    $amount,
+                    (string) $line['mode_saisie'],
+                    isset($line['deduction_bp']) ? (int) $line['deduction_bp'] : null,
+                    (string) ($line['motif_correction'] ?? ''),
+                    isset($line['tdfn_id']) ? (int) $line['tdfn_id'] : null
+                );
+                $insert->execute([
+                    $documentId, $index + 1, $label, $quantity, $unitPrice,
+                    $line['mode_saisie'], (int) $line['compte_id'],
+                    (int) $line['code_tva_id'], $line['date_prestation'],
+                    $line['deduction_bp'] ?? null,
+                    trim((string) ($line['motif_correction'] ?? '')),
+                    $line['tdfn_id'] ?? null,
+                    $quote['net_cents'], $quote['vat_cents'], $quote['gross_cents'],
+                    $quote['rate_bp'], $quote['code'], $quote['treatment'],
+                    $quote['nature'], $quote['afc_box'], $quote['deduction_bp'],
+                    $quote['deductible_vat_cents'], $quote['activity_id'],
+                    $quote['tdfn_rate_bp'],
+                ]);
+                $net += (int) $quote['net_cents'];
+                $vat += (int) $quote['vat_cents'];
+                $gross += (int) $quote['gross_cents'];
+            }
+            $update = $this->pdo->prepare(
+                "UPDATE documents_financiers
+                 SET total_net_centimes = ?, total_tva_centimes = ?,
+                     total_brut_centimes = ?, modifie_le = datetime('now'),
+                     version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND statut = 'brouillon' AND version = ?"
+            );
+            $update->execute([
+                $net, $vat, $gross, $documentId,
+                $organisationId, $dossierId, $expectedVersion,
+            ]);
+            if ($update->rowCount() !== 1) {
+                throw new BillingException('Conflit de version du brouillon.');
+            }
+            $this->audit->log(
+                'facturation.brouillon_modifie',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'document_financier',
+                (string) $documentId,
+                ['lignes' => count($lines)]
+            );
+        }, true);
+    }
+
+    public function issue(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): string {
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $documentId,
+            $expectedVersion,
+            $actorId
+        ): string {
+            $document = $this->document($organisationId, $dossierId, $documentId);
+            if (
+                $document['statut'] !== 'brouillon'
+                || (int) $document['version'] !== $expectedVersion
+                || (int) $document['total_brut_centimes'] === 0
+            ) {
+                throw new BillingException('Document vide, déjà émis ou modifié.');
+            }
+            $prefix = match ($document['type']) {
+                'facture_client' => 'F',
+                'avoir_client' => 'NC',
+                'facture_fournisseur' => 'FA',
+                'avoir_fournisseur' => 'NCA',
+            };
+            $year = (int) substr((string) $document['date_document'], 0, 4);
+            $this->pdo->prepare(
+                'INSERT OR IGNORE INTO sequences_documents
+                 (dossier_id, annee, prefixe, dernier_numero) VALUES (?, ?, ?, 0)'
+            )->execute([$dossierId, $year, $prefix]);
+            $this->pdo->prepare(
+                'UPDATE sequences_documents SET dernier_numero = dernier_numero + 1
+                 WHERE dossier_id = ? AND annee = ? AND prefixe = ?'
+            )->execute([$dossierId, $year, $prefix]);
+            $sequence = $this->pdo->prepare(
+                'SELECT dernier_numero FROM sequences_documents
+                 WHERE dossier_id = ? AND annee = ? AND prefixe = ?'
+            );
+            $sequence->execute([$dossierId, $year, $prefix]);
+            $number = sprintf('%s-%04d-%03d', $prefix, $year, (int) $sequence->fetchColumn());
+            $scor = str_contains((string) $document['type'], 'client')
+                && $document['type'] === 'facture_client'
+                ? ScorReference::create($number)
+                : '';
+            $update = $this->pdo->prepare(
+                "UPDATE documents_financiers
+                 SET numero = ?, reference_scor = ?, statut = 'emis',
+                     emis_le = datetime('now'), modifie_le = datetime('now'),
+                     version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND statut = 'brouillon' AND version = ?"
+            );
+            $update->execute([
+                $number, $scor, $documentId, $organisationId, $dossierId, $expectedVersion,
+            ]);
+            if ($update->rowCount() !== 1) {
+                throw new BillingException('Conflit pendant la numérotation.');
+            }
+            $this->audit->log(
+                'facturation.document_emis',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'document_financier',
+                (string) $documentId,
+                ['numero' => $number]
+            );
+            return $number;
+        }, true);
+    }
+
+    public function post(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $exerciseId,
+        int $journalId,
+        ?int $actorId = null,
+    ): int {
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $documentId,
+            $exerciseId,
+            $journalId,
+            $actorId
+        ): int {
+            $document = $this->document($organisationId, $dossierId, $documentId);
+            if ($document['ecriture_id'] !== null) {
+                return (int) $document['ecriture_id'];
+            }
+            if ($document['statut'] !== 'emis' || $document['compte_collectif_id'] === null) {
+                throw new BillingException('Le document doit être émis et posséder un compte collectif.');
+            }
+            $lines = $this->lines($documentId);
+            $postingLines = [];
+            $client = str_contains((string) $document['type'], 'client');
+            $total = (int) $document['total_brut_centimes'];
+            $this->appendSigned(
+                $postingLines,
+                (int) $document['compte_collectif_id'],
+                $client ? $total : -$total,
+                'Compte collectif'
+            );
+            foreach ($lines as $line) {
+                $primary = $client
+                    ? -(int) $line['base_nette_centimes']
+                    : (int) $line['total_brut_centimes']
+                        - (int) $line['tva_deductible_centimes'];
+                $this->appendSigned(
+                    $postingLines,
+                    (int) $line['compte_id'],
+                    $primary,
+                    'document:' . $documentId . ':ligne:' . $line['id']
+                );
+                $vatAmount = $client
+                    ? -(int) $line['tva_centimes']
+                    : (int) $line['tva_deductible_centimes'];
+                if ($vatAmount !== 0) {
+                    if ($line['compte_tva_id'] === null) {
+                        throw new BillingException(
+                            'Le code TVA de la ligne ne possède pas de compte comptable.'
+                        );
+                    }
+                    $this->appendSigned(
+                        $postingLines,
+                        (int) $line['compte_tva_id'],
+                        $vatAmount,
+                        'TVA ' . $line['code_tva_snapshot']
+                    );
+                }
+            }
+            $entryId = $this->entries->postGenerated([
+                'organisation_id' => $organisationId,
+                'dossier_id' => $dossierId,
+                'exercice_id' => $exerciseId,
+                'journal_id' => $journalId,
+                'date_comptable' => $document['date_document'],
+                'libelle' => $document['numero'] . ' — document financier',
+                'reference' => $document['numero_externe'] ?: $document['numero'],
+                'source_type' => 'document_financier',
+                'source_id' => (string) $documentId,
+                'source_action' => 'comptabiliser',
+                'lignes' => $postingLines,
+            ], 'document:' . $documentId . ':comptabiliser', $actorId);
+
+            $findAccountingLine = $this->pdo->prepare(
+                'SELECT id FROM lignes_ecriture
+                 WHERE ecriture_id = ? AND libelle = ? LIMIT 1'
+            );
+            foreach ($lines as $line) {
+                $marker = 'document:' . $documentId . ':ligne:' . $line['id'];
+                $findAccountingLine->execute([$entryId, $marker]);
+                $accountingLineId = $findAccountingLine->fetchColumn();
+                if ($accountingLineId === false) {
+                    throw new BillingException('Ligne comptable de document introuvable.');
+                }
+                $inputAmount = VatCalculator::divideRounded(
+                    (int) $line['prix_unitaire_centimes']
+                        * (int) $line['quantite_milli'],
+                    1000
+                );
+                if (str_starts_with((string) $document['type'], 'avoir_')) {
+                    $inputAmount *= -1;
+                }
+                $this->vat->attach(
+                    $organisationId,
+                    $dossierId,
+                    (int) $accountingLineId,
+                    (int) $line['code_tva_id'],
+                    (string) $line['date_prestation'],
+                    $inputAmount,
+                    (string) $line['mode_saisie'],
+                    $line['deduction_bp'] === null ? null : (int) $line['deduction_bp'],
+                    (string) $line['motif_correction'],
+                    $line['tdfn_id'] === null ? null : (int) $line['tdfn_id'],
+                    document: [
+                        'type' => (string) $document['type'],
+                        'id' => (string) $documentId,
+                        'line_id' => (string) $line['id'],
+                    ],
+                    actorId: $actorId
+                );
+            }
+            $this->pdo->prepare(
+                "UPDATE documents_financiers
+                 SET statut = 'comptabilise', ecriture_id = ?,
+                     comptabilise_le = datetime('now'), version = version + 1
+                 WHERE id = ?"
+            )->execute([$entryId, $documentId]);
+            $this->audit->log(
+                'facturation.document_comptabilise',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'document_financier',
+                (string) $documentId,
+                ['ecriture_id' => $entryId]
+            );
+            return $entryId;
+        });
+    }
+
+    public function creditFrom(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        string $date,
+        ?int $actorId = null,
+    ): int {
+        $source = $this->document($organisationId, $dossierId, $documentId);
+        if (
+            !in_array($source['type'], ['facture_client', 'facture_fournisseur'], true)
+            || !in_array($source['statut'], ['emis', 'comptabilise'], true)
+        ) {
+            throw new BillingException('Seule une facture émise peut produire un avoir.');
+        }
+        $lines = array_map(
+            static fn (array $line): array => [
+                'libelle' => 'Avoir — ' . $line['libelle'],
+                'quantite_milli' => (int) $line['quantite_milli'],
+                'prix_unitaire_centimes' => (int) $line['prix_unitaire_centimes'],
+                'mode_saisie' => $line['mode_saisie'],
+                'compte_id' => (int) $line['compte_id'],
+                'code_tva_id' => (int) $line['code_tva_id'],
+                'date_prestation' => $line['date_prestation'],
+                'deduction_bp' => $line['deduction_bp'],
+                'motif_correction' => $line['motif_correction'],
+                'tdfn_id' => $line['tdfn_id'],
+            ],
+            $this->lines($documentId)
+        );
+        $type = $source['type'] === 'facture_client'
+            ? 'avoir_client'
+            : 'avoir_fournisseur';
+        if ($source['compte_collectif_id'] === null) {
+            throw new BillingException('La facture ne possède pas de compte collectif.');
+        }
+        return $this->createDraft(
+            $organisationId,
+            $dossierId,
+            $type,
+            (int) $source['contact_id'],
+            $date,
+            $date,
+            $lines,
+            (int) $source['compte_collectif_id'],
+            $source['type'] === 'facture_fournisseur'
+                ? 'AV-' . $source['numero_externe']
+                : '',
+            $documentId,
+            actorId: $actorId
+        );
+    }
+
+    public function markCancelledByCredit(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $creditId,
+        ?int $actorId = null,
+    ): void {
+        $source = $this->document($organisationId, $dossierId, $documentId);
+        $credit = $this->document($organisationId, $dossierId, $creditId);
+        if (
+            (int) $credit['document_origine_id'] !== $documentId
+            || $credit['statut'] !== 'comptabilise'
+            || $source['statut'] !== 'comptabilise'
+        ) {
+            throw new BillingException('L’avoir doit être comptabilisé avant l’annulation.');
+        }
+        $this->pdo->prepare(
+            "UPDATE documents_financiers
+             SET statut = 'annule', annule_le = datetime('now'), version = version + 1
+             WHERE id = ?"
+        )->execute([$documentId]);
+        $this->audit->log(
+            'facturation.document_annule_par_avoir',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'document_financier',
+            (string) $documentId,
+            ['avoir_id' => $creditId]
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function document(int $organisationId, int $dossierId, int $documentId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM documents_financiers
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+        );
+        $stmt->execute([$documentId, $organisationId, $dossierId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new BillingException('Document absent du dossier.');
+        }
+        return $row;
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function documents(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT d.*, c.raison_sociale, c.prenom, c.nom,
+                    COALESCE((
+                      SELECT SUM(a.montant_centimes) FROM allocations a
+                      WHERE a.document_id = d.id AND a.statut = 'valide'
+                    ), 0) AS alloue_centimes
+             FROM documents_financiers d
+             JOIN contacts c ON c.id = d.contact_id
+             WHERE d.organisation_id = ? AND d.dossier_id = ?
+             ORDER BY d.date_document DESC, d.id DESC"
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        $rows = $stmt->fetchAll();
+        foreach ($rows as &$row) {
+            $total = abs((int) $row['total_brut_centimes']);
+            $allocated = (int) $row['alloue_centimes'];
+            $row['solde_centimes'] = max(0, $total - $allocated);
+            $row['etat_paiement'] = $this->derivedState($row);
+        }
+        unset($row);
+        return $rows;
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function lines(int $documentId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT l.*, c.compte_tva_id
+             FROM lignes_document l
+             JOIN tva_codes c ON c.id = l.code_tva_id
+             WHERE l.document_id = ? ORDER BY l.ordre'
+        );
+        $stmt->execute([$documentId]);
+        return $stmt->fetchAll();
+    }
+
+    public function remind(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $level,
+        string $channel,
+        string $note = '',
+        ?int $actorId = null,
+    ): int {
+        $this->document($organisationId, $dossierId, $documentId);
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO rappels_factures
+             (organisation_id, dossier_id, document_id, niveau, canal, note, cree_par)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([
+            $organisationId, $dossierId, $documentId,
+            $level, $channel, trim($note), $actorId,
+        ]);
+        $id = (int) $this->pdo->lastInsertId();
+        $this->audit->log(
+            'facturation.rappel_trace',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'rappel_facture',
+            (string) $id,
+            ['document_id' => $documentId, 'niveau' => $level, 'canal' => $channel]
+        );
+        return $id;
+    }
+
+    /** @return array<string,list<array<string,mixed>>> */
+    public function catalog(int $organisationId, int $dossierId): array
+    {
+        $accounts = $this->pdo->prepare(
+            'SELECT id, numero, libelle FROM comptes
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             ORDER BY length(numero), numero, ordre, id'
+        );
+        $accounts->execute([$organisationId, $dossierId]);
+        $vatCodes = $this->pdo->prepare(
+            'SELECT id, code, libelle FROM tva_codes
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             ORDER BY code'
+        );
+        $vatCodes->execute([$organisationId, $dossierId]);
+        $exercises = $this->pdo->prepare(
+            "SELECT id, libelle, date_debut, date_fin FROM exercices
+             WHERE dossier_id = ? AND statut = 'ouvert' ORDER BY date_debut DESC"
+        );
+        $exercises->execute([$dossierId]);
+        $journals = $this->pdo->prepare(
+            'SELECT id, code, libelle FROM journaux
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             ORDER BY code'
+        );
+        $journals->execute([$organisationId, $dossierId]);
+        return [
+            'accounts' => $accounts->fetchAll(),
+            'vat_codes' => $vatCodes->fetchAll(),
+            'exercises' => $exercises->fetchAll(),
+            'journals' => $journals->fetchAll(),
+        ];
+    }
+
+    /** @return array<string,string> */
+    public function creditorProfile(int $organisationId, int $dossierId): array
+    {
+        $organisation = $this->pdo->prepare(
+            'SELECT nom FROM organisations WHERE id = ?'
+        );
+        $organisation->execute([$organisationId]);
+        $name = $organisation->fetchColumn();
+        if ($name === false) {
+            throw new BillingException('Organisation absente.');
+        }
+        $params = $this->pdo->prepare(
+            "SELECT cle, valeur FROM parametres_organisation
+             WHERE organisation_id = ? AND cle IN (
+                 'adresse_ligne1', 'adresse_ligne2', 'code_postal',
+                 'localite', 'pays', 'iban_facturation'
+             )"
+        );
+        $params->execute([$organisationId]);
+        $values = [];
+        foreach ($params->fetchAll() as $row) {
+            $values[(string) $row['cle']] = (string) $row['valeur'];
+        }
+        if (($values['iban_facturation'] ?? '') === '') {
+            $iban = $this->pdo->prepare(
+                "SELECT iban FROM comptes_tresorerie
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND actif = 1 AND iban <> ''
+                 ORDER BY id LIMIT 1"
+            );
+            $iban->execute([$organisationId, $dossierId]);
+            $values['iban_facturation'] = (string) ($iban->fetchColumn() ?: '');
+        }
+        return [
+            'nom' => (string) $name,
+            'ligne1' => $values['adresse_ligne1'] ?? '',
+            'ligne2' => $values['adresse_ligne2'] ?? '',
+            'code_postal' => $values['code_postal'] ?? '',
+            'localite' => $values['localite'] ?? '',
+            'pays' => $values['pays'] ?? 'CH',
+            'iban' => $values['iban_facturation'] ?? '',
+        ];
+    }
+
+    /** @param array<string,string> $profile */
+    public function saveCreditorProfile(
+        int $organisationId,
+        int $dossierId,
+        array $profile,
+        ?int $actorId = null,
+    ): void {
+        $required = ['adresse_ligne1', 'code_postal', 'localite', 'pays'];
+        foreach ($required as $key) {
+            if (trim((string) ($profile[$key] ?? '')) === '') {
+                throw new BillingException('Coordonnées du créancier incomplètes.');
+            }
+        }
+        $country = strtoupper(trim((string) $profile['pays']));
+        $iban = strtoupper((string) preg_replace(
+            '/\s+/',
+            '',
+            (string) ($profile['iban_facturation'] ?? '')
+        ));
+        if (strlen($country) !== 2 || preg_match('/^(CH|LI)[0-9A-Z]{19}$/', $iban) !== 1) {
+            throw new BillingException('Pays ou IBAN de facturation invalide.');
+        }
+        $scope = $this->pdo->prepare(
+            'SELECT 1 FROM dossiers WHERE id = ? AND organisation_id = ?'
+        );
+        $scope->execute([$dossierId, $organisationId]);
+        if ($scope->fetchColumn() === false) {
+            throw new BillingException('Dossier hors organisation.');
+        }
+        $values = [
+            'adresse_ligne1' => trim((string) $profile['adresse_ligne1']),
+            'adresse_ligne2' => trim((string) ($profile['adresse_ligne2'] ?? '')),
+            'code_postal' => trim((string) $profile['code_postal']),
+            'localite' => trim((string) $profile['localite']),
+            'pays' => $country,
+            'iban_facturation' => $iban,
+        ];
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO parametres_organisation (organisation_id, cle, valeur)
+             VALUES (?, ?, ?)
+             ON CONFLICT (organisation_id, cle) DO UPDATE SET valeur = excluded.valeur'
+        );
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $values,
+            $stmt,
+            $actorId
+        ): void {
+            foreach ($values as $key => $value) {
+                $stmt->execute([$organisationId, $key, $value]);
+            }
+            $this->audit->log(
+                'facturation.coordonnees_qr_modifiees',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'organisation',
+                (string) $organisationId,
+                ['pays' => $values['pays']]
+            );
+        }, true);
+    }
+
+    /** @param list<array<string,int|string>> $lines */
+    private function appendSigned(array &$lines, int $accountId, int $signed, string $label): void
+    {
+        if ($signed === 0) {
+            return;
+        }
+        $lines[] = $signed > 0
+            ? ['compte_id' => $accountId, 'libelle' => $label, 'debit_centimes' => $signed]
+            : ['compte_id' => $accountId, 'libelle' => $label, 'credit_centimes' => abs($signed)];
+    }
+
+    /** @param array<string,mixed> $document */
+    private function derivedState(array $document): string
+    {
+        if ($document['statut'] === 'brouillon') {
+            return 'brouillon';
+        }
+        if ($document['statut'] === 'annule') {
+            return 'annule';
+        }
+        if ((int) $document['solde_centimes'] === 0) {
+            return 'paye';
+        }
+        if ((int) $document['alloue_centimes'] > 0) {
+            return 'partiellement_paye';
+        }
+        return $document['date_echeance'] < date('Y-m-d') ? 'en_retard' : 'ouvert';
+    }
+
+    private function assertType(string $type): void
+    {
+        if (!in_array($type, [
+            'facture_client', 'avoir_client',
+            'facture_fournisseur', 'avoir_fournisseur',
+        ], true)) {
+            throw new BillingException('Type de document invalide.');
+        }
+    }
+
+    private function assertDate(string $date): void
+    {
+        $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        if ($parsed === false || $parsed->format('Y-m-d') !== $date) {
+            throw new BillingException('Date de document invalide.');
+        }
+    }
+
+    private function transaction(callable $callback, bool $immediate = false): mixed
+    {
+        if ($this->transactionActive || $this->pdo->inTransaction()) {
+            return $callback();
+        }
+        if ($immediate) {
+            $this->pdo->exec('BEGIN IMMEDIATE');
+        } else {
+            $this->pdo->beginTransaction();
+        }
+        $this->transactionActive = true;
+        try {
+            $result = $callback();
+            $immediate ? $this->pdo->exec('COMMIT') : $this->pdo->commit();
+            $this->transactionActive = false;
+            return $result;
+        } catch (Throwable $e) {
+            if ($this->transactionActive) {
+                $immediate ? $this->pdo->exec('ROLLBACK') : $this->pdo->rollBack();
+                $this->transactionActive = false;
+            }
+            throw $e;
+        }
+    }
+}

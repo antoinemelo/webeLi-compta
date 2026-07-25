@@ -1,0 +1,30 @@
+{
+  "journal_total": 3,
+  "balance": {
+    "total_debit_centimes": 128000,
+    "total_credit_centimes": 128000,
+    "equilibree": true,
+    "comptes": {
+      "1020": 112000,
+      "2800": 100000,
+      "3400": 20000,
+      "6500": 8000
+    }
+  },
+  "resultat": {
+    "produits_centimes": 20000,
+    "charges_centimes": 8000,
+    "resultat_centimes": 12000
+  },
+  "bilan": {
+    "total_actif_centimes": 112000,
+    "total_passif_centimes": 112000,
+    "equilibre": true
+  },
+  "grand_livre_1020": {
+    "initial_centimes": 100000,
+    "debit_centimes": 20000,
+    "credit_centimes": 8000,
+    "solde_centimes": 112000
+  }
+}

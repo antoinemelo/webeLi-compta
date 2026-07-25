@@ -1,0 +1,10 @@
+variante;numero;libelle;type;sens_normal;parent_numero;niveau;imputable;marque;parametre_requis
+commun;2810;Fonds associatifs libres;passif;credit;28;4;1;fonds_libre;
+commun;2811;Fonds affectés;passif;credit;28;4;1;fonds_affecte;fonds_affectes
+commun;3001;Cotisations des membres;produit;credit;3;4;1;cotisations;
+commun;3002;Dons non affectés;produit;credit;3;4;1;dons;
+commun;3003;Subventions d'exploitation;produit;credit;3;4;1;subventions;
+commun;3004;Dons et subventions affectés aux projets;produit;credit;3;4;1;fonds_affecte;fonds_affectes
+commun;4800;Charges directes de projets;charge;debit;4;4;1;projet;projets
+commun;4801;Attributions aux fonds affectés;charge;debit;4;4;1;fonds_affecte;fonds_affectes
+commun;4802;Utilisations des fonds affectés;charge;credit;4;4;1;fonds_affecte;fonds_affectes

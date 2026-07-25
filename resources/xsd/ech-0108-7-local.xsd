@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+  xmlns:eCH-0108="http://www.ech.ch/xmlns/eCH-0108/7"
+  targetNamespace="http://www.ech.ch/xmlns/eCH-0108/7"
+  elementFormDefault="qualified" version="7.0">
+  <xs:simpleType name="uidType">
+    <xs:restriction base="xs:token">
+      <xs:minLength value="12"/><xs:maxLength value="12"/>
+      <xs:pattern value="CHE[1-9][0-9]{8}"/>
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="unitNameType">
+    <xs:restriction base="xs:token">
+      <xs:minLength value="1"/><xs:maxLength value="255"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

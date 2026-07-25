@@ -1,0 +1,25 @@
+{
+  "name": "webeli/compta",
+  "description": "Comptabilité, trésorerie, facturation, salaires et enseignement",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": ">=8.2",
+    "ext-mbstring": "*",
+    "ext-pdo": "*",
+    "ext-pdo_sqlite": "*",
+    "endroid/qr-code": "^5.1",
+    "tecnickcom/tcpdf": "^6.11"
+  },
+  "autoload": {
+    "psr-4": {
+      "Compta\\": "src/"
+    }
+  },
+  "config": {
+    "platform": {
+      "php": "8.2.0"
+    },
+    "sort-packages": true
+  }
+}

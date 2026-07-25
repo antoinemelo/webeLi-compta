@@ -1,0 +1,10 @@
+/config/local.php
+/storage/*
+!/storage/.htaccess
+!/storage/.gitkeep
+/vendor/
+/.phpunit.cache/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log

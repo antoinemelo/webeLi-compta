@@ -1,0 +1,68 @@
+# Qualification et archive mutualisée
+
+## Porte unique
+
+Avant chaque livraison :
+
+```bash
+php bin/console qualify
+```
+
+La commande vérifie successivement :
+
+1. les empreintes immuables des migrations 001 à 010 ;
+2. la syntaxe de tous les fichiers PHP applicatifs ;
+3. les suites `quick` puis `integration` ;
+4. une installation SQLite vierge avec sauvegarde préalable ;
+5. le diagnostic et l'intégrité de cette base ;
+6. les préconditions de l'archive de production.
+
+Les tests ne sont pas dupliqués. `quick` contient les contrôles purs de
+configuration et la parité de calcul Lasso ; `integration` contient SQLite,
+HTTP et tous les modules. `all` reste la valeur par défaut.
+
+## Environnement d'exécution
+
+Le socle obligatoire est PHP 8.2 ou supérieur avec `PDO`, `pdo_sqlite`,
+`mbstring`, `openssl`, `session`, `json` et `fileinfo`. Composer 2 est requis
+pour construire une livraison, mais pas sur l'hébergement mutualisé lorsque le
+répertoire `vendor/` est déjà inclus dans l'archive.
+
+Les extensions `intl` et `gd` sont recommandées pour couvrir sans dégradation
+les formats internationaux et la génération d'images. Les extensions XML
+(`dom`, `xmlreader`, `xmlwriter`, `simplexml`) et `zip` sont recommandées pour
+les contrôles XSD et les archives en processus PHP. Le validateur eCH existant
+conserve son repli Java lorsque les extensions XML ne sont pas disponibles.
+`app:doctor` rend visibles ces capacités et leurs éventuels replis.
+
+## Construire l'archive
+
+Construire depuis un commit qualifié et un arbre Git propre. Installer les
+dépendances avec la plateforme PHP fixée par `composer.json`, sans dépendances
+de développement :
+
+```bash
+composer install --no-dev --prefer-dist --optimize-autoloader
+php bin/console qualify
+git archive --format=tar --prefix=compta/ HEAD > /tmp/compta-source.tar
+```
+
+Extraire l'archive source dans un répertoire temporaire, y recopier le
+répertoire `vendor/` produit par Composer, puis créer le ZIP final. Ne jamais
+inclure :
+
+- `config/local.php` ;
+- base SQLite, fichiers `-wal`/`-shm`, sauvegardes, journaux ou uploads ;
+- secrets, fichiers d'environnement ou données réelles ;
+- `.git/`, caches de tests ou dépendances Node de développement.
+
+Le ZIP doit contenir `vendor/autoload.php`, les assets locaux et tout le code
+hors webroot. En production, seul `public/` est exposé par le serveur HTTP.
+
+## Restaurer la référence
+
+Le commit initial du lot 01 est le point de restauration du socle. Le fichier
+`docs/baseline/migrations.sha256` protège séparément l'historique SQL et
+`tests/fixtures/baseline-reports.json` fixe les résultats comptables minimaux.
+Une restauration de base s'effectue uniquement depuis une sauvegarde validée
+par `db:integrity`.

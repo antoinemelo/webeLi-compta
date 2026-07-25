@@ -1,0 +1,12 @@
+<?php
+declare(strict_types=1);
+
+return [
+    'env' => 'prod',
+    'debug' => false,
+    'instance_id' => 'entreprise-1',
+    'base_url' => '/entreprise-1',
+    'storage_path' => '/chemin/prive/compta-entreprise-1',
+    'database_path' => '/chemin/prive/compta-entreprise-1/database/app.sqlite',
+    'setup_secret' => 'remplacer-par-une-longue-valeur-aleatoire',
+];

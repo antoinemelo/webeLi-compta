@@ -1,0 +1,53 @@
+{
+  "baseline_date": "2026-07-26",
+  "php_minimum": "8.2",
+  "database": "SQLite",
+  "source_php_files": 72,
+  "templates": 13,
+  "migration_versions": ["001", "002", "003", "004", "005", "006", "007", "008", "009", "010"],
+  "http_routes": {
+    "count": 29,
+    "methods": {
+      "GET": 19,
+      "POST": 10
+    }
+  },
+  "commands_before_lot_01": [
+    "app:doctor",
+    "db:migrate",
+    "db:integrity",
+    "user:create-admin",
+    "organisation:create",
+    "dossier:create",
+    "exercice:create",
+    "role:grant",
+    "compta:plan-seed",
+    "compta:plan-install",
+    "compta:periode-create",
+    "compta:journal-create",
+    "tresorerie:compte-create",
+    "tresorerie:import-preview",
+    "tresorerie:import-confirm",
+    "tresorerie:etat",
+    "tva:periode-create",
+    "tva:decompte-prepare",
+    "tva:decompte-control",
+    "tva:ech-export",
+    "tva:decompte-declare",
+    "test"
+  ],
+  "permission_prefixes": [
+    "installation",
+    "organisation",
+    "dossier",
+    "exercice",
+    "audit",
+    "compta",
+    "tresorerie",
+    "tva",
+    "facturation",
+    "salaires",
+    "pedagogie"
+  ],
+  "baseline_assertions_before_lot_01": 342
+}
