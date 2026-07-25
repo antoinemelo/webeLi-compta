@@ -44,9 +44,11 @@ pagination, tri et filtres sont documentés dans
 
 ## Shell Vue
 
-Le shell progressif est disponible sous `/app` lorsque
-`APP_VUE_SHELL_ENABLED=1`. Les bundles hachés sont construits dans
-`public/app/` et ne nécessitent pas Node en production. L’interface PHP reste
+Le shell progressif est disponible sous `/app`. Il est actif par défaut hors
+production ; en production, l’activer avec `APP_VUE_SHELL_ENABLED=1`.
+`APP_VUE_SHELL_ENABLED=0` permet de revenir explicitement à l’interface
+classique. Les bundles hachés sont construits dans `public/app/` et ne
+nécessitent pas Node en production. L’interface PHP reste
 disponible via `/?legacy=1`. Voir [le guide du shell Vue](docs/vue-shell.md).
 
 Le premier écran utile expose trésorerie, chiffre d’affaires, charges,

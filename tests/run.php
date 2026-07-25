@@ -347,6 +347,40 @@ final class Tests
         $this->true($a->sessionName() !== $b->sessionName(), 'cookies propres aux instances');
         $this->same('/edu/', $a->sessionPath(), 'path cookie propre');
 
+        $originalEnvironment = getenv('APP_ENV');
+        $originalVueShellFlag = getenv('APP_VUE_SHELL_ENABLED');
+        try {
+            putenv('APP_ENV=local');
+            putenv('APP_VUE_SHELL_ENABLED');
+            $localDefaults = require $root . '/config/app.php';
+            $this->true(
+                $localDefaults['vue_shell_enabled'],
+                'shell Vue actif par défaut hors production'
+            );
+
+            putenv('APP_ENV=prod');
+            $productionDefaults = require $root . '/config/app.php';
+            $this->false(
+                $productionDefaults['vue_shell_enabled'],
+                'shell Vue inactif par défaut en production'
+            );
+
+            putenv('APP_ENV=local');
+            putenv('APP_VUE_SHELL_ENABLED=0');
+            $classicDefaults = require $root . '/config/app.php';
+            $this->false(
+                $classicDefaults['vue_shell_enabled'],
+                'interface classique forçable hors production'
+            );
+        } finally {
+            $originalEnvironment === false
+                ? putenv('APP_ENV')
+                : putenv('APP_ENV=' . $originalEnvironment);
+            $originalVueShellFlag === false
+                ? putenv('APP_VUE_SHELL_ENABLED')
+                : putenv('APP_VUE_SHELL_ENABLED=' . $originalVueShellFlag);
+        }
+
         $session = new ArraySessionStore();
         $csrf = new Csrf($session);
         $token = $csrf->token();

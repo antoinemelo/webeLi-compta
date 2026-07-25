@@ -15,8 +15,7 @@ const environment = {
   APP_INSTANCE_ID: 'compta-e2e',
   APP_BASE_URL: '/e2e',
   APP_STORAGE_PATH: storage,
-  APP_DB_PATH: resolve(storage, 'app.sqlite'),
-  APP_VUE_SHELL_ENABLED: '1'
+  APP_DB_PATH: resolve(storage, 'app.sqlite')
 };
 
 const seed = spawnSync('php', [resolve(frontend, 'tests/e2e/seed.php')], {

@@ -6,14 +6,16 @@ données proviennent de l’API interne `/api/v1`.
 
 ## Activation
 
-La valeur par défaut reste prudente :
+Le shell Vue est actif par défaut hors production : après connexion, `/`
+redirige vers `/app`. En production, il reste désactivé tant que l’activation
+n’est pas explicite :
 
 ```text
-APP_VUE_SHELL_ENABLED=0
+APP_VUE_SHELL_ENABLED=1
 ```
 
-Définir `APP_VUE_SHELL_ENABLED=1` active la redirection de `/` vers `/app`
-après connexion. L’interface PHP historique reste accessible avec
+`APP_VUE_SHELL_ENABLED=0` force à l’inverse l’interface classique, y compris
+en environnement local. L’interface PHP historique reste aussi accessible avec
 `/?legacy=1` et par ses routes métier. Désactiver le flag rend `/app`
 indisponible et restaure immédiatement l’accueil PHP, sans changement de base.
 
