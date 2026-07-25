@@ -42,6 +42,13 @@ sécurité sont ceux du moteur existant. Les exemples et les listes blanches de
 pagination, tri et filtres sont documentés dans
 [`docs/contracts/api-v1/README.md`](docs/contracts/api-v1/README.md).
 
+## Shell Vue
+
+Le shell progressif est disponible sous `/app` lorsque
+`APP_VUE_SHELL_ENABLED=1`. Les bundles hachés sont construits dans
+`public/app/` et ne nécessitent pas Node en production. L’interface PHP reste
+disponible via `/?legacy=1`. Voir [le guide du shell Vue](docs/vue-shell.md).
+
 ## Initialiser la comptabilité
 
 Après création de l’organisation, du dossier et de l’exercice :

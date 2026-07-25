@@ -3,6 +3,9 @@
 !/storage/.htaccess
 !/storage/.gitkeep
 /vendor/
+/frontend/admin-vue/node_modules/
+/frontend/admin-vue/test-results/
+/frontend/admin-vue/playwright-report/
 /.phpunit.cache/
 *.sqlite
 *.sqlite-shm

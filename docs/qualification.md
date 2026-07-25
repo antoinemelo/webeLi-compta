@@ -35,6 +35,18 @@ les contrôles XSD et les archives en processus PHP. Le validateur eCH existant
 conserve son repli Java lorsque les extensions XML ne sont pas disponibles.
 `app:doctor` rend visibles ces capacités et leurs éventuels replis.
 
+Le shell Vue est construit avec Node 22 et npm 10 uniquement sur le poste de
+développement ou d’intégration :
+
+```bash
+npm --prefix frontend/admin-vue ci
+npm --prefix frontend/admin-vue run build
+```
+
+La production ne nécessite ni Node ni `node_modules` : PHP lit
+`public/app/.vite/manifest.json` et sert les fichiers construits sous
+`public/app/assets/`.
+
 ## Construire l'archive
 
 Construire depuis un commit qualifié et un arbre Git propre. Installer les
@@ -56,8 +68,10 @@ inclure :
 - secrets, fichiers d'environnement ou données réelles ;
 - `.git/`, caches de tests ou dépendances Node de développement.
 
-Le ZIP doit contenir `vendor/autoload.php`, les assets locaux et tout le code
-hors webroot. En production, seul `public/` est exposé par le serveur HTTP.
+Le ZIP doit contenir `vendor/autoload.php`, le manifest, les assets Vue
+construits, les assets locaux et tout le code hors webroot. Il ne contient
+jamais `frontend/admin-vue/node_modules/` ni les résultats Playwright. En
+production, seul `public/` est exposé par le serveur HTTP.
 
 ## Restaurer la référence
 

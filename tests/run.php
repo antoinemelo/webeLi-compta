@@ -17,6 +17,7 @@ use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
+use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Security\ArraySessionStore;
 use Compta\Core\Security\Csrf;
 use Compta\Modules\Compta\AccountingSetupService;
@@ -59,6 +60,7 @@ use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Shell\Application\ShellReadService;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Shell\Http\ShellInputValidator;
+use Compta\Modules\Shell\Http\ShellPageController;
 
 require dirname(__DIR__) . '/bootstrap/autoload.php';
 
@@ -676,6 +678,7 @@ final class Tests
             'database_path' => $dbPath,
             'storage_path' => dirname($dbPath),
             'debug' => true,
+            'vue_shell_enabled' => true,
         ]);
         $session = new ArraySessionStore(['user_id' => $userId]);
         $csrf = new Csrf($session);
@@ -703,6 +706,11 @@ final class Tests
             ),
             $csrf
         );
+        $shellPage = new ShellPageController(
+            $config,
+            $httpAuth,
+            new VueShellRenderer(dirname(__DIR__), $config)
+        );
         $app = new WebApplication(
             $config,
             new View(dirname(__DIR__) . '/templates', $config),
@@ -725,10 +733,18 @@ final class Tests
             new PayrollCertificateService($pdo, $httpAudit),
             new PayrollImportService($pdo, $httpAudit, $httpPayrolls),
             $httpPedagogy,
-            $apiRoutes
+            $apiRoutes,
+            $shellPage
         );
 
         $session->remove('user_id');
+        $anonymousShell = $app->handle(new Request('GET', '/app/compta/etats'));
+        $this->same(302, $anonymousShell->status, 'shell Vue profond exige une session');
+        $this->same(
+            '/edu/login',
+            $anonymousShell->headers['Location'] ?? '',
+            'shell Vue anonyme redirigé vers la connexion'
+        );
         $apiAnonymous = $app->handle(new Request('GET', '/api/v1/context'));
         $this->same(401, $apiAnonymous->status, 'API refuse une session anonyme');
         $this->same(
@@ -872,6 +888,25 @@ final class Tests
             )->fetchColumn(),
             'corrélation conservée dans l’audit de mutation'
         );
+        $shellHomeRedirect = $app->handle(new Request('GET', '/'));
+        $this->same(302, $shellHomeRedirect->status, 'feature flag active le shell Vue');
+        $this->same(
+            '/edu/app',
+            $shellHomeRedirect->headers['Location'] ?? '',
+            'redirection vers le shell compatible sous-répertoire'
+        );
+        $deepShell = $app->handle(new Request('GET', '/app/compta/etats'));
+        $this->same(200, $deepShell->status, 'rafraîchissement de route Vue profonde');
+        $this->true(
+            str_contains($deepShell->body, 'name="compta-api-base-url" content="/edu/api/v1"')
+            && str_contains($deepShell->body, 'type="module"')
+            && preg_match('~/edu/app/assets/[^"]+\\.js~', $deepShell->body) === 1,
+            'shell injecte seulement chemins publics et assets versionnés'
+        );
+        $this->true(
+            isset($deepShell->headers['Content-Security-Policy']),
+            'shell Vue reçoit les en-têtes de sécurité'
+        );
 
         $apiBadSort = $app->handle(new Request(
             'GET',
@@ -988,7 +1023,7 @@ final class Tests
         $this->same('/edu/', $allowed->headers['Location'], 'redirection avec base path');
         $this->same($ids['dossier_a'], $session->get('dossier_id'), 'contexte stocké');
 
-        $dashboard = $app->handle(new Request('GET', '/'));
+        $dashboard = $app->handle(new Request('GET', '/', query: ['legacy' => '1']));
         $this->same(200, $dashboard->status, 'tableau de bord accessible');
         $this->true(
             isset($dashboard->headers['Content-Security-Policy']),
@@ -1278,7 +1313,7 @@ final class Tests
             $userId, 'formateur', 'dossier', $realExerciseDossier
         );
         $session->set('dossier_id', $realExerciseDossier);
-        $realDashboard = $app->handle(new Request('GET', '/'));
+        $realDashboard = $app->handle(new Request('GET', '/', query: ['legacy' => '1']));
         $this->true(
             str_contains($realDashboard->body, 'DOSSIER RÉEL — DONNÉES DE PRODUCTION')
             && str_contains($realDashboard->body, 'context-real'),
@@ -1300,7 +1335,7 @@ final class Tests
             $userId, 'comptable', 'dossier', $demoDossier
         );
         $session->set('dossier_id', $demoDossier);
-        $demoDashboard = $app->handle(new Request('GET', '/'));
+        $demoDashboard = $app->handle(new Request('GET', '/', query: ['legacy' => '1']));
         $this->true(
             str_contains($demoDashboard->body, 'DÉMONSTRATION — DONNÉES FICTIVES')
             && str_contains($demoDashboard->body, 'context-demo'),

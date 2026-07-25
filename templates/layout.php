@@ -37,6 +37,11 @@ $path = (string) ($ui['path'] ?? '');
           Instance <strong><?= Html::escape((string) ($ui['instance'] ?? $config->string('instance_id'))) ?></strong>
         </span>
         <?php if ($authenticated): ?>
+          <?php if ($config->bool('vue_shell_enabled')): ?>
+            <a class="btn btn-sm btn-header" href="<?= Html::escape($config->url('/app')) ?>">
+              Nouvelle interface
+            </a>
+          <?php endif; ?>
           <form method="post" action="<?= Html::escape($config->url('/logout')) ?>">
             <input type="hidden" name="_csrf" value="<?= Html::escape((string) ($ui_csrf ?? '')) ?>">
             <button class="btn btn-sm btn-header" type="submit">Déconnexion</button>

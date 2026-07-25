@@ -11,6 +11,7 @@ use Compta\Core\Database\ConnectionFactory;
 use Compta\Core\Http\Api\ApiRouteRegistry;
 use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
+use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Security\NativeSessionStore;
 use Compta\Modules\Compta\ChartOfAccountsService;
@@ -30,6 +31,7 @@ use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Shell\Application\ShellReadService;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Shell\Http\ShellInputValidator;
+use Compta\Modules\Shell\Http\ShellPageController;
 
 require __DIR__ . '/autoload.php';
 
@@ -67,6 +69,11 @@ $apiRoutes = new ApiRouteRegistry(
     ),
     $csrf
 );
+$shellPage = new ShellPageController(
+    $config,
+    $auth,
+    new VueShellRenderer($root, $config)
+);
 
 return [
     'config' => $config,
@@ -94,6 +101,7 @@ return [
         new PayrollCertificateService($pdo, $audit),
         new PayrollImportService($pdo, $audit, $payrolls),
         new PedagogyService($pdo, $audit, $entries),
-        $apiRoutes
+        $apiRoutes,
+        $shellPage
     ),
 ];

@@ -9,4 +9,5 @@ return [
     'storage_path' => '/chemin/prive/compta-entreprise-1',
     'database_path' => '/chemin/prive/compta-entreprise-1/database/app.sqlite',
     'setup_secret' => 'remplacer-par-une-longue-valeur-aleatoire',
+    'vue_shell_enabled' => true,
 ];

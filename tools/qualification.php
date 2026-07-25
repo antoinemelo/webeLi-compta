@@ -175,12 +175,24 @@ function qualificationPackage(string $root): bool
         }
     }
     if (is_file($root . '/frontend/admin-vue/package.json')) {
-        return qualificationCommand(
+        if (!qualificationCommand(
             ['npm', '--prefix', $root . '/frontend/admin-vue', 'run', 'build'],
             $root
-        );
+        )) {
+            return false;
+        }
+        $manifest = $root . '/public/app/.vite/manifest.json';
+        $decoded = is_file($manifest)
+            ? json_decode((string) file_get_contents($manifest), true)
+            : null;
+        if (!is_array($decoded) || !is_array($decoded['index.html'] ?? null)) {
+            fwrite(STDERR, "Manifest Vue de livraison absent ou invalide.\n");
+            return false;
+        }
+        echo "Build Vue versionné et manifest valide.\n";
+        return true;
     }
-    echo "Interface Vue absente au lot 01 : build non applicable.\n";
+    echo "Interface Vue absente : build non applicable.\n";
     return true;
 }
 

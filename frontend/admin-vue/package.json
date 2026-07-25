@@ -1,0 +1,28 @@
+{
+  "name": "webeli-compta-admin-vue",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5174",
+    "build": "vue-tsc --noEmit && vite build",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:headed": "playwright test --headed"
+  },
+  "dependencies": {
+    "pinia": "3.0.4",
+    "vue": "3.5.33",
+    "vue-router": "5.0.6"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@vitejs/plugin-vue": "6.0.6",
+    "typescript": "6.0.3",
+    "vite": "8.1.0",
+    "vue-tsc": "3.2.7"
+  },
+  "engines": {
+    "node": ">=22.16.0 <23",
+    "npm": ">=10.9.2 <11"
+  }
+}

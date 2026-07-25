@@ -31,6 +31,7 @@ use Compta\Modules\Salaires\PayrollService;
 use Compta\Modules\Pedagogie\PedagogyConflictException;
 use Compta\Modules\Pedagogie\PedagogyException;
 use Compta\Modules\Pedagogie\PedagogyService;
+use Compta\Modules\Shell\Http\ShellPageController;
 use PDOException;
 use Throwable;
 
@@ -61,6 +62,7 @@ final class WebApplication
         private readonly ?PayrollImportService $payrollImports = null,
         private readonly ?PedagogyService $pedagogy = null,
         private readonly ?ApiRouteRegistry $apiRoutes = null,
+        private readonly ?ShellPageController $shellPage = null,
     ) {
         $this->router = new Router();
         $this->routes();
@@ -138,10 +140,16 @@ final class WebApplication
             $this->auth->logout($request->ip());
             return Response::redirect($this->config->url('/login'));
         });
-        $this->router->add('GET', '/', function (): Response {
+        $this->router->add('GET', '/', function (Request $request): Response {
             $userId = $this->auth->userId();
             if ($userId === null) {
                 return Response::redirect($this->config->url('/login'), 302);
+            }
+            if (
+                $this->config->bool('vue_shell_enabled')
+                && ($request->query['legacy'] ?? '') !== '1'
+            ) {
+                return Response::redirect($this->config->url('/app'), 302);
             }
             return new Response($this->view->render('dashboard', [
                 'csrf' => $this->csrf->token(),
@@ -296,6 +304,13 @@ final class WebApplication
             );
         }
         $this->apiRoutes?->register($this->router);
+        if ($this->shellPage !== null) {
+            $this->router->addPrefix(
+                'GET',
+                '/app',
+                $this->shellPage->show(...)
+            );
+        }
     }
 
     /**
