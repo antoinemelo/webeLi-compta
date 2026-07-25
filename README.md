@@ -36,7 +36,7 @@ intégrité SQLite et vérification du contenu de l'archive mutualisée. Voir
 
 ## API interne
 
-Le futur shell Vue utilise le contrat JSON versionné `compta-api-v1` sous
+Le shell Vue utilise le contrat JSON versionné `compta-api-v1` sous
 `/api/v1`. La session, les permissions, les scopes, le CSRF et les en-têtes de
 sécurité sont ceux du moteur existant. Les exemples et les listes blanches de
 pagination, tri et filtres sont documentés dans
@@ -48,6 +48,11 @@ Le shell progressif est disponible sous `/app` lorsque
 `APP_VUE_SHELL_ENABLED=1`. Les bundles hachés sont construits dans
 `public/app/` et ne nécessitent pas Node en production. L’interface PHP reste
 disponible via `/?legacy=1`. Voir [le guide du shell Vue](docs/vue-shell.md).
+
+Le premier écran utile expose trésorerie, chiffre d’affaires, charges,
+échéancier, opérations à traiter et écritures récentes depuis une projection
+SQLite strictement en lecture. Ses définitions et preuves de concordance sont
+documentées dans [le guide du tableau de bord](docs/dashboard.md).
 
 ## Initialiser la comptabilité
 

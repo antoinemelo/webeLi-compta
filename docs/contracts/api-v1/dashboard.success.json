@@ -1,0 +1,130 @@
+{
+  "data": {
+    "scope": {
+      "exercise": {
+        "id": 9,
+        "label": "2026",
+        "start_date": "2026-01-01",
+        "end_date": "2026-12-31",
+        "status": "ouvert"
+      },
+      "period": {
+        "id": 12,
+        "label": "Juillet 2026",
+        "start_date": "2026-07-01",
+        "end_date": "2026-07-31",
+        "status": "ouverte"
+      },
+      "as_of_date": "2026-07-26",
+      "base_currency": "CHF"
+    },
+    "treasury": {
+      "accounts": [
+        {
+          "id": 3,
+          "label": "Banque principale",
+          "type": "banque",
+          "currency": "CHF",
+          "ledger_account": {
+            "id": 102,
+            "number": "1020",
+            "label": "Banque"
+          },
+          "accounting_balance_cents": 125000,
+          "bank_balance_cents": 124500,
+          "bank_balance_date": "2026-07-25",
+          "bank_balance_currency": "CHF",
+          "difference_cents": -500,
+          "comparable_in_base_currency": true
+        }
+      ],
+      "accounting_balance_cents": 125000,
+      "bank_balance_cents": 124500,
+      "difference_cents": -500,
+      "bank_balance_coverage": {
+        "comparable_accounts": 1,
+        "total_accounts": 1,
+        "comparable_accounting_balance_cents": 125000
+      }
+    },
+    "profit_and_loss": {
+      "revenue_cents": 300000,
+      "expenses_cents": 190000,
+      "result_cents": 110000
+    },
+    "open_items": {
+      "receivables": {
+        "open_cents": 80000,
+        "overdue_cents": 30000,
+        "open_count": 2,
+        "overdue_count": 1,
+        "aging": {
+          "not_due": 50000,
+          "days_1_30": 30000,
+          "days_31_60": 0,
+          "days_61_90": 0,
+          "days_91_plus": 0
+        }
+      },
+      "payables": {
+        "open_cents": 45000,
+        "overdue_cents": 0,
+        "open_count": 1,
+        "overdue_count": 0,
+        "aging": {
+          "not_due": 45000,
+          "days_1_30": 0,
+          "days_31_60": 0,
+          "days_61_90": 0,
+          "days_91_plus": 0
+        }
+      }
+    },
+    "operations": {
+      "unreconciled_bank_lines": {
+        "count": 2,
+        "net_cents": 25000,
+        "absolute_cents": 35000
+      },
+      "payments_to_process": {
+        "count": 1,
+        "amount_cents": 10000,
+        "incoming_count": 1,
+        "incoming_cents": 10000,
+        "outgoing_count": 0,
+        "outgoing_cents": 0
+      }
+    },
+    "recent_entries": [],
+    "empty_state": {
+      "is_empty": false,
+      "code": null,
+      "message": null
+    },
+    "calculation": {
+      "calculated_at": "2026-07-26T12:00:00+00:00",
+      "ledger_statuses": [
+        "validee",
+        "contre_passee"
+      ],
+      "revenue_definition": "Comptes de type produit : crédits moins débits.",
+      "expenses_definition": "Comptes de type charge : débits moins crédits.",
+      "open_items_definition": "Documents émis ou comptabilisés, nets des allocations valides ; les avoirs non alloués portent un signe négatif.",
+      "overdue_definition": "Échéance strictement antérieure à la date d’arrêté.",
+      "aging_buckets": [
+        "not_due",
+        "days_1_30",
+        "days_31_60",
+        "days_61_90",
+        "days_91_plus"
+      ],
+      "recent_entry_limit": 10,
+      "cache": false
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-dashboard-0001"
+  },
+  "errors": []
+}

@@ -17,6 +17,9 @@ use Compta\Core\Security\NativeSessionStore;
 use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Dashboard\Application\DashboardReadService;
+use Compta\Modules\Dashboard\Http\DashboardApiController;
+use Compta\Modules\Dashboard\Http\DashboardInputValidator;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Facturation\AttachmentService;
@@ -56,6 +59,7 @@ $auth = new AuthService(
     $session
 );
 $access = new AccessControl($pdo);
+$reports = new ReportingService($pdo);
 $apiRoutes = new ApiRouteRegistry(
     new ShellApiController(
         $config,
@@ -66,6 +70,13 @@ $apiRoutes = new ApiRouteRegistry(
         $audit,
         new ShellReadService($pdo),
         new ShellInputValidator()
+    ),
+    new DashboardApiController(
+        $session,
+        $auth,
+        $access,
+        new DashboardReadService($pdo, $reports),
+        new DashboardInputValidator()
     ),
     $csrf
 );
@@ -87,7 +98,7 @@ return [
         $auth,
         $access,
         $audit,
-        new ReportingService($pdo),
+        $reports,
         new ChartOfAccountsService($pdo, $audit),
         $entries,
         new ContactService($pdo, $audit),

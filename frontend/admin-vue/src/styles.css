@@ -348,7 +348,135 @@ h3,
   color: var(--muted);
 }
 
+.dashboard-header {
+  align-items: end;
+}
+
+.dashboard-filters {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: end;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.dashboard-filters select,
+.dashboard-filters input {
+  min-width: 10rem;
+}
+
+.dashboard-scope {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding: 0.9rem 1rem;
+  color: var(--ink);
+  background: #ebecf5;
+  border-radius: 0.6rem;
+}
+
+.dashboard-scope span,
+.dashboard-scope strong,
+.dashboard-scope small {
+  display: block;
+}
+
+.dashboard-scope small {
+  margin-bottom: 0.25rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dashboard-scope .status-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+
+.metric-card,
+.action-card {
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+  padding: 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: var(--shadow);
+}
+
+.metric-card span,
+.action-card span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.metric-card strong,
+.action-card strong {
+  color: var(--ink);
+  font-family: "Raleway", system-ui, sans-serif;
+  font-size: clamp(1.3rem, 3vw, 2rem);
+}
+
+.metric-card small,
+.action-card small {
+  color: var(--muted);
+}
+
+.dashboard-two-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.dashboard-two-columns .panel {
+  margin-bottom: 0;
+}
+
+.dashboard-two-columns .panel > p {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.action-card a {
+  justify-self: start;
+  margin-top: 0.35rem;
+  font-weight: 700;
+}
+
+.calculation-details {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  color: var(--muted);
+  background: #ebecf5;
+  border-radius: 0.6rem;
+}
+
+.calculation-details summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 750;
+}
+
 .panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
   margin-bottom: 1rem;
 }
 
@@ -433,7 +561,8 @@ h3,
   background: #d7f7e7;
 }
 
-.status-ferme {
+.status-ferme,
+.status-fermee {
   color: #475467;
   background: #eaecf0;
 }
@@ -667,8 +796,23 @@ textarea {
   }
 
   .context-summary dl,
-  .dashboard-intro {
+  .dashboard-intro,
+  .dashboard-scope,
+  .metric-grid,
+  .dashboard-two-columns {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-filters {
+    display: grid;
+    width: 100%;
+    margin-top: 1rem;
+  }
+
+  .dashboard-filters select,
+  .dashboard-filters input,
+  .dashboard-filters .button {
+    width: 100%;
   }
 
   .context-summary dd {

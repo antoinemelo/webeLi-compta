@@ -7,6 +7,7 @@ use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Http\Router;
 use Compta\Core\Security\Csrf;
+use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Throwable;
 
@@ -14,6 +15,7 @@ final class ApiRouteRegistry
 {
     public function __construct(
         private readonly ShellApiController $shell,
+        private readonly DashboardApiController $dashboard,
         private readonly Csrf $csrf,
     ) {
     }
@@ -27,6 +29,7 @@ final class ApiRouteRegistry
         $this->add($router, 'GET', '/api/v1/permissions', $this->shell->permissions(...));
         $this->add($router, 'GET', '/api/v1/exercises', $this->shell->exercises(...));
         $this->add($router, 'GET', '/api/v1/references', $this->shell->references(...));
+        $this->add($router, 'GET', '/api/v1/dashboard', $this->dashboard->show(...));
     }
 
     /** @param callable(Request):Response $handler */

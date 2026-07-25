@@ -38,6 +38,7 @@ export const useContextStore = defineStore('context', {
     async selectDossier(dossier: Dossier): Promise<void> {
       this.loading = true;
       this.error = '';
+      this.exercises = [];
       try {
         const response = await api.post<ShellContext>('/context/dossier', {
           organisation_id: dossier.organization_id,

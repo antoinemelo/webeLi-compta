@@ -257,6 +257,7 @@ final class ShellApiController
                     ['key' => 'permissions', 'method' => 'GET', 'path' => '/permissions'],
                     ['key' => 'exercises', 'method' => 'GET', 'path' => '/exercises'],
                     ['key' => 'references', 'method' => 'GET', 'path' => '/references'],
+                    ['key' => 'dashboard', 'method' => 'GET', 'path' => '/dashboard'],
                 ],
             ],
             'instance' => $this->config->string('instance_id'),

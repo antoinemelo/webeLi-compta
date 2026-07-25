@@ -25,6 +25,9 @@ use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Dashboard\Application\DashboardReadService;
+use Compta\Modules\Dashboard\Http\DashboardApiController;
+use Compta\Modules\Dashboard\Http\DashboardInputValidator;
 use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\ContactService;
@@ -118,6 +121,10 @@ final class Tests
             'débiteurs, créanciers, paiements et QR-facture' => [
                 'integration',
                 fn () => $this->billingTests(),
+            ],
+            'projection du tableau de bord' => [
+                'integration',
+                fn () => $this->dashboardTests(),
             ],
             'HTTP et CSRF' => ['integration', fn () => $this->httpTests()],
             'diagnostic, sauvegarde et multi-instance' => [
@@ -632,6 +639,458 @@ final class Tests
         );
     }
 
+    private function dashboardTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $ids = $this->seedScopes($pdo);
+        $organisationId = $ids['organisation_a'];
+        $dossierId = $ids['dossier_a'];
+        $audit = new AuditLogger($pdo);
+        $scopes = new ScopeManager($pdo, $audit);
+        $exerciseId = $scopes->createExercise(
+            $dossierId,
+            'Exercice tableau de bord 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $setup = new AccountingSetupService($pdo, $audit);
+        $periodId = $setup->createPeriod(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            'Année 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $journalId = $setup->createJournal(
+            $organisationId,
+            $dossierId,
+            'TDB',
+            'Tableau de bord'
+        );
+        (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))
+            ->installForDossier($organisationId, $dossierId, 'personne_morale');
+        $account = fn (string $number): int =>
+            $this->accountId($pdo, $dossierId, $number);
+        $bankAccount = $account('1020');
+        $receivable = $account('1100');
+        $payable = $account('2000');
+        $capital = $account('2800');
+        $revenue = $account('3400');
+        $expense = $account('6500');
+        $entries = new EntryService($pdo, $audit);
+        $post = function (
+            string $key,
+            string $date,
+            string $label,
+            array $lines,
+        ) use (
+            $entries,
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $journalId
+        ): int {
+            return $entries->postGenerated([
+                'organisation_id' => $organisationId,
+                'dossier_id' => $dossierId,
+                'exercice_id' => $exerciseId,
+                'journal_id' => $journalId,
+                'date_comptable' => $date,
+                'libelle' => $label,
+                'source_type' => 'test_tableau_bord',
+                'source_id' => $key,
+                'source_action' => 'projection',
+                'lignes' => $lines,
+            ], 'dashboard:' . $key);
+        };
+        $post('treasury', '2026-01-10', 'Apport bancaire', [
+            ['compte_id' => $bankAccount, 'debit_centimes' => 50000],
+            ['compte_id' => $capital, 'credit_centimes' => 50000],
+        ]);
+        $post('sale', '2026-02-10', 'Vente comptabilisée', [
+            ['compte_id' => $receivable, 'debit_centimes' => 100000],
+            ['compte_id' => $revenue, 'credit_centimes' => 100000],
+        ]);
+        $post('expense', '2026-03-10', 'Charge comptabilisée', [
+            ['compte_id' => $expense, 'debit_centimes' => 40000],
+            ['compte_id' => $payable, 'credit_centimes' => 40000],
+        ]);
+        $entries->createDraft([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'exercice_id' => $exerciseId,
+            'journal_id' => $journalId,
+            'date_comptable' => '2026-04-01',
+            'libelle' => 'Brouillon exclu',
+            'lignes' => [
+                ['compte_id' => $receivable, 'debit_centimes' => 900000],
+                ['compte_id' => $revenue, 'credit_centimes' => 900000],
+            ],
+        ]);
+
+        $treasuryAccountId = (new TreasuryAccountService($pdo, $audit))->create([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'compte_comptable_id' => $bankAccount,
+            'libelle' => 'Banque principale',
+            'type' => 'banque',
+            'monnaie' => 'CHF',
+        ]);
+        $import = $pdo->prepare(
+            "INSERT INTO imports_bancaires
+             (organisation_id, dossier_id, compte_tresorerie_id, format,
+              nom_fichier, empreinte_source, contenu_source, statut, nb_total,
+              nb_importees, confirme_le)
+             VALUES (?, ?, ?, 'postfinance_csv', ?, ?, ?, 'confirme', 1, 1, datetime('now'))"
+        );
+        $import->execute([
+            $organisationId,
+            $dossierId,
+            $treasuryAccountId,
+            'dashboard.csv',
+            hash('sha256', 'dashboard-bank-source'),
+            'source-test',
+        ]);
+        $importId = (int) $pdo->lastInsertId();
+        $pdo->prepare(
+            "INSERT INTO lignes_bancaires
+             (organisation_id, dossier_id, compte_tresorerie_id, import_id,
+              empreinte, date_comptabilisation, libelle, montant_centimes, monnaie)
+             VALUES (?, ?, ?, ?, ?, '2026-04-10', 'Ligne non rapprochée', 15000, 'CHF')"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $treasuryAccountId,
+            $importId,
+            hash('sha256', 'dashboard-bank-line'),
+        ]);
+        $pdo->prepare(
+            "INSERT INTO soldes_bancaires
+             (organisation_id, dossier_id, compte_tresorerie_id, import_id,
+              type, date_solde, montant_centimes, monnaie, empreinte)
+             VALUES (?, ?, ?, ?, 'CLBD', '2026-04-15', 65000, 'CHF', ?)"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $treasuryAccountId,
+            $importId,
+            hash('sha256', 'dashboard-bank-balance'),
+        ]);
+
+        $contact = $pdo->prepare(
+            "INSERT INTO contacts
+             (organisation_id, dossier_id, type_personne, raison_sociale)
+             VALUES (?, ?, 'entreprise', ?)"
+        );
+        $contact->execute([$organisationId, $dossierId, 'Client tableau']);
+        $customerId = (int) $pdo->lastInsertId();
+        $contact->execute([$organisationId, $dossierId, 'Fournisseur tableau']);
+        $supplierId = (int) $pdo->lastInsertId();
+        $document = $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, statut, numero,
+              date_document, date_echeance, adresse_snapshot_json,
+              contact_snapshot_json, total_net_centimes, total_tva_centimes,
+              total_brut_centimes)
+             VALUES (?, ?, ?, ?, 'emis', ?, ?, ?, '{}', '{}', ?, 0, ?)"
+        );
+        $document->execute([
+            $organisationId, $dossierId, $customerId, 'facture_client',
+            'FAC-TDB-1', '2026-02-01', '2026-03-01', 100000, 100000,
+        ]);
+        $customerInvoiceId = (int) $pdo->lastInsertId();
+        $document->execute([
+            $organisationId, $dossierId, $customerId, 'avoir_client',
+            'NC-TDB-1', '2026-03-20', '2026-03-20', -10000, -10000,
+        ]);
+        $creditId = (int) $pdo->lastInsertId();
+        $document->execute([
+            $organisationId, $dossierId, $supplierId, 'facture_fournisseur',
+            'ACH-TDB-1', '2026-04-01', '2026-04-30', 30000, 30000,
+        ]);
+        $payment = $pdo->prepare(
+            "INSERT INTO paiements
+             (organisation_id, dossier_id, contact_id, sens, date_paiement,
+              montant_centimes, reference)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        );
+        $payment->execute([
+            $organisationId, $dossierId, $customerId, 'encaissement',
+            '2026-03-15', 40000, 'Paiement partiel',
+        ]);
+        $partialPaymentId = (int) $pdo->lastInsertId();
+        $payment->execute([
+            $organisationId, $dossierId, $customerId, 'encaissement',
+            '2026-04-10', 7000, 'À lettrer',
+        ]);
+        $allocation = $pdo->prepare(
+            'INSERT INTO allocations
+             (organisation_id, dossier_id, paiement_id, avoir_id,
+              document_id, montant_centimes)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $allocation->execute([
+            $organisationId, $dossierId, $partialPaymentId, null,
+            $customerInvoiceId, 40000,
+        ]);
+        $allocation->execute([
+            $organisationId, $dossierId, null, $creditId,
+            $customerInvoiceId, 5000,
+        ]);
+
+        $reports = new ReportingService($pdo);
+        $dashboard = new DashboardReadService($pdo, $reports);
+        $countsBefore = (string) $pdo->query(
+            "SELECT
+              (SELECT COUNT(*) FROM ecritures) || ':' ||
+              (SELECT COUNT(*) FROM documents_financiers) || ':' ||
+              (SELECT COUNT(*) FROM paiements) || ':' ||
+              (SELECT COUNT(*) FROM allocations) || ':' ||
+              (SELECT COUNT(*) FROM lignes_bancaires)"
+        )->fetchColumn();
+        $projection = $dashboard->projection(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            '2026-04-15'
+        );
+        $countsAfter = (string) $pdo->query(
+            "SELECT
+              (SELECT COUNT(*) FROM ecritures) || ':' ||
+              (SELECT COUNT(*) FROM documents_financiers) || ':' ||
+              (SELECT COUNT(*) FROM paiements) || ':' ||
+              (SELECT COUNT(*) FROM allocations) || ':' ||
+              (SELECT COUNT(*) FROM lignes_bancaires)"
+        )->fetchColumn();
+        $income = $reports->incomeStatement(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            '2026-04-15'
+        );
+        $this->same(
+            (int) $income['produits_centimes'],
+            (int) $projection['profit_and_loss']['revenue_cents'],
+            'chiffre d’affaires égal au compte de résultat validé'
+        );
+        $this->same(
+            (int) $income['charges_centimes'],
+            (int) $projection['profit_and_loss']['expenses_cents'],
+            'charges égales au compte de résultat validé'
+        );
+        $this->same(
+            100000,
+            (int) $projection['profit_and_loss']['revenue_cents'],
+            'brouillon exclu du chiffre d’affaires'
+        );
+        $trialBalance = $reports->trialBalance(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            '2026-04-15'
+        );
+        $this->same(
+            $this->balanceFor($trialBalance['items'], '1020'),
+            (int) $projection['treasury']['accounting_balance_cents'],
+            'trésorerie égale à la balance du compte bancaire'
+        );
+        $treasuryState = (new TreasuryStateService($pdo))->state(
+            $organisationId,
+            $dossierId,
+            $treasuryAccountId,
+            '2026-04-15'
+        );
+        $this->same(
+            (int) $treasuryState['bank_balance_cents'],
+            (int) $projection['treasury']['bank_balance_cents'],
+            'dernier solde bancaire égal à l’état de trésorerie'
+        );
+        $this->same(
+            (int) $treasuryState['difference_cents'],
+            (int) $projection['treasury']['difference_cents'],
+            'écart banque/comptabilité égal à l’état de trésorerie'
+        );
+        $this->same(
+            50000,
+            (int) $projection['open_items']['receivables']['open_cents'],
+            'paiement partiel et avoir partiel sans double comptage'
+        );
+        $this->same(
+            30000,
+            (int) $projection['open_items']['payables']['open_cents'],
+            'dette fournisseur ouverte issue des documents et allocations'
+        );
+        $this->same(
+            55000,
+            (int) $projection['open_items']['receivables']['aging']['days_31_60'],
+            'facture partiellement réglée dans sa tranche aging exacte'
+        );
+        $this->same(
+            -5000,
+            (int) $projection['open_items']['receivables']['aging']['days_1_30'],
+            'avoir résiduel négatif dans sa propre tranche aging'
+        );
+        $this->same(
+            1,
+            (int) $projection['operations']['unreconciled_bank_lines']['count'],
+            'ligne bancaire confirmée non rapprochée comptée'
+        );
+        $this->same(
+            7000,
+            (int) $projection['operations']['payments_to_process']['amount_cents'],
+            'paiement non alloué signalé à traiter'
+        );
+        $this->same(
+            $countsBefore,
+            $countsAfter,
+            'projection strictement sans mutation'
+        );
+
+        $emptyDossier = $scopes->createDossier(
+            $organisationId,
+            'Dossier vide',
+            'dashboard-vide',
+            'exercice'
+        );
+        $emptyExercise = $scopes->createExercise(
+            $emptyDossier,
+            'Exercice vide',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $empty = $dashboard->projection(
+            $organisationId,
+            $emptyDossier,
+            $emptyExercise,
+            '2026-04-15'
+        );
+        $this->true(
+            (bool) $empty['empty_state']['is_empty'],
+            'exercice sans données retourne un état vide explicite'
+        );
+
+        $pdo->beginTransaction();
+        $entryInsert = $pdo->prepare(
+            "INSERT INTO ecritures
+             (organisation_id, dossier_id, exercice_id, journal_id,
+              date_comptable, libelle, statut, source_type, source_id)
+             VALUES (?, ?, ?, ?, '2026-04-14', ?, 'brouillon', 'benchmark', ?)"
+        );
+        $lineInsert = $pdo->prepare(
+            'INSERT INTO lignes_ecriture
+             (ecriture_id, compte_id, debit_centimes, credit_centimes, ordre)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        $validateEntry = $pdo->prepare(
+            "UPDATE ecritures SET statut = 'validee', validee_le = datetime('now')
+             WHERE id = ?"
+        );
+        for ($index = 1; $index <= 500; $index++) {
+            $entryInsert->execute([
+                $organisationId, $dossierId, $exerciseId, $journalId,
+                'Écriture représentative ' . $index, (string) $index,
+            ]);
+            $entryId = (int) $pdo->lastInsertId();
+            $lineInsert->execute([$entryId, $receivable, 1, 0, 1]);
+            $lineInsert->execute([$entryId, $revenue, 0, 1, 2]);
+            $validateEntry->execute([$entryId]);
+        }
+        for ($index = 1; $index <= 200; $index++) {
+            $document->execute([
+                $organisationId, $dossierId, $customerId, 'facture_client',
+                'FAC-BENCH-' . $index, '2026-04-01', '2026-04-30', 100, 100,
+            ]);
+        }
+        $bankLineInsert = $pdo->prepare(
+            "INSERT INTO lignes_bancaires
+             (organisation_id, dossier_id, compte_tresorerie_id, import_id,
+              empreinte, rang_occurrence, date_comptabilisation, libelle,
+              montant_centimes, monnaie)
+             VALUES (?, ?, ?, ?, ?, ?, '2026-04-14', 'Benchmark', 1, 'CHF')"
+        );
+        for ($index = 1; $index <= 100; $index++) {
+            $bankLineInsert->execute([
+                $organisationId, $dossierId, $treasuryAccountId, $importId,
+                hash('sha256', 'dashboard-benchmark-line-' . $index), $index,
+            ]);
+        }
+        $pdo->commit();
+        $startedAt = hrtime(true);
+        $representative = $dashboard->projection(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            '2026-04-15'
+        );
+        $elapsedMilliseconds = intdiv(hrtime(true) - $startedAt, 1_000_000);
+        $this->true(
+            $elapsedMilliseconds < 500,
+            "projection bornée sur 500 écritures, 200 factures et 100 lignes bancaires ({$elapsedMilliseconds} ms)"
+        );
+        $this->same(
+            10,
+            count($representative['recent_entries']),
+            'activité récente strictement bornée à dix écritures'
+        );
+
+        $entryPlan = implode(' ', array_map(
+            static fn (array $row): string => (string) $row['detail'],
+            $pdo->query(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM ecritures
+                 WHERE dossier_id = {$dossierId}
+                   AND exercice_id = {$exerciseId}
+                   AND date_comptable <= '2026-04-15'
+                 ORDER BY date_comptable DESC LIMIT 10"
+            )->fetchAll()
+        ));
+        $documentPlan = implode(' ', array_map(
+            static fn (array $row): string => (string) $row['detail'],
+            $pdo->query(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM documents_financiers
+                 WHERE dossier_id = {$dossierId}
+                   AND type = 'facture_client' AND statut = 'emis'
+                   AND date_echeance <= '2026-04-15'"
+            )->fetchAll()
+        ));
+        $bankPlan = implode(' ', array_map(
+            static fn (array $row): string => (string) $row['detail'],
+            $pdo->query(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM lignes_bancaires
+                 WHERE compte_tresorerie_id = {$treasuryAccountId}
+                   AND date_comptabilisation <= '2026-04-15'"
+            )->fetchAll()
+        ));
+        $this->true(
+            str_contains($entryPlan, 'idx_ecritures_journal'),
+            'plan SQLite indexé pour les écritures du tableau de bord'
+        );
+        $this->true(
+            str_contains($documentPlan, 'idx_documents_scope_etat'),
+            'plan SQLite indexé pour les échéances'
+        );
+        $this->true(
+            str_contains($bankPlan, 'idx_lignes_bancaires_compte_date'),
+            'plan SQLite indexé pour les lignes bancaires'
+        );
+        $setup->closePeriod($organisationId, $dossierId, $periodId);
+        $closed = $dashboard->projection(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            '2026-04-15'
+        );
+        $this->same(
+            'fermee',
+            $closed['scope']['period']['status'] ?? '',
+            'période fermée consultable et explicitement signalée'
+        );
+    }
+
     private function httpTests(): void
     {
         [$pdo, $runner, $dbPath] = $this->database();
@@ -649,6 +1108,12 @@ final class Tests
         $exerciseId = (new ScopeManager($pdo, new AuditLogger($pdo)))->createExercise(
             $ids['dossier_a'],
             'Exercice HTTP 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $forbiddenExerciseId = (new ScopeManager($pdo, new AuditLogger($pdo)))->createExercise(
+            $ids['dossier_b'],
+            'Exercice confidentiel 2026',
             '2026-01-01',
             '2026-12-31'
         );
@@ -703,6 +1168,13 @@ final class Tests
                 $httpAudit,
                 new ShellReadService($pdo),
                 new ShellInputValidator()
+            ),
+            new DashboardApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new DashboardReadService($pdo, new ReportingService($pdo)),
+                new DashboardInputValidator()
             ),
             $csrf
         );
@@ -788,6 +1260,19 @@ final class Tests
             'CONTEXT_REQUIRED',
             $this->responseJson($apiNoScope)['errors'][0]['code'] ?? '',
             'conflit de contexte typé'
+        );
+        $dashboardNoScope = $app->handle(new Request(
+            'GET',
+            '/api/v1/dashboard',
+            query: [
+                'exercise_id' => (string) $exerciseId,
+                'as_of_date' => '2026-06-30',
+            ]
+        ));
+        $this->same(
+            409,
+            $dashboardNoScope->status,
+            'tableau de bord API exige un contexte'
         );
 
         $apiUnknown = $app->handle(new Request('GET', '/api/v1/inconnue'));
@@ -888,6 +1373,58 @@ final class Tests
             )->fetchColumn(),
             'corrélation conservée dans l’audit de mutation'
         );
+        $apiDashboard = $app->handle(new Request(
+            'GET',
+            '/api/v1/dashboard',
+            query: [
+                'exercise_id' => (string) $exerciseId,
+                'as_of_date' => '2026-06-30',
+            ],
+            server: ['HTTP_X_CORRELATION_ID' => 'dashboard-test-0001']
+        ));
+        $apiDashboardJson = $this->responseJson($apiDashboard);
+        $this->same(200, $apiDashboard->status, 'projection du tableau de bord exposée en API');
+        $this->same(
+            'CHF',
+            $apiDashboardJson['data']['scope']['base_currency'] ?? '',
+            'contrat du tableau de bord expose la devise de base'
+        );
+        $this->true(
+            (bool) ($apiDashboardJson['data']['empty_state']['is_empty'] ?? false),
+            'contrat du tableau de bord expose l’état vide'
+        );
+        $apiDashboardInvalid = $app->handle(new Request(
+            'GET',
+            '/api/v1/dashboard',
+            query: [
+                'exercise_id' => (string) $exerciseId,
+                'as_of_date' => '2026-02-30',
+                'dossier_id' => (string) $ids['dossier_b'],
+            ]
+        ));
+        $this->same(
+            422,
+            $apiDashboardInvalid->status,
+            'paramètres du tableau de bord strictement validés'
+        );
+        $apiDashboardIdor = $app->handle(new Request(
+            'GET',
+            '/api/v1/dashboard',
+            query: [
+                'exercise_id' => (string) $forbiddenExerciseId,
+                'as_of_date' => '2026-06-30',
+            ]
+        ));
+        $this->same(
+            422,
+            $apiDashboardIdor->status,
+            'exercice hors dossier refusé par la projection'
+        );
+        $this->false(
+            str_contains($apiDashboardIdor->body, 'confidentiel')
+                || str_contains($apiDashboardIdor->body, 'Comptabilité B'),
+            'refus du tableau de bord sans fuite inter-dossiers'
+        );
         $shellHomeRedirect = $app->handle(new Request('GET', '/'));
         $this->same(302, $shellHomeRedirect->status, 'feature flag active le shell Vue');
         $this->same(
@@ -987,6 +1524,7 @@ final class Tests
         foreach ([
             'context.success.json',
             'collection.success.json',
+            'dashboard.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(

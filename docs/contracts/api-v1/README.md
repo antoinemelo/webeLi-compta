@@ -29,6 +29,7 @@ Les exemples versionnés sont :
 
 - `context.success.json` ;
 - `collection.success.json` ;
+- `dashboard.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -42,6 +43,7 @@ Les exemples versionnés sont :
 | GET | `/api/v1/permissions` | permissions effectives du dossier courant |
 | GET | `/api/v1/exercises` | exercices du dossier courant, paginés |
 | GET | `/api/v1/references` | types, statuts et devise de base |
+| GET | `/api/v1/dashboard` | projection comptable à une date et pour un exercice |
 
 Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
@@ -59,6 +61,11 @@ Les paramètres communs sont `page`, `per_page` (maximum 100), `sort` et
 
 Tout paramètre inconnu ou valeur hors liste blanche produit une erreur 422.
 La pagination est renvoyée sous `meta.pagination`.
+
+Le tableau de bord exige exactement `exercise_id` et `as_of_date=AAAA-MM-JJ`.
+L’exercice doit appartenir au dossier de session et la date doit être comprise
+dans ses bornes. Cette route est strictement en lecture et exige
+`compta.view`.
 
 ## Erreurs
 

@@ -47,6 +47,11 @@ La production ne nécessite ni Node ni `node_modules` : PHP lit
 `public/app/.vite/manifest.json` et sert les fichiers construits sous
 `public/app/assets/`.
 
+La suite d’intégration mesure aussi la projection du tableau de bord sur
+500 écritures, 200 factures et 100 lignes bancaires. Elle refuse une réponse
+supérieure à 500 ms, contrôle les plans SQLite et compare les indicateurs aux
+rapports, allocations et soldes bancaires de référence.
+
 ## Construire l'archive
 
 Construire depuis un commit qualifié et un arbre Git propre. Installer les
