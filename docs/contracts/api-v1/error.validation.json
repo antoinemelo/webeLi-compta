@@ -1,0 +1,19 @@
+{
+  "data": null,
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-error-0001"
+  },
+  "errors": [
+    {
+      "code": "VALIDATION_FAILED",
+      "message": "Les données transmises sont invalides.",
+      "correlation_id": "example-error-0001",
+      "fields": {
+        "per_page": [
+          "Valeur attendue entre 1 et 100."
+        ]
+      }
+    }
+  ]
+}

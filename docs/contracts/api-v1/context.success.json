@@ -1,0 +1,74 @@
+{
+  "data": {
+    "api": {
+      "version": "compta-api-v1",
+      "base_path": "/api/v1",
+      "csrf_header": "X-CSRF-Token",
+      "endpoints": [
+        {
+          "key": "context",
+          "method": "GET",
+          "path": "/context"
+        },
+        {
+          "key": "select_dossier",
+          "method": "POST",
+          "path": "/context/dossier"
+        }
+      ]
+    },
+    "instance": "compta-production",
+    "user": {
+      "id": 7,
+      "email": "comptable@example.test",
+      "first_name": "Camille",
+      "last_name": "Martin",
+      "name": "Camille Martin"
+    },
+    "selection": {
+      "organization": {
+        "id": 2,
+        "name": "Entreprise Exemple SA",
+        "nature": "reelle"
+      },
+      "dossier": {
+        "id": 4,
+        "name": "Comptabilité principale",
+        "type": "reel",
+        "currency": "CHF"
+      },
+      "exercise": {
+        "id": 9,
+        "label": "2026",
+        "start_date": "2026-01-01",
+        "end_date": "2026-12-31",
+        "status": "ouvert"
+      }
+    },
+    "permissions": [
+      "compta.view",
+      "dossier.view",
+      "exercice.view"
+    ],
+    "navigation": [
+      {
+        "key": "dashboard",
+        "label": "Tableau de bord",
+        "path": "/",
+        "permission": null
+      },
+      {
+        "key": "accounting",
+        "label": "Comptabilité",
+        "path": "/compta",
+        "permission": "compta.view"
+      }
+    ],
+    "csrf_token": "example-token-not-valid"
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-context-0001"
+  },
+  "errors": []
+}

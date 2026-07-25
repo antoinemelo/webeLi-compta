@@ -12,7 +12,9 @@ use Compta\Core\Database\ConnectionFactory;
 use Compta\Core\Database\IntegrityChecker;
 use Compta\Core\Database\MigrationRunner;
 use Compta\Core\Diagnostics\Doctor;
+use Compta\Core\Http\Api\ApiRouteRegistry;
 use Compta\Core\Http\Request;
+use Compta\Core\Http\Response;
 use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
 use Compta\Core\Security\ArraySessionStore;
@@ -54,6 +56,9 @@ use Compta\Modules\Salaires\PayrollPaymentService;
 use Compta\Modules\Salaires\PayrollService;
 use Compta\Modules\Pedagogie\PedagogyConflictException;
 use Compta\Modules\Pedagogie\PedagogyService;
+use Compta\Modules\Shell\Application\ShellReadService;
+use Compta\Modules\Shell\Http\ShellApiController;
+use Compta\Modules\Shell\Http\ShellInputValidator;
 
 require dirname(__DIR__) . '/bootstrap/autoload.php';
 
@@ -678,18 +683,33 @@ final class Tests
         $httpEntries = new EntryService($pdo, $httpAudit);
         $httpPayrolls = new PayrollService($pdo, $httpAudit, $httpEntries);
         $httpPedagogy = new PedagogyService($pdo, $httpAudit, $httpEntries);
+        $httpAuth = new AuthService(
+            $users,
+            new LoginThrottle($pdo, 5, 900),
+            new AuditLogger($pdo),
+            $session
+        );
+        $httpAccess = new AccessControl($pdo);
+        $apiRoutes = new ApiRouteRegistry(
+            new ShellApiController(
+                $config,
+                $session,
+                $csrf,
+                $httpAuth,
+                $httpAccess,
+                $httpAudit,
+                new ShellReadService($pdo),
+                new ShellInputValidator()
+            ),
+            $csrf
+        );
         $app = new WebApplication(
             $config,
             new View(dirname(__DIR__) . '/templates', $config),
             $session,
             $csrf,
-            new AuthService(
-                $users,
-                new LoginThrottle($pdo, 5, 900),
-                new AuditLogger($pdo),
-                $session
-            ),
-            new AccessControl($pdo),
+            $httpAuth,
+            $httpAccess,
             $httpAudit,
             new ReportingService($pdo),
             new ChartOfAccountsService($pdo, $httpAudit),
@@ -704,8 +724,250 @@ final class Tests
             new PayrollPaymentService($pdo, $httpAudit, $httpEntries),
             new PayrollCertificateService($pdo, $httpAudit),
             new PayrollImportService($pdo, $httpAudit, $httpPayrolls),
-            $httpPedagogy
+            $httpPedagogy,
+            $apiRoutes
         );
+
+        $session->remove('user_id');
+        $apiAnonymous = $app->handle(new Request('GET', '/api/v1/context'));
+        $this->same(401, $apiAnonymous->status, 'API refuse une session anonyme');
+        $this->same(
+            'AUTHENTICATION_REQUIRED',
+            $this->responseJson($apiAnonymous)['errors'][0]['code'] ?? '',
+            'API type explicitement l’erreur 401'
+        );
+        $session->set('user_id', $userId);
+
+        $apiContext = $app->handle(new Request(
+            'GET',
+            '/api/v1/context',
+            server: ['HTTP_X_CORRELATION_ID' => 'contract-test-0001']
+        ));
+        $apiContextJson = $this->responseJson($apiContext);
+        $this->same(200, $apiContext->status, 'contexte API accessible');
+        $this->same(
+            ['data', 'meta', 'errors'],
+            array_keys($apiContextJson),
+            'enveloppe API uniforme data/meta/errors'
+        );
+        $this->same(
+            'contract-test-0001',
+            $apiContext->headers['X-Correlation-ID'] ?? '',
+            'corrélation propagée dans l’en-tête'
+        );
+        $this->same(
+            'contract-test-0001',
+            $apiContextJson['meta']['correlation_id'] ?? '',
+            'corrélation propagée dans le contrat'
+        );
+        $this->true(
+            array_key_exists('selection', $apiContextJson['data'])
+            && $apiContextJson['data']['selection'] === null,
+            'contexte API explicite avant sélection'
+        );
+
+        $apiNoScope = $app->handle(new Request('GET', '/api/v1/permissions'));
+        $this->same(409, $apiNoScope->status, 'API exige un contexte pour les permissions');
+        $this->same(
+            'CONTEXT_REQUIRED',
+            $this->responseJson($apiNoScope)['errors'][0]['code'] ?? '',
+            'conflit de contexte typé'
+        );
+
+        $apiUnknown = $app->handle(new Request('GET', '/api/v1/inconnue'));
+        $this->same(404, $apiUnknown->status, 'route API inconnue en JSON 404');
+        $this->same(
+            'application/json; charset=UTF-8',
+            $apiUnknown->headers['Content-Type'] ?? '',
+            '404 API conserve le type JSON'
+        );
+
+        $apiNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/context/dossier',
+            json: ['data' => [
+                'organisation_id' => $ids['organisation_a'],
+                'dossier_id' => $ids['dossier_a'],
+            ]]
+        ));
+        $this->same(403, $apiNoCsrf->status, 'mutation API sans CSRF refusée');
+        $this->same(
+            'CSRF_INVALID',
+            $this->responseJson($apiNoCsrf)['errors'][0]['code'] ?? '',
+            'erreur CSRF API typée'
+        );
+
+        $apiInvalid = $app->handle(new Request(
+            'POST',
+            '/api/v1/context/dossier',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['organisation_id' => 'abc', 'surprise' => true]]
+        ));
+        $apiInvalidJson = $this->responseJson($apiInvalid);
+        $this->same(422, $apiInvalid->status, 'entrée API invalide refusée');
+        $this->true(
+            isset($apiInvalidJson['errors'][0]['fields']['organisation_id'])
+            && isset($apiInvalidJson['errors'][0]['fields']['dossier_id'])
+            && isset($apiInvalidJson['errors'][0]['fields']['surprise']),
+            'validation API expose seulement des erreurs de champs'
+        );
+
+        $apiWrongVersion = $app->handle(new Request(
+            'POST',
+            '/api/v1/context/dossier',
+            server: [
+                'HTTP_X_CSRF_TOKEN' => $csrf->token(),
+                'HTTP_X_CONTRACT_VERSION' => 'compta-api-v0',
+            ],
+            json: ['data' => [
+                'organisation_id' => $ids['organisation_a'],
+                'dossier_id' => $ids['dossier_a'],
+            ]]
+        ));
+        $this->same(409, $apiWrongVersion->status, 'version de contrat incompatible refusée');
+
+        $apiForbidden = $app->handle(new Request(
+            'POST',
+            '/api/v1/context/dossier',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'organisation_id' => $ids['organisation_b'],
+                'dossier_id' => $ids['dossier_b'],
+            ]]
+        ));
+        $this->same(403, $apiForbidden->status, 'API isole les organisations et dossiers');
+        $this->false(
+            str_contains($apiForbidden->body, 'Organisation B')
+            || str_contains($apiForbidden->body, 'Comptabilité B'),
+            'refus API sans fuite de données'
+        );
+
+        $apiSelected = $app->handle(new Request(
+            'POST',
+            '/api/v1/context/dossier',
+            server: [
+                'HTTP_X_CSRF_TOKEN' => $csrf->token(),
+                'HTTP_X_CONTRACT_VERSION' => 'compta-api-v1',
+                'HTTP_X_CORRELATION_ID' => 'selection-test-0001',
+            ],
+            json: ['data' => [
+                'organisation_id' => $ids['organisation_a'],
+                'dossier_id' => $ids['dossier_a'],
+            ]]
+        ));
+        $apiSelectedJson = $this->responseJson($apiSelected);
+        $this->same(200, $apiSelected->status, 'sélection de contexte API acceptée');
+        $this->same(
+            $ids['dossier_a'],
+            $apiSelectedJson['data']['selection']['dossier']['id'] ?? 0,
+            'sélection API strictement scopée'
+        );
+        $this->same(
+            'selection-test-0001',
+            (string) $pdo->query(
+                "SELECT json_extract(resume_json, '$.correlation_id')
+                 FROM audit_events
+                 WHERE action = 'contexte.dossier_selectionne_api'
+                 ORDER BY id DESC LIMIT 1"
+            )->fetchColumn(),
+            'corrélation conservée dans l’audit de mutation'
+        );
+
+        $apiBadSort = $app->handle(new Request(
+            'GET',
+            '/api/v1/dossiers',
+            query: ['sort' => 'sql_injection']
+        ));
+        $this->same(422, $apiBadSort->status, 'tri hors liste blanche refusé');
+
+        $apiDossiers = $app->handle(new Request(
+            'GET',
+            '/api/v1/dossiers',
+            query: ['page' => '1', 'per_page' => '1', 'sort' => 'name', 'order' => 'asc']
+        ));
+        $apiDossiersJson = $this->responseJson($apiDossiers);
+        $this->same(1, $apiDossiersJson['meta']['pagination']['total'] ?? 0, 'dossiers API isolés');
+        $this->same(
+            $ids['dossier_a'],
+            $apiDossiersJson['data'][0]['id'] ?? 0,
+            'liste de dossiers limitée aux droits'
+        );
+
+        $apiExercises = $app->handle(new Request(
+            'GET',
+            '/api/v1/exercises',
+            query: [
+                'status' => 'ouvert',
+                'sort' => 'start_date',
+                'order' => 'desc',
+                'page' => '1',
+                'per_page' => '25',
+            ]
+        ));
+        $apiExercisesJson = $this->responseJson($apiExercises);
+        $this->same(200, $apiExercises->status, 'exercices API accessibles');
+        $this->same(
+            $exerciseId,
+            $apiExercisesJson['data'][0]['id'] ?? 0,
+            'exercices API limités au dossier courant'
+        );
+        $this->same(
+            1,
+            $apiExercisesJson['meta']['pagination']['total'] ?? 0,
+            'pagination serveur documentée'
+        );
+        $apiUrlIdor = $app->handle(new Request(
+            'GET',
+            '/api/v1/exercises',
+            query: ['dossier_id' => (string) $ids['dossier_b']]
+        ));
+        $this->same(
+            422,
+            $apiUrlIdor->status,
+            'identifiant de dossier injecté dans l’URL refusé'
+        );
+        $this->false(
+            str_contains($apiUrlIdor->body, 'Organisation B')
+            || str_contains($apiUrlIdor->body, 'Comptabilité B'),
+            'identifiant URL refusé sans fuite inter-dossiers'
+        );
+
+        $apiPermissions = $app->handle(new Request('GET', '/api/v1/permissions'));
+        $this->true(
+            in_array('compta.view', $this->responseJson($apiPermissions)['data'] ?? [], true),
+            'permissions effectives exposées'
+        );
+        $apiNavigation = $app->handle(new Request('GET', '/api/v1/navigation'));
+        $this->true(
+            str_contains($apiNavigation->body, 'Comptabilité')
+            && !str_contains($apiNavigation->body, 'Comptabilité B'),
+            'navigation dérivée des permissions sans donnée étrangère'
+        );
+        $apiReferences = $app->handle(new Request('GET', '/api/v1/references'));
+        $this->same(
+            'CHF',
+            $this->responseJson($apiReferences)['data']['currencies'][0]['code'] ?? '',
+            'référentiels du shell exposés'
+        );
+        foreach ([
+            'context.success.json',
+            'collection.success.json',
+            'error.validation.json',
+        ] as $example) {
+            $payload = json_decode(
+                (string) file_get_contents(
+                    dirname(__DIR__) . '/docs/contracts/api-v1/' . $example
+                ),
+                true,
+                512,
+                JSON_THROW_ON_ERROR
+            );
+            $this->same(
+                ['data', 'meta', 'errors'],
+                array_keys($payload),
+                "exemple de contrat versionné {$example}"
+            );
+        }
 
         $missing = $app->handle(new Request('POST', '/context/dossier', post: [
             'dossier_compose' => $ids['organisation_a'] . ':' . $ids['dossier_a'],
@@ -4413,6 +4675,13 @@ XML;
             return;
         }
         echo "  ok    {$message}\n";
+    }
+
+    /** @return array<string, mixed> */
+    private function responseJson(Response $response): array
+    {
+        $decoded = json_decode($response->body, true, 512, JSON_THROW_ON_ERROR);
+        return is_array($decoded) ? $decoded : [];
     }
 
     private function throws(callable $callback, string $message): void

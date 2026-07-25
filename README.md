@@ -34,6 +34,14 @@ lint PHP, deux suites de tests, migration vierge avec sauvegarde, diagnostic,
 intégrité SQLite et vérification du contenu de l'archive mutualisée. Voir
 [`docs/qualification.md`](docs/qualification.md).
 
+## API interne
+
+Le futur shell Vue utilise le contrat JSON versionné `compta-api-v1` sous
+`/api/v1`. La session, les permissions, les scopes, le CSRF et les en-têtes de
+sécurité sont ceux du moteur existant. Les exemples et les listes blanches de
+pagination, tri et filtres sont documentés dans
+[`docs/contracts/api-v1/README.md`](docs/contracts/api-v1/README.md).
+
 ## Initialiser la comptabilité
 
 Après création de l’organisation, du dossier et de l’exercice :

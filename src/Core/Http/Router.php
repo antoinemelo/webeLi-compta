@@ -23,6 +23,11 @@ final class Router
         return ($this->routes[$key])($request);
     }
 
+    public function has(string $method, string $path): bool
+    {
+        return isset($this->routes[strtoupper($method) . ' ' . $this->normalize($path)]);
+    }
+
     private function normalize(string $path): string
     {
         $normalized = '/' . trim($path, '/');

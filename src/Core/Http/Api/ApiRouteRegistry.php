@@ -1,0 +1,79 @@
+<?php
+declare(strict_types=1);
+
+namespace Compta\Core\Http\Api;
+
+use Compta\Core\Http\Request;
+use Compta\Core\Http\Response;
+use Compta\Core\Http\Router;
+use Compta\Core\Security\Csrf;
+use Compta\Modules\Shell\Http\ShellApiController;
+use Throwable;
+
+final class ApiRouteRegistry
+{
+    public function __construct(
+        private readonly ShellApiController $shell,
+        private readonly Csrf $csrf,
+    ) {
+    }
+
+    public function register(Router $router): void
+    {
+        $this->add($router, 'GET', '/api/v1/context', $this->shell->context(...));
+        $this->add($router, 'POST', '/api/v1/context/dossier', $this->shell->selectDossier(...));
+        $this->add($router, 'GET', '/api/v1/dossiers', $this->shell->dossiers(...));
+        $this->add($router, 'GET', '/api/v1/navigation', $this->shell->navigation(...));
+        $this->add($router, 'GET', '/api/v1/permissions', $this->shell->permissions(...));
+        $this->add($router, 'GET', '/api/v1/exercises', $this->shell->exercises(...));
+        $this->add($router, 'GET', '/api/v1/references', $this->shell->references(...));
+    }
+
+    /** @param callable(Request):Response $handler */
+    private function add(
+        Router $router,
+        string $method,
+        string $path,
+        callable $handler,
+    ): void {
+        $router->add($method, $path, function (Request $request) use ($method, $handler): Response {
+            try {
+                $contract = $request->header('X-Contract-Version');
+                if ($contract !== null && $contract !== ApiResponse::CONTRACT_VERSION) {
+                    throw ApiException::conflict(
+                        'CONTRACT_VERSION_UNSUPPORTED',
+                        'Version de contrat API non prise en charge.'
+                    );
+                }
+                if (!in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+                    $token = $request->header('X-CSRF-Token')
+                        ?? (is_string($request->input()['_csrf'] ?? null)
+                            ? $request->input()['_csrf']
+                            : null);
+                    if (!$this->csrf->validate($token)) {
+                        throw new ApiException(
+                            403,
+                            'CSRF_INVALID',
+                            'Jeton CSRF invalide.'
+                        );
+                    }
+                }
+                return $handler($request);
+            } catch (ApiException $exception) {
+                return ApiResponse::failure($request, $exception);
+            } catch (Throwable $exception) {
+                $response = ApiResponse::failure(
+                    $request,
+                    new ApiException(500, 'INTERNAL_ERROR', 'Erreur interne.')
+                );
+                error_log(sprintf(
+                    '[COMPTA API %s] %s: %s',
+                    $response->headers['X-Correlation-ID'],
+                    $exception::class,
+                    $exception->getMessage()
+                ));
+                return $response;
+            }
+        });
+    }
+}

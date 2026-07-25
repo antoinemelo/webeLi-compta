@@ -8,6 +8,7 @@ use Compta\Core\Auth\LoginThrottle;
 use Compta\Core\Auth\UserRepository;
 use Compta\Core\Config\AppConfig;
 use Compta\Core\Database\ConnectionFactory;
+use Compta\Core\Http\Api\ApiRouteRegistry;
 use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
 use Compta\Core\Security\Csrf;
@@ -26,6 +27,9 @@ use Compta\Modules\Salaires\PayrollImportService;
 use Compta\Modules\Salaires\PayrollPaymentService;
 use Compta\Modules\Salaires\PayrollService;
 use Compta\Modules\Pedagogie\PedagogyService;
+use Compta\Modules\Shell\Application\ShellReadService;
+use Compta\Modules\Shell\Http\ShellApiController;
+use Compta\Modules\Shell\Http\ShellInputValidator;
 
 require __DIR__ . '/autoload.php';
 
@@ -38,6 +42,31 @@ $users = new UserRepository($pdo);
 $audit = new AuditLogger($pdo);
 $entries = new EntryService($pdo, $audit);
 $payrolls = new PayrollService($pdo, $audit, $entries);
+$csrf = new Csrf($session);
+$auth = new AuthService(
+    $users,
+    new LoginThrottle(
+        $pdo,
+        $config->int('login_max_attempts'),
+        $config->int('login_window_seconds')
+    ),
+    $audit,
+    $session
+);
+$access = new AccessControl($pdo);
+$apiRoutes = new ApiRouteRegistry(
+    new ShellApiController(
+        $config,
+        $session,
+        $csrf,
+        $auth,
+        $access,
+        $audit,
+        new ShellReadService($pdo),
+        new ShellInputValidator()
+    ),
+    $csrf
+);
 
 return [
     'config' => $config,
@@ -47,18 +76,9 @@ return [
         $config,
         new View($root . '/templates', $config),
         $session,
-        new Csrf($session),
-        new AuthService(
-            $users,
-            new LoginThrottle(
-                $pdo,
-                $config->int('login_max_attempts'),
-                $config->int('login_window_seconds')
-            ),
-            $audit,
-            $session
-        ),
-        new AccessControl($pdo),
+        $csrf,
+        $auth,
+        $access,
         $audit,
         new ReportingService($pdo),
         new ChartOfAccountsService($pdo, $audit),
@@ -73,6 +93,7 @@ return [
         new PayrollPaymentService($pdo, $audit, $entries),
         new PayrollCertificateService($pdo, $audit),
         new PayrollImportService($pdo, $audit, $payrolls),
-        new PedagogyService($pdo, $audit, $entries)
+        new PedagogyService($pdo, $audit, $entries),
+        $apiRoutes
     ),
 ];

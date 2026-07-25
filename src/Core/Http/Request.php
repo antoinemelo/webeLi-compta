@@ -10,6 +10,7 @@ final class Request
      * @param array<string, string> $post
      * @param array<string, string> $server
      * @param array<string, array{name:string,type:string,tmp_name:string,error:int,size:int}> $files
+     * @param array<string, mixed> $json
      */
     public function __construct(
         public readonly string $method,
@@ -18,6 +19,7 @@ final class Request
         public readonly array $post = [],
         public readonly array $server = [],
         public readonly array $files = [],
+        public readonly array $json = [],
     ) {
     }
 
@@ -56,6 +58,17 @@ final class Request
                 'size' => (int) ($value['size'] ?? 0),
             ];
         }
+        $json = [];
+        $contentType = mb_strtolower((string) ($_SERVER['CONTENT_TYPE'] ?? ''));
+        if (str_starts_with($contentType, 'application/json')) {
+            $raw = file_get_contents('php://input');
+            if (is_string($raw) && trim($raw) !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $json = $decoded;
+                }
+            }
+        }
         return new self(
             strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET')),
             '/' . ltrim($path, '/'),
@@ -63,11 +76,29 @@ final class Request
             $post,
             $server,
             $files,
+            $json,
         );
     }
 
     public function ip(): string
     {
         return mb_substr($this->server['REMOTE_ADDR'] ?? '', 0, 64);
+    }
+
+    public function header(string $name): ?string
+    {
+        $normalized = strtoupper(str_replace('-', '_', trim($name)));
+        $key = in_array($normalized, ['CONTENT_TYPE', 'CONTENT_LENGTH'], true)
+            ? $normalized
+            : 'HTTP_' . $normalized;
+        $value = $this->server[$key] ?? null;
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /** @return array<string, mixed> */
+    public function input(): array
+    {
+        $data = $this->json['data'] ?? $this->json;
+        return is_array($data) && $data !== [] ? $data : $this->post;
     }
 }

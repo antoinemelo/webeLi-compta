@@ -7,6 +7,9 @@ use Compta\Core\Audit\AuditLogger;
 use Compta\Core\Auth\AccessControl;
 use Compta\Core\Auth\AuthService;
 use Compta\Core\Config\AppConfig;
+use Compta\Core\Http\Api\ApiException;
+use Compta\Core\Http\Api\ApiResponse;
+use Compta\Core\Http\Api\ApiRouteRegistry;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Security\SessionStore;
 use Compta\Modules\Compta\AccountingException;
@@ -57,6 +60,7 @@ final class WebApplication
         private readonly ?PayrollCertificateService $payrollCertificates = null,
         private readonly ?PayrollImportService $payrollImports = null,
         private readonly ?PedagogyService $pedagogy = null,
+        private readonly ?ApiRouteRegistry $apiRoutes = null,
     ) {
         $this->router = new Router();
         $this->routes();
@@ -64,6 +68,15 @@ final class WebApplication
 
     public function handle(Request $request): Response
     {
+        if (str_starts_with($request->path, '/api/v1')) {
+            if (!$this->router->has($request->method, $request->path)) {
+                return $this->withSecurityHeaders(ApiResponse::failure(
+                    $request,
+                    ApiException::notFound('Route API introuvable.')
+                ));
+            }
+            return $this->withSecurityHeaders($this->router->dispatch($request));
+        }
         try {
             $userId = $this->auth->userId();
             $organisationId = (int) $this->session->get('organisation_id', 0);
@@ -282,6 +295,7 @@ final class WebApplication
                 fn (Request $request): Response => $this->pedagogyMutation($request)
             );
         }
+        $this->apiRoutes?->register($this->router);
     }
 
     /**

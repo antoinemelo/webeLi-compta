@@ -1,0 +1,31 @@
+{
+  "data": [
+    {
+      "id": 9,
+      "label": "2026",
+      "start_date": "2026-01-01",
+      "end_date": "2026-12-31",
+      "status": "ouvert",
+      "version": 1
+    }
+  ],
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-list-0001",
+    "pagination": {
+      "page": 1,
+      "per_page": 25,
+      "total": 1,
+      "pages": 1,
+      "has_more": false
+    },
+    "sort": {
+      "field": "start_date",
+      "order": "asc"
+    },
+    "filters": {
+      "status": "ouvert"
+    }
+  },
+  "errors": []
+}
