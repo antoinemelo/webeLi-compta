@@ -106,7 +106,8 @@ final class PayrollCertificateService
                donnees_snapshot_json = excluded.donnees_snapshot_json,
                xml_archive = excluded.xml_archive,
                empreinte_sha256 = excluded.empreinte_sha256,
-               statut = \'genere\', cree_le = datetime(\'now\'),
+               statut = \'prepare\', controle_le = NULL, controle_par = NULL,
+               exporte_le = NULL, exporte_par = NULL, cree_le = datetime(\'now\'),
                cree_par = excluded.cree_par'
         );
         $stmt->execute([
@@ -122,6 +123,85 @@ final class PayrollCertificateService
             $employeeId . ':' . $year
         );
         return $xml;
+    }
+
+    public function control(
+        int $organisationId,
+        int $dossierId,
+        int $employeeId,
+        int $year,
+        ?int $actorId = null,
+    ): void {
+        $stmt = $this->pdo->prepare(
+            "UPDATE certificats_salaires SET statut = 'controle',
+                controle_le = datetime('now'), controle_par = ?
+             WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?
+               AND annee = ? AND statut IN ('prepare', 'controle')"
+        );
+        $stmt->execute([
+            $actorId, $organisationId, $dossierId, $employeeId, $year,
+        ]);
+        if ($stmt->rowCount() !== 1) {
+            throw new PayrollException('Certificat préparé absent ou déjà exporté.');
+        }
+        $this->audit->log(
+            'salaires.certificat_controle',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'certificat_salaire',
+            $employeeId . ':' . $year
+        );
+    }
+
+    public function export(
+        int $organisationId,
+        int $dossierId,
+        int $employeeId,
+        int $year,
+        ?int $actorId = null,
+    ): string {
+        $stmt = $this->pdo->prepare(
+            "SELECT id, xml_archive FROM certificats_salaires
+             WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?
+               AND annee = ? AND statut IN ('controle', 'exporte')"
+        );
+        $stmt->execute([$organisationId, $dossierId, $employeeId, $year]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new PayrollException('Le certificat doit être contrôlé avant export.');
+        }
+        $this->pdo->prepare(
+            "UPDATE certificats_salaires SET statut = 'exporte',
+                exporte_le = COALESCE(exporte_le, datetime('now')),
+                exporte_par = COALESCE(exporte_par, ?)
+             WHERE id = ?"
+        )->execute([$actorId, (int) $row['id']]);
+        $this->audit->log(
+            'salaires.certificat_exporte_non_transmis',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'certificat_salaire',
+            (string) $row['id']
+        );
+        return (string) $row['xml_archive'];
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function certificates(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT c.id, c.employe_id, c.annee, c.statut, c.transmis,
+                    c.empreinte_sha256, c.cree_le, c.controle_le, c.exporte_le,
+                    e.prenom, e.nom
+             FROM certificats_salaires c
+             JOIN employes e ON e.id = c.employe_id
+             WHERE c.organisation_id = ? AND c.dossier_id = ?
+             ORDER BY c.annee DESC, e.nom, e.prenom'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return $stmt->fetchAll();
     }
 
     /** @return array<string,mixed> */

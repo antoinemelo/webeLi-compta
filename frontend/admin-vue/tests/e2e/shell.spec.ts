@@ -152,10 +152,8 @@ test('configuration des modules et référentiels', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Charges sociales' }).click();
   await expect(page.getByRole('heading', { name: 'Taux annuels des charges sociales' })).toBeVisible();
-  await page.getByRole('button', { name: 'Charger les valeurs Lasso 2026' }).click();
-  await expect(page.getByLabel('AVS employé (%)')).toHaveValue('5,3');
-  await page.getByRole('button', { name: 'Enregistrer les taux annuels' }).click();
-  await expect(page.getByText('Taux salariaux annuels enregistrés avec leur source.')).toBeVisible();
+  await expect(page.getByText(/Salaires → Annuels/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Charger les valeurs Lasso 2026' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Journaux' }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau journal' })).toBeVisible();
@@ -427,4 +425,31 @@ test('rapprochement, lettrage et paiements sortants utilisent le parcours Vue', 
   await page.getByRole('link', { name: 'Paiements', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Paiements sortants' })).toBeVisible();
   await expect(page.getByText('export pain.001 non transmis', { exact: false })).toBeVisible();
+});
+
+test('salaires horaires et mensuels utilisent le parcours Vue et l’import Lasso contrôlé', async ({
+  page
+}) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Salaires', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Salaires', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Navigation des salaires')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Employés et contrats' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Calculs', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Traitement d’une période' })).toBeVisible();
+  await page.getByRole('link', { name: 'Fiches', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Fiches de salaire' })).toBeVisible();
+  await page.getByRole('link', { name: 'Annuels', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Récapitulatifs et certificats' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Prévisualiser sans écrire' }).click();
+  await expect(page.getByText('Base Lasso absente : aucun millésime n’est inventé.')).toBeVisible();
+
+  const legacy = await page.request.get('/e2e/salaires', { maxRedirects: 0 });
+  expect(legacy.status()).toBe(303);
+  expect(legacy.headers().location).toBe('/e2e/app/salaires');
 });

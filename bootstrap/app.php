@@ -45,9 +45,13 @@ use Compta\Modules\Immobilisations\AssetInputValidator;
 use Compta\Modules\Immobilisations\AssetService;
 use Compta\Modules\Salaires\PayrollCertificateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
+use Compta\Modules\Salaires\LassoRateImportService;
+use Compta\Modules\Salaires\PayrollApiController;
+use Compta\Modules\Salaires\PayrollInputValidator;
 use Compta\Modules\Salaires\PayrollImportService;
 use Compta\Modules\Salaires\PayrollPaymentService;
 use Compta\Modules\Salaires\PayrollService;
+use Compta\Modules\Salaires\PayrollWorkspaceService;
 use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Shell\Application\ShellReadService;
 use Compta\Modules\Shell\Http\ShellApiController;
@@ -102,6 +106,8 @@ $billing = new BillingService($pdo, $audit, $entries);
 $recurringBilling = new RecurringBillingService($pdo, $audit, $billing);
 $reconciliations = new ReconciliationService($pdo, $audit);
 $payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
+$payrollPayments = new PayrollPaymentService($pdo, $audit, $entries);
+$payrollCertificates = new PayrollCertificateService($pdo, $audit);
 $vatConfiguration = new VatConfigurationService($pdo, $audit);
 $treasuryAccounts = new TreasuryAccountService($pdo, $audit);
 $accountingSetup = new AccountingSetupService($pdo, $audit);
@@ -222,6 +228,27 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         new AssetService($pdo, $audit, $entries),
         new AssetInputValidator()
+    ),
+    new PayrollApiController(
+        $session,
+        $auth,
+        $access,
+        new PayrollWorkspaceService(
+            $payrollConfiguration,
+            $payrolls,
+            $payrollPayments,
+            $payrollCertificates
+        ),
+        $payrollConfiguration,
+        $payrolls,
+        $payrollPayments,
+        $payrollCertificates,
+        new LassoRateImportService(
+            $config->string('lasso_database_path'),
+            $payrollConfiguration,
+            $audit
+        ),
+        new PayrollInputValidator()
     )
 );
 $shellPage = new ShellPageController(
@@ -250,8 +277,8 @@ return [
         new AttachmentService($pdo, $audit),
         $payrollConfiguration,
         $payrolls,
-        new PayrollPaymentService($pdo, $audit, $entries),
-        new PayrollCertificateService($pdo, $audit),
+        $payrollPayments,
+        $payrollCertificates,
         new PayrollImportService($pdo, $audit, $payrolls),
         new PedagogyService($pdo, $audit, $entries),
         $apiRoutes,

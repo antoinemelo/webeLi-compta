@@ -6,19 +6,24 @@ ne sont donc jamais partagés implicitement entre deux dossiers.
 
 ## Mise en route
 
-Dans **Salaires genevois → Paramètres** :
+Dans **Salaires → Annuels** :
 
 1. enregistrer l’employeur du dossier ;
 2. saisir tous les taux de l’année, leur source et leur date de vérification ;
 3. créer, si nécessaire, les unités et tarifs proposés ;
 4. rattacher chaque charge et dette à un compte du plan comptable du dossier.
 
-Aucun taux annuel de production n’est fourni par défaut. Les valeurs légales,
-contractuelles et individuelles doivent être contrôlées avant chaque exercice.
+Aucun taux annuel de production n’est fourni par défaut. Configurez
+`LASSO_DB_PATH` vers une base SQLite Lasso contenant `taux_par_annee` pour
+prévisualiser puis confirmer un millésime. Une source absente ou incomplète est
+signalée sans créer de valeurs. Les valeurs légales, contractuelles et
+individuelles doivent être contrôlées avant chaque exercice.
 
 ## Cycle d’une fiche
 
-Une fiche est calculée en centimes et milli-heures. Le brouillon reçoit un
+Chaque employé reçoit un ou plusieurs contrats datés, horaires ou mensuels.
+Le traitement d’une période distingue heures, absences, primes, indemnités et
+ajustements. Une fiche est calculée en centimes et milli-heures. Le brouillon reçoit un
 snapshot de l’employé, de l’employeur, des taux et de chaque composant. La
 validation fige ces données et crée les dettes séparées : salaire net, OCAS,
 LAA, LPP et impôt à la source.
@@ -60,9 +65,9 @@ L’import JSON accepte la structure suivante :
 La simulation n’écrit rien. L’application est atomique, et le couple AVS /
 période rend le rejeu idempotent.
 
-La fiche imprimable et le certificat XML annuel sont des sorties internes. Le
-XML est archivé avec son empreinte SHA-256 et signale explicitement qu’il n’est
-ni transmis ni certifié.
+La fiche et le certificat XML annuel sont des sorties internes. Le certificat
+suit les états préparé, contrôlé puis exporté. Le XML est archivé avec son
+empreinte SHA-256 et signale explicitement qu’il n’est ni transmis ni certifié.
 
 ## Confidentialité et limites
 

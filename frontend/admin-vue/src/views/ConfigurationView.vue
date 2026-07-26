@@ -1493,17 +1493,10 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                 <p class="eyebrow">Genève · valeurs en pourcentage</p>
                 <h2>Taux annuels des charges sociales</h2>
               </div>
-              <button
-                class="button secondary compact"
-                type="button"
-                @click="loadPayrollRates(managedReferences.payroll.suggested_rates)"
-              >
-                Charger les valeurs Lasso 2026
-              </button>
             </div>
             <p class="field-hint">
-              Les valeurs proposées reprennent `TAUX_DEFAUT` de Lasso. Vérifiez-les
-              avec l’OCAS et les caisses LAA/LPP avant utilisation réelle.
+              Saisissez ici un millésime contrôlé manuellement ou utilisez
+              Salaires → Annuels pour prévisualiser la table Lasso sans écriture.
             </p>
             <div class="configuration-grid">
               <label>Année
@@ -1553,7 +1546,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             <EmptyState
               v-if="!managedReferences.payroll.rates.length"
               title="Aucun taux salarial annuel"
-              description="Chargez les valeurs issues de Lasso, vérifiez-les, puis enregistrez le millésime."
+              description="Saisissez un millésime contrôlé ou importez-le depuis la table Lasso."
             />
           </article>
         </template>

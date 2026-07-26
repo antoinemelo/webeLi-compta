@@ -269,22 +269,30 @@ final class WebApplication
             $this->router->add(
                 'GET',
                 '/salaires',
-                fn (Request $request): Response => $this->payrollScreen($request)
+                fn (): Response => Response::redirect(
+                    $this->config->url('/app/salaires')
+                )
             );
             $this->router->add(
                 'POST',
                 '/salaires/action',
-                fn (Request $request): Response => $this->payrollMutation($request)
+                fn (): Response => Response::redirect(
+                    $this->config->url('/app/salaires')
+                )
             );
             $this->router->add(
                 'GET',
                 '/salaires/fiche',
-                fn (Request $request): Response => $this->payrollPrint($request)
+                fn (): Response => Response::redirect(
+                    $this->config->url('/app/salaires/fiches')
+                )
             );
             $this->router->add(
                 'GET',
                 '/salaires/certificat.xml',
-                fn (Request $request): Response => $this->payrollCertificateXml($request)
+                fn (): Response => Response::redirect(
+                    $this->config->url('/app/salaires/annuels')
+                )
             );
         }
         if ($this->pedagogy !== null) {

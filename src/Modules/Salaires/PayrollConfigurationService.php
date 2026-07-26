@@ -113,6 +113,17 @@ final class PayrollConfigurationService
             }
             $values[$field] = $value;
         }
+        $existing = $this->exactRates($organisationId, $dossierId, $year);
+        if ($existing !== null && $this->yearHasFrozenPayroll($dossierId, $year)) {
+            foreach (self::RATE_FIELDS as $field) {
+                if ((int) $existing[$field] !== $values[$field]) {
+                    throw new PayrollException(
+                        "Les taux {$year} ont déjà servi à une fiche validée et sont immuables."
+                    );
+                }
+            }
+            return (int) $existing['id'];
+        }
         $columns = implode(', ', self::RATE_FIELDS);
         $marks = implode(', ', array_fill(0, count(self::RATE_FIELDS), '?'));
         $updates = implode(', ', array_map(
@@ -121,15 +132,25 @@ final class PayrollConfigurationService
         ));
         $stmt = $this->pdo->prepare(
             "INSERT INTO taux_salaires_annuels
-             (organisation_id, dossier_id, annee, {$columns}, source, verifie_le, cree_par)
-             VALUES (?, ?, ?, {$marks}, ?, ?, ?)
+             (organisation_id, dossier_id, annee, {$columns}, source,
+              source_annee, source_empreinte, importe_le, verifie_le, cree_par)
+             VALUES (?, ?, ?, {$marks}, ?, ?, ?, ?, ?, ?)
              ON CONFLICT (dossier_id, annee) DO UPDATE SET
-               {$updates}, source = excluded.source, verifie_le = excluded.verifie_le,
+               {$updates}, source = excluded.source,
+               source_annee = excluded.source_annee,
+               source_empreinte = excluded.source_empreinte,
+               importe_le = excluded.importe_le,
+               verifie_le = excluded.verifie_le,
                modifie_le = datetime('now'), version = version + 1"
         );
         $stmt->execute([
             $organisationId, $dossierId, $year, ...array_values($values),
             trim((string) ($data['source'] ?? '')),
+            (int) ($data['source_annee'] ?? $year),
+            trim((string) ($data['source_empreinte'] ?? '')),
+            ($data['importe_le'] ?? null) === null
+                ? null
+                : trim((string) $data['importe_le']),
             trim((string) ($data['verifie_le'] ?? '')),
             $actorId,
         ]);
@@ -155,14 +176,115 @@ final class PayrollConfigurationService
     {
         $stmt = $this->pdo->prepare(
             'SELECT * FROM taux_salaires_annuels
-             WHERE organisation_id = ? AND dossier_id = ? AND annee = ?'
+             WHERE organisation_id = ? AND dossier_id = ? AND annee <= ?
+             ORDER BY annee DESC LIMIT 1'
         );
         $stmt->execute([$organisationId, $dossierId, $year]);
         $row = $stmt->fetch();
         if ($row === false) {
             throw new PayrollException(
-                "Les taux salariaux {$year} doivent être configurés explicitement."
+                "Aucun taux salarial contrôlé n’est disponible pour {$year}."
             );
+        }
+        $row['_requested_year'] = $year;
+        $row['_fallback'] = (int) $row['annee'] !== $year;
+        return $row;
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveContract(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        ?int $actorId = null,
+    ): int {
+        $employeeId = (int) ($data['employe_id'] ?? 0);
+        $this->employee($organisationId, $dossierId, $employeeId);
+        $type = (string) ($data['type'] ?? '');
+        $start = trim((string) ($data['date_debut'] ?? ''));
+        $end = trim((string) ($data['date_fin'] ?? ''));
+        $hourly = (int) ($data['taux_horaire_centimes'] ?? 0);
+        $monthly = (int) ($data['salaire_mensuel_centimes'] ?? 0);
+        if (
+            !in_array($type, ['horaire', 'mensuel'], true)
+            || preg_match('/^\d{4}-\d{2}-\d{2}$/', $start) !== 1
+            || ($end !== '' && ($end < $start
+                || preg_match('/^\d{4}-\d{2}-\d{2}$/', $end) !== 1))
+            || ($type === 'horaire' && ($hourly < 1 || $monthly !== 0))
+            || ($type === 'mensuel' && ($monthly < 1 || $hourly !== 0))
+        ) {
+            throw new PayrollException('Contrat salarial invalide.');
+        }
+        $id = (int) ($data['id'] ?? 0);
+        if ($id > 0) {
+            $stmt = $this->pdo->prepare(
+                'UPDATE contrats_salariaux SET type = ?, date_debut = ?,
+                 date_fin = ?, taux_horaire_centimes = ?,
+                 salaire_mensuel_centimes = ?, heures_hebdo_milli = ?,
+                 taux_activite_ppm = ?, source = ?, actif = ?,
+                 modifie_le = datetime(\'now\'), version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND version = ?'
+            );
+            $stmt->execute([
+                $type, $start, $end === '' ? null : $end, $hourly, $monthly,
+                (int) ($data['heures_hebdo_milli'] ?? 40000),
+                (int) ($data['taux_activite_ppm'] ?? 1_000_000),
+                trim((string) ($data['source'] ?? '')), (int) ($data['actif'] ?? 1),
+                $id, $organisationId, $dossierId, (int) ($data['version'] ?? 0),
+            ]);
+            if ($stmt->rowCount() !== 1) {
+                throw new PayrollException('Contrat modifié simultanément.');
+            }
+        } else {
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO contrats_salariaux
+                 (organisation_id, dossier_id, employe_id, type, date_debut,
+                  date_fin, taux_horaire_centimes, salaire_mensuel_centimes,
+                  heures_hebdo_milli, taux_activite_ppm, source, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([
+                $organisationId, $dossierId, $employeeId, $type, $start,
+                $end === '' ? null : $end, $hourly, $monthly,
+                (int) ($data['heures_hebdo_milli'] ?? 40000),
+                (int) ($data['taux_activite_ppm'] ?? 1_000_000),
+                trim((string) ($data['source'] ?? '')), $actorId,
+            ]);
+            $id = (int) $this->pdo->lastInsertId();
+        }
+        $this->audit->log(
+            'salaires.contrat_enregistre',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'contrat_salarial',
+            (string) $id,
+            ['employe_id' => $employeeId, 'type' => $type, 'date_debut' => $start]
+        );
+        return $id;
+    }
+
+    /** @return array<string,mixed> */
+    public function contractForPeriod(
+        int $organisationId,
+        int $dossierId,
+        int $employeeId,
+        int $year,
+        int $month,
+    ): array {
+        $date = sprintf('%04d-%02d-01', $year, $month);
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM contrats_salariaux
+             WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?
+               AND actif = 1 AND date_debut <= ?
+               AND (date_fin IS NULL OR date_fin >= ?)
+             ORDER BY date_debut DESC, id DESC LIMIT 1'
+        );
+        $stmt->execute([$organisationId, $dossierId, $employeeId, $date, $date]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new PayrollException('Aucun contrat actif pour cette période.');
         }
         return $row;
     }
@@ -396,6 +518,18 @@ final class PayrollConfigurationService
              ORDER BY code'
         );
         $journals->execute([$organisationId, $dossierId]);
+        $contracts = $this->pdo->prepare(
+            'SELECT * FROM contrats_salariaux
+             WHERE organisation_id = ? AND dossier_id = ?
+             ORDER BY date_debut DESC, id DESC'
+        );
+        $contracts->execute([$organisationId, $dossierId]);
+        $treasury = $this->pdo->prepare(
+            "SELECT id, numero, libelle FROM comptes
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+               AND type = 'actif' ORDER BY numero"
+        );
+        $treasury->execute([$organisationId, $dossierId]);
         return [
             'units' => $units->fetchAll(),
             'tariffs' => $tariffs->fetchAll(),
@@ -403,7 +537,36 @@ final class PayrollConfigurationService
             'rates' => $rates->fetchAll(),
             'exercises' => $exercises->fetchAll(),
             'journals' => $journals->fetchAll(),
+            'contracts' => $contracts->fetchAll(),
+            'treasury_accounts' => $treasury->fetchAll(),
         ];
+    }
+
+    /** @return ?array<string,mixed> */
+    private function exactRates(
+        int $organisationId,
+        int $dossierId,
+        int $year,
+    ): ?array {
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM taux_salaires_annuels
+             WHERE organisation_id = ? AND dossier_id = ? AND annee = ?'
+        );
+        $stmt->execute([$organisationId, $dossierId, $year]);
+        $row = $stmt->fetch();
+        return $row === false ? null : $row;
+    }
+
+    private function yearHasFrozenPayroll(int $dossierId, int $year): bool
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT 1 FROM fiches_salaires
+             WHERE dossier_id = ? AND annee = ?
+               AND statut IN ('validee', 'comptabilisee', 'payee', 'annulee')
+             LIMIT 1"
+        );
+        $stmt->execute([$dossierId, $year]);
+        return $stmt->fetchColumn() !== false;
     }
 
     private function normalizeAvs(string $avs): string

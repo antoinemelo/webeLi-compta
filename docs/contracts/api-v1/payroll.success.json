@@ -1,0 +1,52 @@
+{
+  "data": {
+    "year": 2026,
+    "scope": {"organisation_id": 1, "dossier_id": 1},
+    "employer": null,
+    "mapping": null,
+    "employees": [],
+    "payrolls": [],
+    "payments": [],
+    "liabilities": [],
+    "catalog": {
+      "units": [],
+      "tariffs": [],
+      "accounts": [],
+      "rates": [],
+      "exercises": [],
+      "journals": [],
+      "contracts": [],
+      "treasury_accounts": []
+    },
+    "annual": {
+      "employees": [],
+      "employer": {
+        "gross_cents": 0,
+        "net_cents": 0,
+        "deductions_cents": 0,
+        "employer_charges_cents": 0,
+        "total_cost_cents": 0
+      }
+    },
+    "certificates": [],
+    "selected": null,
+    "definitions": {
+      "scope": "Genève — aucun envoi Swissdec.",
+      "certificate": "Préparé, contrôlé puis exporté; toujours non transmis.",
+      "rates": "Les taux validés sont figés dès leur première fiche validée."
+    },
+    "capabilities": {
+      "manage": true,
+      "validate": true,
+      "post": true,
+      "pay": true,
+      "export": true,
+      "pii": true
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "contract-example-payroll"
+  },
+  "errors": []
+}

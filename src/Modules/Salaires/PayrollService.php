@@ -39,6 +39,7 @@ final class PayrollService
         ?int $vacationPpm = null,
         ?int $sourceTaxPpm = null,
         ?int $actorId = null,
+        array $context = [],
     ): int {
         return $this->transaction(function () use (
             $organisationId,
@@ -49,7 +50,8 @@ final class PayrollService
             $lines,
             $vacationPpm,
             $sourceTaxPpm,
-            $actorId
+            $actorId,
+            $context
         ): int {
             $employee = $this->configuration->employee(
                 $organisationId,
@@ -63,6 +65,15 @@ final class PayrollService
                 $year
             );
             [$normalizedLines, $hoursMilli, $workCents] = $this->calculateLines($lines);
+            if (isset($context['hours_milli_override'])) {
+                $hoursMilli = (int) $context['hours_milli_override'];
+            }
+            $workCents += (int) ($context['adjustment_cents'] ?? 0);
+            if ($workCents < 0) {
+                throw new PayrollException(
+                    'Les absences et ajustements dépassent le salaire de base.'
+                );
+            }
             $effective = $this->calculator->effectiveAccidentRates(
                 $rates,
                 $hoursMilli / 1000,
@@ -91,7 +102,8 @@ final class PayrollService
                 'INSERT INTO fiches_salaires
                  (organisation_id, dossier_id, employe_id, annee, mois,
                   employe_snapshot_json, employeur_snapshot_json,
-                  taux_snapshot_json, nombre_heures_milli,
+                  contrat_snapshot_json, variables_snapshot_json,
+                  taux_snapshot_json, taux_source_annee, nombre_heures_milli,
                   salaire_travail_centimes, supplement_centimes, brut_centimes,
                   ded_avs_centimes, ded_ac_centimes, ded_amat_centimes,
                   ded_laa_centimes, ded_lpp_centimes,
@@ -102,16 +114,19 @@ final class PayrollService
                   emp_lpp_centimes, total_charges_employeur_centimes,
                   cout_total_centimes, cree_par)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $employeeId, $year, $month,
                 $this->json($employeeSnapshot), $this->json($employer),
+                $this->json($context['contract'] ?? []),
+                $this->json($context['elements'] ?? []),
                 $this->json($rateSnapshot + [
                     'impot_source_ppm' => $employeeCalculation['impot_source_ppm'],
                     'supplement_vacances_ppm' =>
                         $employeeCalculation['supplement_vacances_ppm'],
                 ]),
+                (int) ($rates['annee'] ?? $year),
                 $hoursMilli,
                 $calculation['salaire_travail_centimes'],
                 $calculation['supplement_centimes'],
@@ -139,6 +154,7 @@ final class PayrollService
             ]);
             $id = (int) $this->pdo->lastInsertId();
             $this->insertLines($id, $normalizedLines);
+            $this->insertPeriodElements($id, $context['elements'] ?? []);
             $this->insertComponents($id, $calculation, $rateSnapshot, $employeeCalculation);
             $this->audit->log(
                 'salaires.fiche_brouillon_creee',
@@ -151,6 +167,110 @@ final class PayrollService
             );
             return $id;
         }, true);
+    }
+
+    /** @param list<array<string,mixed>> $elements */
+    public function createPeriodDraft(
+        int $organisationId,
+        int $dossierId,
+        int $employeeId,
+        int $year,
+        int $month,
+        array $elements,
+        ?int $actorId = null,
+    ): int {
+        $contract = $this->configuration->contractForPeriod(
+            $organisationId,
+            $dossierId,
+            $employeeId,
+            $year,
+            $month
+        );
+        $normalized = [];
+        $lines = [];
+        $adjustment = 0;
+        foreach ($elements as $index => $element) {
+            $type = (string) ($element['type'] ?? '');
+            if (!in_array($type, [
+                'heures', 'absence', 'prime', 'indemnite', 'ajustement',
+            ], true)) {
+                throw new PayrollException('Type de variable salariale invalide.');
+            }
+            $quantity = (int) ($element['quantite_milli'] ?? 0);
+            $unit = (int) ($element['montant_unitaire_centimes'] ?? 0);
+            $amount = (int) ($element['montant_centimes'] ?? 0);
+            if ($type === 'heures') {
+                if ($contract['type'] !== 'horaire' || $quantity <= 0) {
+                    throw new PayrollException(
+                        'Les heures exigent un contrat horaire actif.'
+                    );
+                }
+                $unit = (int) $contract['taux_horaire_centimes'];
+                $amount = intdiv(($quantity * $unit) + 500, 1000);
+                $lines[] = [
+                    'libelle' => trim((string) ($element['libelle'] ?? 'Heures')),
+                    'unite_libelle' => 'Heure',
+                    'heures_unite_milli' => 1000,
+                    'quantite_milli' => $quantity,
+                    'taux_horaire_centimes' => $unit,
+                ];
+            } else {
+                if ($amount === 0) {
+                    throw new PayrollException('Montant de variable nul.');
+                }
+                if ($type === 'absence' && $amount > 0) {
+                    $amount = -$amount;
+                }
+                $adjustment += $amount;
+            }
+            $normalized[] = [
+                'type' => $type,
+                'libelle' => trim((string) ($element['libelle'] ?? ucfirst($type))),
+                'quantite_milli' => $quantity,
+                'montant_unitaire_centimes' => $unit,
+                'montant_centimes' => $amount,
+                'note' => trim((string) ($element['note'] ?? '')),
+                'ordre' => $index,
+            ];
+        }
+        if ($contract['type'] === 'mensuel') {
+            $base = intdiv(
+                ((int) $contract['salaire_mensuel_centimes']
+                    * (int) $contract['taux_activite_ppm']) + 500_000,
+                1_000_000
+            );
+            $lines[] = [
+                'libelle' => 'Salaire mensuel contractuel',
+                'unite_libelle' => 'Mois',
+                'heures_unite_milli' => 1000,
+                'quantite_milli' => 1000,
+                'taux_horaire_centimes' => $base,
+            ];
+            $days = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+            $hoursOverride = intdiv(
+                ((int) $contract['heures_hebdo_milli'] * $days) + 3,
+                7
+            );
+        } elseif ($lines === []) {
+            throw new PayrollException('Au moins une ligne d’heures est requise.');
+        }
+        return $this->createDraft(
+            $organisationId,
+            $dossierId,
+            $employeeId,
+            $year,
+            $month,
+            $lines,
+            null,
+            null,
+            $actorId,
+            [
+                'contract' => $contract,
+                'elements' => $normalized,
+                'adjustment_cents' => $adjustment,
+                'hours_milli_override' => $hoursOverride ?? null,
+            ]
+        );
     }
 
     public function validate(
@@ -438,6 +558,30 @@ final class PayrollService
     }
 
     /** @return list<array<string,mixed>> */
+    public function annualSummary(int $organisationId, int $dossierId, int $year): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT e.id AS employe_id, e.prenom, e.nom,
+                    COUNT(f.id) AS fiches,
+                    COALESCE(SUM(f.brut_centimes), 0) AS brut_centimes,
+                    COALESCE(SUM(f.net_centimes), 0) AS net_centimes,
+                    COALESCE(SUM(f.total_deductions_centimes), 0)
+                        AS retenues_centimes,
+                    COALESCE(SUM(f.total_charges_employeur_centimes), 0)
+                        AS charges_employeur_centimes,
+                    COALESCE(SUM(f.cout_total_centimes), 0) AS cout_total_centimes
+             FROM employes e
+             LEFT JOIN fiches_salaires f ON f.employe_id = e.id
+               AND f.annee = ?
+               AND f.statut IN ('validee', 'comptabilisee', 'payee')
+             WHERE e.organisation_id = ? AND e.dossier_id = ?
+             GROUP BY e.id ORDER BY e.nom, e.prenom"
+        );
+        $stmt->execute([$year, $organisationId, $dossierId]);
+        return $stmt->fetchAll();
+    }
+
+    /** @return list<array<string,mixed>> */
     public function lines(int $payrollId): array
     {
         $stmt = $this->pdo->prepare(
@@ -453,6 +597,17 @@ final class PayrollService
     {
         $stmt = $this->pdo->prepare(
             'SELECT * FROM composants_fiche
+             WHERE fiche_salaire_id = ? ORDER BY ordre'
+        );
+        $stmt->execute([$payrollId]);
+        return $stmt->fetchAll();
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function periodElements(int $payrollId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT * FROM elements_periode_salaire
              WHERE fiche_salaire_id = ? ORDER BY ordre'
         );
         $stmt->execute([$payrollId]);
@@ -552,6 +707,29 @@ final class PayrollService
                 $line['unite_libelle'], $line['heures_unite_milli'],
                 $line['quantite_milli'], $line['taux_horaire_centimes'],
                 $line['nombre_heures_milli'], $line['montant_centimes'],
+            ]);
+        }
+    }
+
+    /** @param list<array<string,mixed>> $elements */
+    private function insertPeriodElements(int $payrollId, array $elements): void
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO elements_periode_salaire
+             (fiche_salaire_id, type, libelle, quantite_milli,
+              montant_unitaire_centimes, montant_centimes, note, ordre)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        foreach ($elements as $index => $element) {
+            $stmt->execute([
+                $payrollId,
+                (string) $element['type'],
+                (string) $element['libelle'],
+                (int) $element['quantite_milli'],
+                (int) $element['montant_unitaire_centimes'],
+                (int) $element['montant_centimes'],
+                (string) $element['note'],
+                (int) ($element['ordre'] ?? $index),
             ]);
         }
     }

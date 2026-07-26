@@ -14,6 +14,7 @@ return [
     'base_url' => getenv('APP_BASE_URL') ?: '',
     'storage_path' => getenv('APP_STORAGE_PATH') ?: '',
     'database_path' => getenv('APP_DB_PATH') ?: '',
+    'lasso_database_path' => getenv('LASSO_DB_PATH') ?: '',
     'setup_secret' => getenv('APP_SETUP_SECRET') ?: '',
     'vue_shell_enabled' => $vueShellEnabled,
     'session_idle_seconds' => 1800,

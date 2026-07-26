@@ -5,6 +5,7 @@ import DashboardView from '@/views/DashboardView.vue';
 import ConfigurationView from '@/views/ConfigurationView.vue';
 import AccountingView from '@/views/AccountingView.vue';
 import LiquidityView from '@/views/LiquidityView.vue';
+import PayrollView from '@/views/PayrollView.vue';
 import BillingView from '@/views/BillingView.vue';
 import WorkspaceView from '@/views/WorkspaceView.vue';
 
@@ -42,7 +43,12 @@ const routes: RouteRecordRaw[] = [
     component: AccountingView,
     meta: { label: 'Comptabilité', section: 'accounting' }
   },
-  workspace('/salaires/:tab?', 'payroll', 'Salaires', 'payroll', '/salaires'),
+  {
+    path: '/salaires/:tab?',
+    name: 'payroll',
+    component: PayrollView,
+    meta: { label: 'Salaires', section: 'payroll' }
+  },
   {
     path: '/configuration/:tab?',
     name: 'settings',

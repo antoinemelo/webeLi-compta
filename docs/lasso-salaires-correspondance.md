@@ -20,7 +20,7 @@ genevois et ne contient aucune transmission Swissdec.
 | `importer_fiches_salaire()` | Simulation et import par AVS/période | `PayrollImportService::import()` |
 | `agreger_certificat()` | Agrégats annuels | `PayrollCertificateService::annualData()` |
 | `build_certificat_xml()` | Export annuel interne à contrôler | `PayrollCertificateService::generateXml()` |
-| `_fiche_body.php` / `fiche_print.php` | Fiche écran et impression | `templates/salaires/index.php` et route d’impression |
+| `_fiche_body.php` / `fiche_print.php` | Fiche écran et impression | `PayrollView.vue` et contrat `/api/v1/salaires` |
 | `fiche_email_html()` | Envoi de fiche | file traçable `emails_salaires`, sans prétendre à un envoi réussi |
 | Résumé des retenues | OCAS, LAA, LPP et impôt à payer | `dettes_salaires` et allocations de paiements |
 | aucune écriture en partie double | — | mapping configurable et `EntryService::postGenerated()` |
@@ -32,6 +32,16 @@ Les 32 assertions de `lasso/tests/calc_test.php` sont reprises dans
 cas couvrent le salaire de référence, les vacances, AVS/AC/A.mat/LAA/LPP,
 l’impôt source, les charges patronales, CPE/LFP, les seuils mensuels et le choix
 LAA.
+
+## Import contrôlé
+
+`LassoRateImportService` couvre exhaustivement les seize clés utilisées par
+`lib/calc.php`. Il convertit les fractions décimales en ppm par arithmétique
+entière, rapporte toute clé inconnue comme non applicable et refuse un millésime
+incomplet. La prévisualisation ne modifie rien ; la confirmation compare une
+empreinte SHA-256, conserve la source et la date de contrôle, puis devient
+idempotente. Un taux déjà utilisé par une fiche validée ne peut plus être
+remplacé.
 
 ## Limites explicites
 

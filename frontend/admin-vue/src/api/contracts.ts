@@ -1099,3 +1099,48 @@ export type BillingPayment = {
   reference: string;
   status: string;
 };
+
+export type PayrollWorkspace = {
+  year: number;
+  employer: Record<string, unknown> | null;
+  mapping: Record<string, number> | null;
+  employees: Array<Record<string, unknown>>;
+  payrolls: Array<Record<string, unknown>>;
+  payments: Array<Record<string, unknown>>;
+  liabilities: Array<Record<string, unknown>>;
+  certificates: Array<Record<string, unknown>>;
+  catalog: {
+    contracts: Array<Record<string, unknown>>;
+    accounts: Array<Record<string, unknown>>;
+    treasury_accounts: Array<Record<string, unknown>>;
+    rates: Array<Record<string, unknown>>;
+    exercises: Array<Record<string, unknown>>;
+    journals: Array<Record<string, unknown>>;
+  };
+  annual: {
+    employees: Array<Record<string, unknown>>;
+    employer: Record<string, number>;
+  };
+  selected: Record<string, unknown> | null;
+  capabilities: {
+    manage: boolean;
+    validate: boolean;
+    post: boolean;
+    pay: boolean;
+    export: boolean;
+    pii: boolean;
+  };
+  definitions: Record<string, string>;
+};
+
+export type LassoRatePreview = {
+  available: boolean;
+  year: number;
+  source: string;
+  message: string;
+  rows: Array<Record<string, unknown>>;
+  rates: Record<string, number>;
+  unknown_keys: string[];
+  missing_keys: string[];
+  fingerprint: string;
+};

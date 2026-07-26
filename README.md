@@ -191,9 +191,11 @@ Cette commande rejouable crée uniquement les brouillons arrivés à échéance.
 
 Le module `Salaires` reprend les calculs éprouvés de Lasso en centimes et
 milli-heures. Il gère des paramètres annuels explicites par dossier, les
-employés et prestations, les snapshots de fiches, la validation immuable, les
-écritures détaillées, les dettes sociales, les paiements et allocations,
-l’import JSON simulable et le certificat annuel interne.
+employés, contrats horaires ou mensuels datés, variables de période, les
+snapshots de fiches, la validation immuable, les écritures détaillées, les
+dettes sociales, les paiements et allocations, l’import JSON simulable,
+l’import contrôlé de `taux_par_annee` Lasso et le certificat annuel préparé,
+contrôlé puis exporté sans transmission.
 
 Le périmètre actuel est Genève uniquement. Voir
 [le guide des salaires genevois](docs/salaires-geneve.md) et la

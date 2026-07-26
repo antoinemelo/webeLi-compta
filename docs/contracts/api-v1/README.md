@@ -36,6 +36,7 @@ Les exemples versionnés sont :
 - `expenses.success.json` ;
 - `treasury.success.json` ;
 - `billing.success.json` ;
+- `payroll.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -64,6 +65,18 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/references/exercises` | création ou changement de statut d’un exercice |
 | POST | `/api/v1/configuration/references/periods` | création ou changement de statut d’une période |
 | POST | `/api/v1/configuration/access` | rôles directs d’un utilisateur sur le dossier |
+| GET | `/api/v1/salaires` | employés, contrats, fiches, dettes, paiements et récapitulatifs annuels |
+| POST | `/api/v1/salaires/employes` | création d’un employé genevois |
+| POST | `/api/v1/salaires/contrats` | contrat horaire ou mensuel daté |
+| POST | `/api/v1/salaires/fiches` | calcul d’une période avec variables explicites |
+| POST | `/api/v1/salaires/fiches/valider` | validation et gel des snapshots |
+| POST | `/api/v1/salaires/fiches/comptabiliser` | écriture salariale dans le grand livre |
+| POST | `/api/v1/salaires/fiches/annuler` | correction par contre-passation |
+| POST | `/api/v1/salaires/taux-lasso/previsualiser` | lecture sans écriture de `taux_par_annee` |
+| POST | `/api/v1/salaires/taux-lasso/confirmer` | import contrôlé, audité et idempotent |
+| POST | `/api/v1/salaires/certificats/preparer` | préparation d’un certificat interne |
+| POST | `/api/v1/salaires/certificats/controler` | contrôle opérateur avant export |
+| GET | `/api/v1/salaires/certificats/exporter` | export nominatif audité, non transmis |
 | GET | `/api/v1/accounting` | exercice, journal, extrait et plan issus du moteur comptable |
 | POST | `/api/v1/accounting/entries` | création et éventuelle validation d’une écriture |
 | POST | `/api/v1/accounting/chart/types` | libellés des types de comptes |

@@ -154,7 +154,13 @@ CREATE TABLE certificats_salaires (
     donnees_snapshot_json TEXT NOT NULL,
     xml_archive TEXT NOT NULL,
     empreinte_sha256 TEXT NOT NULL CHECK (length(empreinte_sha256) = 64),
-    statut TEXT NOT NULL DEFAULT 'genere' CHECK (statut IN ('genere', 'annule')),
+    statut TEXT NOT NULL DEFAULT 'prepare'
+        CHECK (statut IN ('prepare', 'controle', 'exporte', 'annule')),
+    controle_le TEXT,
+    controle_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    exporte_le TEXT,
+    exporte_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    transmis INTEGER NOT NULL DEFAULT 0 CHECK (transmis = 0),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     UNIQUE (dossier_id, employe_id, annee)
@@ -172,6 +178,39 @@ CREATE TABLE composants_fiche (
     montant_centimes INTEGER NOT NULL,
     ordre INTEGER NOT NULL,
     UNIQUE (fiche_salaire_id, code)
+);
+
+CREATE TABLE contrats_salariaux (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    employe_id INTEGER NOT NULL REFERENCES employes(id) ON DELETE RESTRICT,
+    type TEXT NOT NULL CHECK (type IN ('horaire', 'mensuel')),
+    date_debut TEXT NOT NULL,
+    date_fin TEXT,
+    taux_horaire_centimes INTEGER NOT NULL DEFAULT 0
+        CHECK (taux_horaire_centimes >= 0),
+    salaire_mensuel_centimes INTEGER NOT NULL DEFAULT 0
+        CHECK (salaire_mensuel_centimes >= 0),
+    heures_hebdo_milli INTEGER NOT NULL DEFAULT 40000
+        CHECK (heures_hebdo_milli > 0),
+    taux_activite_ppm INTEGER NOT NULL DEFAULT 1000000
+        CHECK (taux_activite_ppm BETWEEN 1 AND 1000000),
+    source TEXT NOT NULL,
+    actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    CHECK (date_fin IS NULL OR date_fin >= date_debut),
+    CHECK (
+        (type = 'horaire' AND taux_horaire_centimes > 0
+            AND salaire_mensuel_centimes = 0)
+        OR
+        (type = 'mensuel' AND salaire_mensuel_centimes > 0
+            AND taux_horaire_centimes = 0)
+    ),
+    UNIQUE (employe_id, date_debut)
 );
 
 CREATE TABLE comptes (
@@ -639,7 +678,10 @@ CREATE TABLE fiches_salaires (
         CHECK (statut IN ('brouillon', 'validee', 'comptabilisee', 'payee', 'annulee')),
     employe_snapshot_json TEXT NOT NULL,
     employeur_snapshot_json TEXT NOT NULL,
+    contrat_snapshot_json TEXT NOT NULL DEFAULT '{}',
+    variables_snapshot_json TEXT NOT NULL DEFAULT '[]',
     taux_snapshot_json TEXT NOT NULL,
+    taux_source_annee INTEGER NOT NULL DEFAULT 0,
     nombre_heures_milli INTEGER NOT NULL CHECK (nombre_heures_milli >= 0),
     salaire_travail_centimes INTEGER NOT NULL CHECK (salaire_travail_centimes >= 0),
     supplement_centimes INTEGER NOT NULL CHECK (supplement_centimes >= 0),
@@ -678,6 +720,21 @@ CREATE TABLE fiches_salaires (
     CHECK (brut_centimes = salaire_travail_centimes + supplement_centimes),
     CHECK (net_centimes = brut_centimes - total_deductions_centimes),
     CHECK (cout_total_centimes = brut_centimes + total_charges_employeur_centimes)
+);
+
+CREATE TABLE elements_periode_salaire (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fiche_salaire_id INTEGER NOT NULL REFERENCES fiches_salaires(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (
+        type IN ('heures', 'absence', 'prime', 'indemnite', 'ajustement')
+    ),
+    libelle TEXT NOT NULL,
+    quantite_milli INTEGER NOT NULL DEFAULT 0,
+    montant_unitaire_centimes INTEGER NOT NULL DEFAULT 0,
+    montant_centimes INTEGER NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    ordre INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (fiche_salaire_id, ordre)
 );
 
 CREATE TABLE groupes_pedagogiques (
@@ -1387,6 +1444,9 @@ CREATE TABLE taux_salaires_annuels (
     emp_lfp_ppm INTEGER NOT NULL DEFAULT 0 CHECK (emp_lfp_ppm BETWEEN 0 AND 1000000),
     emp_lpp_ppm INTEGER NOT NULL CHECK (emp_lpp_ppm BETWEEN 0 AND 1000000),
     source TEXT NOT NULL DEFAULT '',
+    source_annee INTEGER NOT NULL DEFAULT 0,
+    source_empreinte TEXT NOT NULL DEFAULT '',
+    importe_le TEXT,
     verifie_le TEXT NOT NULL DEFAULT '',
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
@@ -1771,6 +1831,9 @@ CREATE INDEX idx_comptes_scope_type ON comptes(dossier_id, type, actif, numero);
 CREATE INDEX idx_comptes_tresorerie_scope
     ON comptes_tresorerie(organisation_id, dossier_id, actif, type);
 
+CREATE INDEX idx_contrats_salariaux_periode
+    ON contrats_salariaux(employe_id, date_debut, date_fin, actif);
+
 CREATE INDEX idx_categories_immobilisations_scope
     ON categories_immobilisations(dossier_id, actif, code);
 
@@ -1830,6 +1893,9 @@ CREATE INDEX idx_echeances_amortissement_date
     ON echeances_amortissement(immobilisation_id, date_comptable, statut);
 
 CREATE INDEX idx_employes_scope_nom ON employes(dossier_id, actif, nom, prenom);
+
+CREATE INDEX idx_elements_periode_fiche
+    ON elements_periode_salaire(fiche_salaire_id, ordre);
 
 CREATE INDEX idx_fiches_salaires_scope
     ON fiches_salaires(dossier_id, annee, mois, statut, employe_id);

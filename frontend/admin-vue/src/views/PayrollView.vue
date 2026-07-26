@@ -1,0 +1,295 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
+import CompactTabs from '@/components/ui/CompactTabs.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import ErrorSummary from '@/components/ui/ErrorSummary.vue';
+import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
+import { runtimeConfig } from '@/config';
+import { subNavigation } from '@/router/navigation';
+import { useContextStore } from '@/stores/context';
+import { usePayrollStore } from '@/stores/payroll';
+
+const route = useRoute();
+const context = useContextStore();
+const store = usePayrollStore();
+const today = new Date().toISOString().slice(0, 10);
+const currentYear = new Date().getFullYear();
+const year = ref(currentYear);
+const tab = computed(() => String(route.params.tab || 'employees'));
+const workspace = computed(() => store.workspace);
+const employee = reactive({
+  first_name: '', last_name: '', avs: '', email: '', birth_date: '',
+  procedure: 'ordinaire', vacation: '8.33', sourceTax: '0'
+});
+const contract = reactive({
+  employee_id: 0, type: 'horaire', valid_from: `${currentYear}-01-01`,
+  valid_until: '', amount: '', weekly_hours: '40', activity: '100', source: 'Contrat signé'
+});
+const draft = reactive({
+  employee_id: 0, year: currentYear, month: new Date().getMonth() + 1,
+  type: 'heures', label: 'Heures travaillées', quantity: '', amount: '', note: ''
+});
+const posting = reactive({ exercise_id: 0, journal_id: 0, date: today });
+const payment = reactive({
+  beneficiary_type: 'employe', employee_id: 0, date: today,
+  amount: '', account_id: 0, reference: ''
+});
+const allocation = reactive({ payment_id: 0, liability_id: 0, amount: '' });
+const employer = reactive({
+  name: '', address: '', postal_code: '', city: '', email: '', phone: '', weekly_hours: '40'
+});
+const mapping = reactive<Record<string, number>>({
+  charge_salaires_id: 0, charge_ocas_id: 0, charge_laa_id: 0, charge_lpp_id: 0,
+  dette_net_id: 0, dette_ocas_id: 0, dette_laa_id: 0, dette_lpp_id: 0,
+  dette_impot_id: 0
+});
+const lassoVerifiedOn = ref(today);
+
+const mappingFields: Array<[string, string]> = [
+  ['charge_salaires_id', 'Charge salaires'], ['charge_ocas_id', 'Charge OCAS'],
+  ['charge_laa_id', 'Charge LAA'], ['charge_lpp_id', 'Charge LPP'],
+  ['dette_net_id', 'Dette salaires nets'], ['dette_ocas_id', 'Dette OCAS'],
+  ['dette_laa_id', 'Dette LAA'], ['dette_lpp_id', 'Dette LPP'],
+  ['dette_impot_id', 'Dette impôt source']
+];
+
+function n(row: Record<string, unknown>, key: string): number {
+  return Number(row[key] ?? 0);
+}
+function s(row: Record<string, unknown>, key: string): string {
+  return String(row[key] ?? '');
+}
+function money(cents: number): string {
+  return new Intl.NumberFormat('fr-CH', { style: 'currency', currency: 'CHF' })
+    .format(cents / 100);
+}
+function cents(value: string): number {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^-?\d+(?:\.\d{1,2})?$/.test(normalized)) throw new Error('Montant invalide.');
+  const negative = normalized.startsWith('-');
+  const [whole, decimals = ''] = normalized.replace('-', '').split('.');
+  const result = Number(whole) * 100 + Number(decimals.padEnd(2, '0'));
+  return negative ? -result : result;
+}
+function ppm(value: string): number {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^\d+(?:\.\d{1,4})?$/.test(normalized)) throw new Error('Pourcentage invalide.');
+  const [whole, decimals = ''] = normalized.split('.');
+  return Number(whole) * 10000 + Number(decimals.padEnd(4, '0'));
+}
+function milli(value: string): number {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^\d+(?:\.\d{1,3})?$/.test(normalized)) throw new Error('Quantité invalide.');
+  const [whole, decimals = ''] = normalized.split('.');
+  return Number(whole) * 1000 + Number(decimals.padEnd(3, '0'));
+}
+function employeeName(id: number): string {
+  const item = workspace.value?.employees.find((row) => n(row, 'id') === id);
+  return item ? `${s(item, 'prenom')} ${s(item, 'nom')}` : `#${id}`;
+}
+async function reload(payrollId?: number): Promise<void> {
+  await store.load(year.value, payrollId);
+  if (!workspace.value) return;
+  if (!posting.exercise_id) posting.exercise_id = n(workspace.value.catalog.exercises[0] || {}, 'id');
+  if (!posting.journal_id) posting.journal_id = n(workspace.value.catalog.journals[0] || {}, 'id');
+  if (!payment.account_id) payment.account_id = n(workspace.value.catalog.treasury_accounts[0] || {}, 'id');
+  if (!draft.employee_id) draft.employee_id = n(workspace.value.employees[0] || {}, 'id');
+  if (!contract.employee_id) contract.employee_id = draft.employee_id;
+  if (!payment.employee_id) payment.employee_id = draft.employee_id;
+  if (workspace.value.employer) {
+    employer.name = String(workspace.value.employer.nom || '');
+    employer.address = String(workspace.value.employer.rue || '');
+    employer.postal_code = String(workspace.value.employer.npa || '');
+    employer.city = String(workspace.value.employer.localite || '');
+    employer.email = String(workspace.value.employer.email || '');
+    employer.phone = String(workspace.value.employer.telephone || '');
+    employer.weekly_hours = String(Number(workspace.value.employer.heures_hebdo_milli || 40000) / 1000);
+  }
+  if (workspace.value.mapping) Object.assign(mapping, workspace.value.mapping);
+}
+async function mutate(path: string, data: Record<string, unknown>, notice: string): Promise<void> {
+  try {
+    await store.mutate(path, data, notice);
+    await reload();
+  } catch {
+    // Le store rend l’erreur structurée.
+  }
+}
+async function createEmployee(): Promise<void> {
+  await mutate('/salaires/employes', {
+    first_name: employee.first_name, last_name: employee.last_name, avs: employee.avs,
+    email: employee.email, birth_date: employee.birth_date,
+    procedure: employee.procedure, vacation_ppm: ppm(employee.vacation),
+    source_tax_ppm: ppm(employee.sourceTax)
+  }, 'Employé créé.');
+}
+async function saveContract(): Promise<void> {
+  await mutate('/salaires/contrats', {
+    employee_id: contract.employee_id, type: contract.type,
+    valid_from: contract.valid_from, valid_until: contract.valid_until,
+    hourly_cents: contract.type === 'horaire' ? cents(contract.amount) : 0,
+    monthly_cents: contract.type === 'mensuel' ? cents(contract.amount) : 0,
+    weekly_hours_milli: milli(contract.weekly_hours),
+    activity_ppm: ppm(contract.activity), source: contract.source, active: true
+  }, 'Contrat daté enregistré.');
+}
+async function createDraft(): Promise<void> {
+  const isHours = draft.type === 'heures';
+  await mutate('/salaires/fiches', {
+    employee_id: draft.employee_id, year: draft.year, month: draft.month,
+    elements: [{
+      type: draft.type, libelle: draft.label,
+      quantite_milli: isHours ? milli(draft.quantity) : 0,
+      montant_unitaire_centimes: 0,
+      montant_centimes: isHours ? 0 : cents(draft.amount), note: draft.note
+    }]
+  }, 'Brouillon calculé avec snapshots.');
+}
+async function validatePayroll(row: Record<string, unknown>): Promise<void> {
+  await mutate('/salaires/fiches/valider', { id: n(row, 'id'), version: n(row, 'version') }, 'Fiche validée et figée.');
+}
+async function postPayroll(row: Record<string, unknown>): Promise<void> {
+  await mutate('/salaires/fiches/comptabiliser', {
+    id: n(row, 'id'), version: n(row, 'version'), ...posting
+  }, 'Fiche comptabilisée.');
+}
+async function cancelPayroll(row: Record<string, unknown>): Promise<void> {
+  await mutate('/salaires/fiches/annuler', {
+    id: n(row, 'id'), version: n(row, 'version'), ...posting
+  }, 'Fiche annulée par contre-passation.');
+}
+async function createPayment(): Promise<void> {
+  await mutate('/salaires/paiements', {
+    beneficiary_type: payment.beneficiary_type,
+    employee_id: payment.beneficiary_type === 'employe' ? payment.employee_id : null,
+    date: payment.date, amount_cents: cents(payment.amount),
+    account_id: payment.account_id, reference: payment.reference
+  }, 'Paiement salarial saisi.');
+}
+async function allocatePayment(): Promise<void> {
+  await mutate('/salaires/allocations', {
+    ...allocation, amount_cents: cents(allocation.amount)
+  }, 'Paiement alloué.');
+}
+async function postPayment(row: Record<string, unknown>): Promise<void> {
+  await mutate('/salaires/paiements/comptabiliser', {
+    id: n(row, 'id'), version: 0, ...posting
+  }, 'Paiement comptabilisé.');
+}
+async function saveEmployer(): Promise<void> {
+  await mutate('/salaires/employeur', {
+    ...employer, weekly_hours_milli: milli(employer.weekly_hours)
+  }, 'Employeur enregistré.');
+}
+async function saveMapping(): Promise<void> {
+  await mutate('/salaires/mapping', { ...mapping }, 'Mapping salarial enregistré.');
+}
+async function confirmLasso(): Promise<void> {
+  if (!store.lasso) return;
+  await mutate('/salaires/taux-lasso/confirmer', {
+    year: store.lasso.year, fingerprint: store.lasso.fingerprint,
+    verified_on: lassoVerifiedOn.value
+  }, 'Taux Lasso contrôlés et importés.');
+}
+async function certificate(action: 'preparer' | 'controler', employeeId: number): Promise<void> {
+  await mutate(`/salaires/certificats/${action}`, {
+    employee_id: employeeId, year: year.value
+  }, action === 'preparer' ? 'Certificat préparé.' : 'Certificat contrôlé.');
+}
+function certificateUrl(employeeId: number): string {
+  return `${runtimeConfig.apiBaseUrl}/salaires/certificats/exporter?year=${year.value}&employee_id=${employeeId}`;
+}
+
+watch(() => context.selection?.dossier.id, () => reload());
+watch(year, () => reload());
+onMounted(() => reload());
+</script>
+
+<template>
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">Paie genevoise reliée au grand livre</p>
+      <h1>Salaires</h1>
+      <p>Contrats datés, calculs au centime, dettes séparées et certificats non transmis.</p>
+    </div>
+    <label>Année <input v-model.number="year" type="number" min="2000" max="9999"></label>
+  </header>
+  <CompactTabs :items="subNavigation.payroll" label="Navigation des salaires" />
+  <ErrorSummary :message="store.error" />
+  <p v-if="store.notice" class="notice success" role="status">{{ store.notice }}</p>
+  <SkeletonBlock v-if="store.loading && !workspace" :lines="8" />
+
+  <template v-if="workspace">
+    <section class="panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">{{ workspace.definitions.scope }}</p><h2>Paie {{ year }}</h2></div>
+        <span class="status-chip">{{ workspace.capabilities.pii ? 'PII autorisées' : 'PII masquées' }}</span>
+      </div>
+    </section>
+
+    <template v-if="tab === 'employees'">
+      <section class="panel">
+        <h2>Nouvel employé</h2>
+        <form class="form-grid three" @submit.prevent="createEmployee">
+          <label>Prénom<input v-model="employee.first_name" required></label>
+          <label>Nom<input v-model="employee.last_name" required></label>
+          <label>AVS<input v-model="employee.avs" placeholder="756.1234.5678.90" required></label>
+          <label>E-mail<input v-model="employee.email" type="email"></label>
+          <label>Date de naissance<input v-model="employee.birth_date" type="date"></label>
+          <label>Procédure<select v-model="employee.procedure"><option value="ordinaire">Ordinaire</option><option value="simplifiee">Simplifiée</option><option value="ordinaire_impot_source">Impôt à la source</option></select></label>
+          <label>Vacances (%)<input v-model="employee.vacation" inputmode="decimal"></label>
+          <label>Impôt source (%)<input v-model="employee.sourceTax" inputmode="decimal"></label>
+          <button class="button primary" :disabled="!workspace.capabilities.manage">Créer</button>
+        </form>
+      </section>
+      <section class="panel">
+        <h2>Contrat daté</h2>
+        <form class="form-grid three" @submit.prevent="saveContract">
+          <label>Employé<select v-model.number="contract.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label>
+          <label>Type<select v-model="contract.type"><option value="horaire">Horaire</option><option value="mensuel">Mensuel</option></select></label>
+          <label>{{ contract.type === 'horaire' ? 'Taux horaire' : 'Salaire mensuel' }}<input v-model="contract.amount" required></label>
+          <label>Début<input v-model="contract.valid_from" type="date" required></label>
+          <label>Fin<input v-model="contract.valid_until" type="date"></label>
+          <label>Heures hebdomadaires<input v-model="contract.weekly_hours"></label>
+          <label>Taux d’activité (%)<input v-model="contract.activity"></label>
+          <label>Source<input v-model="contract.source" required></label>
+          <button class="button primary" :disabled="!workspace.capabilities.manage">Enregistrer</button>
+        </form>
+      </section>
+      <section class="panel"><h2>Employés et contrats</h2><div class="table-scroll"><table><thead><tr><th>Employé</th><th>AVS</th><th>Contrat</th><th>Effet</th><th>Valeur</th></tr></thead><tbody><tr v-for="row in workspace.employees" :key="n(row,'id')"><td>{{ employeeName(n(row,'id')) }}</td><td>{{ s(row,'numero_avs') }}</td><td>{{ s(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {},'type') || 'À définir' }}</td><td>{{ s(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {},'date_debut') }}</td><td>{{ money(n(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {}, s(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {},'type') === 'mensuel' ? 'salaire_mensuel_centimes' : 'taux_horaire_centimes')) }}</td></tr></tbody></table></div></section>
+    </template>
+
+    <template v-else-if="tab === 'calculs'">
+      <section class="panel">
+        <h2>Traitement d’une période</h2>
+        <form class="form-grid three" @submit.prevent="createDraft">
+          <label>Employé<select v-model.number="draft.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label>
+          <label>Année<input v-model.number="draft.year" type="number"></label>
+          <label>Mois<input v-model.number="draft.month" type="number" min="1" max="12"></label>
+          <label>Élément<select v-model="draft.type"><option value="heures">Heures</option><option value="absence">Absence</option><option value="prime">Prime</option><option value="indemnite">Indemnité</option><option value="ajustement">Ajustement</option></select></label>
+          <label>Libellé<input v-model="draft.label" required></label>
+          <label v-if="draft.type === 'heures'">Nombre d’heures<input v-model="draft.quantity" required></label>
+          <label v-else>Montant<input v-model="draft.amount" required></label>
+          <label>Justification<input v-model="draft.note"></label>
+          <button class="button primary" :disabled="!workspace.capabilities.manage">Calculer le brouillon</button>
+        </form>
+      </section>
+      <section class="panel"><h2>Résultats calculés</h2><div class="table-scroll"><table><thead><tr><th>Période</th><th>Employé</th><th>Brut</th><th>Retenues</th><th>Net</th><th>Coût</th><th>Statut</th></tr></thead><tbody><tr v-for="row in workspace.payrolls" :key="n(row,'id')"><td>{{ String(n(row,'mois')).padStart(2,'0') }}/{{ n(row,'annee') }}</td><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'total_deductions_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td>{{ money(n(row,'cout_total_centimes')) }}</td><td>{{ s(row,'statut') }}</td></tr></tbody></table></div></section>
+    </template>
+
+    <template v-else-if="tab === 'fiches'">
+      <section class="panel"><div class="form-grid three"><label>Exercice<select v-model.number="posting.exercise_id"><option v-for="row in workspace.catalog.exercises" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'libelle') }}</option></select></label><label>Journal<select v-model.number="posting.journal_id"><option v-for="row in workspace.catalog.journals" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'code') }} — {{ s(row,'libelle') }}</option></select></label><label>Date comptable<input v-model="posting.date" type="date"></label></div></section>
+      <section class="panel"><h2>Fiches de salaire</h2><div class="table-scroll"><table><thead><tr><th>Période</th><th>Employé</th><th>Net</th><th>Dette ouverte</th><th>Statut</th><th>Actions</th></tr></thead><tbody><tr v-for="row in workspace.payrolls" :key="n(row,'id')"><td>{{ n(row,'mois') }}/{{ n(row,'annee') }}</td><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td>{{ money(n(row,'solde_dettes_centimes')) }}</td><td>{{ s(row,'statut') }}</td><td class="button-row"><button v-if="s(row,'statut') === 'brouillon'" class="button small" @click="validatePayroll(row)">Valider</button><button v-if="s(row,'statut') === 'validee'" class="button small" @click="postPayroll(row)">Comptabiliser</button><button v-if="['validee','comptabilisee'].includes(s(row,'statut'))" class="button danger small" @click="cancelPayroll(row)">Contre-passer</button></td></tr></tbody></table></div></section>
+      <section class="panel"><h2>Paiements et lettrage</h2><form class="form-grid three" @submit.prevent="createPayment"><label>Bénéficiaire<select v-model="payment.beneficiary_type"><option value="employe">Employé</option><option value="organisme">Organisme</option></select></label><label v-if="payment.beneficiary_type === 'employe'">Employé<select v-model.number="payment.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label><label>Date<input v-model="payment.date" type="date"></label><label>Montant<input v-model="payment.amount" required></label><label>Compte de trésorerie<select v-model.number="payment.account_id"><option v-for="row in workspace.catalog.treasury_accounts" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'numero') }} — {{ s(row,'libelle') }}</option></select></label><label>Référence<input v-model="payment.reference"></label><button class="button primary">Saisir</button></form><form class="form-grid three" @submit.prevent="allocatePayment"><label>Paiement<select v-model.number="allocation.payment_id"><option v-for="row in workspace.payments" :key="n(row,'id')" :value="n(row,'id')">#{{ n(row,'id') }} · {{ money(n(row,'non_alloue_centimes')) }}</option></select></label><label>Dette<select v-model.number="allocation.liability_id"><option v-for="row in workspace.liabilities" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'type') }} · {{ employeeName(n(row,'employe_id')) }} · {{ money(n(row,'solde_centimes')) }}</option></select></label><label>Montant<input v-model="allocation.amount"></label><button class="button">Allouer</button></form><div class="table-scroll"><table><thead><tr><th>Date</th><th>Bénéficiaire</th><th>Montant</th><th>Non alloué</th><th></th></tr></thead><tbody><tr v-for="row in workspace.payments" :key="n(row,'id')"><td>{{ s(row,'date_paiement') }}</td><td>{{ s(row,'beneficiaire_type') }}</td><td>{{ money(n(row,'montant_centimes')) }}</td><td>{{ money(n(row,'non_alloue_centimes')) }}</td><td><button v-if="n(row,'non_alloue_centimes') === 0 && !row.ecriture_id" class="button small" @click="postPayment(row)">Comptabiliser</button></td></tr></tbody></table></div></section>
+    </template>
+
+    <template v-else>
+      <section class="metric-strip"><span><small>Brut annuel</small><strong>{{ money(Number(workspace.annual.employer.gross_cents || 0)) }}</strong></span><span><small>Retenues</small><strong>{{ money(Number(workspace.annual.employer.deductions_cents || 0)) }}</strong></span><span><small>Charges employeur</small><strong>{{ money(Number(workspace.annual.employer.employer_charges_cents || 0)) }}</strong></span><span><small>Coût total</small><strong>{{ money(Number(workspace.annual.employer.total_cost_cents || 0)) }}</strong></span></section>
+      <section class="panel"><h2>Récapitulatifs et certificats</h2><div class="table-scroll"><table><thead><tr><th>Employé</th><th>Fiches</th><th>Brut</th><th>Net</th><th>Certificat</th></tr></thead><tbody><tr v-for="row in workspace.annual.employees" :key="n(row,'employe_id')"><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ n(row,'fiches') }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td class="button-row"><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii || n(row,'fiches') === 0" @click="certificate('preparer',n(row,'employe_id'))">Préparer</button><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii" @click="certificate('controler',n(row,'employe_id'))">Contrôler</button><a class="button small" :href="certificateUrl(n(row,'employe_id'))">Exporter</a></td></tr></tbody></table></div><p class="notice warning">{{ workspace.definitions.certificate }}</p></section>
+      <section class="panel"><h2>Import annuel Lasso</h2><div class="button-row"><button class="button" :disabled="store.saving" @click="store.previewLasso(year)">Prévisualiser sans écrire</button><label>Contrôlé le <input v-model="lassoVerifiedOn" type="date"></label><button v-if="store.lasso?.available" class="button primary" :disabled="store.lasso.missing_keys.length > 0" @click="confirmLasso">Confirmer l’import</button></div><p v-if="store.lasso" :class="['notice', store.lasso.available ? 'success' : 'warning']">{{ store.lasso.message }}</p><p v-if="store.lasso?.missing_keys.length">Clés manquantes : {{ store.lasso.missing_keys.join(', ') }}</p><div v-if="store.lasso?.rows.length" class="table-scroll"><table><thead><tr><th>Clé Lasso</th><th>Cible COMPTA</th><th>Valeur</th><th>Décision</th></tr></thead><tbody><tr v-for="row in store.lasso.rows" :key="s(row,'key')"><td>{{ s(row,'key') }}</td><td>{{ s(row,'target') || 'Non applicable' }}</td><td>{{ s(row,'value') }}</td><td>{{ s(row,'status') }} {{ s(row,'reason') }}</td></tr></tbody></table></div></section>
+      <section class="panel"><h2>Paramétrage employeur et comptes</h2><form class="form-grid three" @submit.prevent="saveEmployer"><label>Employeur<input v-model="employer.name" required></label><label>Adresse<input v-model="employer.address"></label><label>NPA<input v-model="employer.postal_code"></label><label>Localité<input v-model="employer.city"></label><label>E-mail<input v-model="employer.email"></label><label>Téléphone<input v-model="employer.phone"></label><label>Heures hebdomadaires<input v-model="employer.weekly_hours"></label><button class="button">Enregistrer l’employeur</button></form><form class="form-grid three" @submit.prevent="saveMapping"><label v-for="[key,label] in mappingFields" :key="key">{{ label }}<select v-model.number="mapping[key]"><option :value="0">Choisir…</option><option v-for="row in workspace.catalog.accounts" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'numero') }} — {{ s(row,'libelle') }}</option></select></label><button class="button primary">Enregistrer le mapping</button></form></section>
+    </template>
+  </template>
+  <EmptyState v-else-if="!store.loading" title="Salaires indisponibles" description="Sélectionnez un dossier autorisé." />
+</template>

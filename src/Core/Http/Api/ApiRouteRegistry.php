@@ -12,6 +12,7 @@ use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Immobilisations\AssetApiController;
+use Compta\Modules\Salaires\PayrollApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
 use Compta\Modules\Tresorerie\Http\TreasuryApiController;
@@ -29,6 +30,7 @@ final class ApiRouteRegistry
         private readonly ?TreasuryApiController $treasury = null,
         private readonly ?BillingApiController $billing = null,
         private readonly ?AssetApiController $assets = null,
+        private readonly ?PayrollApiController $payroll = null,
     ) {
     }
 
@@ -234,6 +236,25 @@ final class ApiRouteRegistry
                 '/api/v1/accounting/assets/disposals/reverse',
                 $this->assets->reverseDisposal(...)
             );
+        }
+        if ($this->payroll !== null) {
+            $this->add($router, 'GET', '/api/v1/salaires', $this->payroll->show(...));
+            $this->add($router, 'POST', '/api/v1/salaires/employeur', $this->payroll->saveEmployer(...));
+            $this->add($router, 'POST', '/api/v1/salaires/mapping', $this->payroll->saveMapping(...));
+            $this->add($router, 'POST', '/api/v1/salaires/employes', $this->payroll->createEmployee(...));
+            $this->add($router, 'POST', '/api/v1/salaires/contrats', $this->payroll->saveContract(...));
+            $this->add($router, 'POST', '/api/v1/salaires/fiches', $this->payroll->createDraft(...));
+            $this->add($router, 'POST', '/api/v1/salaires/fiches/valider', $this->payroll->validate(...));
+            $this->add($router, 'POST', '/api/v1/salaires/fiches/comptabiliser', $this->payroll->post(...));
+            $this->add($router, 'POST', '/api/v1/salaires/fiches/annuler', $this->payroll->cancel(...));
+            $this->add($router, 'POST', '/api/v1/salaires/paiements', $this->payroll->createPayment(...));
+            $this->add($router, 'POST', '/api/v1/salaires/allocations', $this->payroll->allocate(...));
+            $this->add($router, 'POST', '/api/v1/salaires/paiements/comptabiliser', $this->payroll->postPayment(...));
+            $this->add($router, 'POST', '/api/v1/salaires/taux-lasso/previsualiser', $this->payroll->previewLasso(...));
+            $this->add($router, 'POST', '/api/v1/salaires/taux-lasso/confirmer', $this->payroll->confirmLasso(...));
+            $this->add($router, 'POST', '/api/v1/salaires/certificats/preparer', $this->payroll->prepareCertificate(...));
+            $this->add($router, 'POST', '/api/v1/salaires/certificats/controler', $this->payroll->controlCertificate(...));
+            $this->add($router, 'GET', '/api/v1/salaires/certificats/exporter', $this->payroll->exportCertificate(...));
         }
         if ($this->expenses !== null) {
             $this->add($router, 'GET', '/api/v1/liquidites', $this->expenses->show(...));

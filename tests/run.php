@@ -84,9 +84,13 @@ use Compta\Modules\Tva\VatWorkspaceService;
 use Compta\Modules\Salaires\PayrollCalculator;
 use Compta\Modules\Salaires\PayrollCertificateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
+use Compta\Modules\Salaires\LassoRateImportService;
+use Compta\Modules\Salaires\PayrollApiController;
+use Compta\Modules\Salaires\PayrollInputValidator;
 use Compta\Modules\Salaires\PayrollImportService;
 use Compta\Modules\Salaires\PayrollPaymentService;
 use Compta\Modules\Salaires\PayrollService;
+use Compta\Modules\Salaires\PayrollWorkspaceService;
 use Compta\Modules\Pedagogie\PedagogyConflictException;
 use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Shell\Application\ShellReadService;
@@ -1563,6 +1567,12 @@ final class Tests
             $pdo,
             $httpAudit
         );
+        $httpPayrollPayments = new PayrollPaymentService(
+            $pdo,
+            $httpAudit,
+            $httpEntries
+        );
+        $httpPayrollCertificates = new PayrollCertificateService($pdo, $httpAudit);
         $httpVatConfiguration = new VatConfigurationService($pdo, $httpAudit);
         $httpReports = new ReportingService($pdo);
         $httpFinancial = new FinancialReportingService($pdo, $httpReports);
@@ -1691,6 +1701,27 @@ final class Tests
                 $httpAccess,
                 new AssetService($pdo, $httpAudit, $httpEntries),
                 new AssetInputValidator()
+            ),
+            new PayrollApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new PayrollWorkspaceService(
+                    $httpPayrollConfiguration,
+                    $httpPayrolls,
+                    $httpPayrollPayments,
+                    $httpPayrollCertificates
+                ),
+                $httpPayrollConfiguration,
+                $httpPayrolls,
+                $httpPayrollPayments,
+                $httpPayrollCertificates,
+                new LassoRateImportService(
+                    '',
+                    $httpPayrollConfiguration,
+                    $httpAudit
+                ),
+                new PayrollInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -2017,9 +2048,9 @@ final class Tests
             'contrat des référentiels sans trace de navigation historique'
         );
         $this->same(
-            53000,
-            $managedReferencesJson['data']['payroll']['suggested_rates']['avs_ppm'] ?? 0,
-            'taux AVS Lasso proposé en ppm entier'
+            [],
+            $managedReferencesJson['data']['payroll']['suggested_rates'] ?? null,
+            'aucun millésime Lasso inventé dans Configuration'
         );
         $this->same(
             4,
@@ -2700,6 +2731,7 @@ final class Tests
             'managed-references.success.json',
             'treasury.success.json',
             'billing.success.json',
+            'payroll.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(
@@ -3133,15 +3165,59 @@ final class Tests
             'facturation servie uniquement par Vue'
         );
         $salaryScreen = $app->handle(new Request('GET', '/salaires'));
-        $this->same(200, $salaryScreen->status, 'écran des salaires genevois accessible');
+        $this->same(303, $salaryScreen->status, 'ancien écran des salaires retiré');
+        $this->same(
+            '/edu/app/salaires',
+            $salaryScreen->headers['Location'] ?? '',
+            'salaires servis uniquement par Vue'
+        );
+        $salaryWorkspace = $app->handle(new Request(
+            'GET',
+            '/api/v1/salaires',
+            query: ['year' => '2026']
+        ));
+        $salaryWorkspaceJson = $this->responseJson($salaryWorkspace);
+        $this->same(
+            200,
+            $salaryWorkspace->status,
+            'espace salarial Vue alimenté par API'
+        );
         $this->true(
-            str_contains($salaryScreen->body, 'Fiches')
-            && str_contains($salaryScreen->body, 'Employés')
-            && str_contains($salaryScreen->body, 'Paiements')
-            && str_contains($salaryScreen->body, 'Paramètres')
-            && str_contains($salaryScreen->body, 'canton de Genève')
-            && !str_contains($salaryScreen->body, '<option value="VD">'),
-            'quatre onglets compacts et périmètre Genève explicite'
+            isset(
+                $salaryWorkspaceJson['data']['employees'],
+                $salaryWorkspaceJson['data']['payrolls'],
+                $salaryWorkspaceJson['data']['payments'],
+                $salaryWorkspaceJson['data']['annual'],
+                $salaryWorkspaceJson['data']['certificates'],
+                $salaryWorkspaceJson['data']['capabilities']
+            ),
+            'contrat salarial Vue complet et stable'
+        );
+        $salaryScopeInjection = $app->handle(new Request(
+            'GET',
+            '/api/v1/salaires',
+            query: ['year' => '2026', 'dossier_id' => (string) $ids['dossier_b']]
+        ));
+        $this->same(
+            422,
+            $salaryScopeInjection->status,
+            'API salaires refuse un scope injecté'
+        );
+        $lassoNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/salaires/taux-lasso/previsualiser',
+            json: ['data' => ['year' => 2026]]
+        ));
+        $this->same(403, $lassoNoCsrf->status, 'prévisualisation Lasso exige CSRF');
+        $lassoMissing = $app->handle(new Request(
+            'POST',
+            '/api/v1/salaires/taux-lasso/previsualiser',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['year' => 2026]]
+        ));
+        $this->false(
+            (bool) ($this->responseJson($lassoMissing)['data']['available'] ?? true),
+            'API n’invente aucun taux lorsque la base Lasso manque'
         );
         $this->false(
             str_contains($salaryScreen->body, 'Swissdec'),
@@ -5225,6 +5301,132 @@ final class Tests
             $audit,
             new EntryService($pdo, $audit)
         );
+        $configuration->saveContract(
+            $organisationId,
+            $dossierId,
+            [
+                'employe_id' => $employee,
+                'type' => 'horaire',
+                'date_debut' => '2026-01-01',
+                'date_fin' => '2026-06-30',
+                'taux_horaire_centimes' => 3000,
+                'salaire_mensuel_centimes' => 0,
+                'heures_hebdo_milli' => 40000,
+                'taux_activite_ppm' => 1_000_000,
+                'source' => 'Contrat horaire signé',
+            ]
+        );
+        $configuration->saveContract(
+            $organisationId,
+            $dossierId,
+            [
+                'employe_id' => $employee,
+                'type' => 'mensuel',
+                'date_debut' => '2026-07-01',
+                'date_fin' => '',
+                'taux_horaire_centimes' => 0,
+                'salaire_mensuel_centimes' => 500000,
+                'heures_hebdo_milli' => 40000,
+                'taux_activite_ppm' => 1_000_000,
+                'source' => 'Avenant mensuel signé',
+            ]
+        );
+        $hourlyDraftId = $payrolls->createPeriodDraft(
+            $organisationId,
+            $dossierId,
+            $employee,
+            2026,
+            3,
+            [[
+                'type' => 'heures',
+                'libelle' => 'Heures mars',
+                'quantite_milli' => 10000,
+            ]]
+        );
+        $this->same(
+            30000,
+            (int) $payrolls->payroll(
+                $organisationId, $dossierId, $hourlyDraftId, true
+            )['salaire_travail_centimes'],
+            'contrat horaire appliqué au millième sans flottant'
+        );
+        $monthlyDraftId = $payrolls->createPeriodDraft(
+            $organisationId,
+            $dossierId,
+            $employee,
+            2026,
+            8,
+            [
+                ['type' => 'absence', 'libelle' => 'Absence', 'montant_centimes' => 10000],
+                ['type' => 'prime', 'libelle' => 'Prime', 'montant_centimes' => 5000],
+            ]
+        );
+        $this->same(
+            495000,
+            (int) $payrolls->payroll(
+                $organisationId, $dossierId, $monthlyDraftId, true
+            )['salaire_travail_centimes'],
+            'mensuel, absence et prime explicitement réconciliés'
+        );
+        $this->same(
+            2,
+            count($payrolls->periodElements($monthlyDraftId)),
+            'variables de période archivées séparément'
+        );
+        $this->true(
+            (bool) $configuration->rates($organisationId, $dossierId, 2027)['_fallback'],
+            'repli annuel reprend le dernier millésime antérieur'
+        );
+        $missingLasso = new LassoRateImportService('', $configuration, $audit);
+        $this->false(
+            (bool) $missingLasso->preview(2027)['available'],
+            'source Lasso absente signalée sans millésime inventé'
+        );
+        $lassoPath = $this->tempDir() . '/lasso.sqlite';
+        $lassoPdo = new PDO('sqlite:' . $lassoPath);
+        $lassoPdo->exec(
+            'CREATE TABLE taux_par_annee (
+                annee INTEGER NOT NULL, cle TEXT NOT NULL, valeur TEXT NOT NULL,
+                PRIMARY KEY (annee, cle)
+            )'
+        );
+        $lassoInsert = $lassoPdo->prepare(
+            'INSERT INTO taux_par_annee (annee, cle, valeur) VALUES (2027, ?, ?)'
+        );
+        foreach (LassoRateImportService::KEY_MAP as $key => $field) {
+            $ppmValue = (int) ($rates[$field] ?? 0);
+            $lassoInsert->execute([
+                $key,
+                '0.' . str_pad((string) $ppmValue, 6, '0', STR_PAD_LEFT),
+            ]);
+        }
+        $lassoInsert->execute(['cle_future_inconnue', '0.001']);
+        $lasso = new LassoRateImportService($lassoPath, $configuration, $audit);
+        $lassoPreview = $lasso->preview(2027);
+        $this->same([], $lassoPreview['missing_keys'], 'mapping Lasso exhaustif');
+        $this->same(
+            ['cle_future_inconnue'],
+            $lassoPreview['unknown_keys'],
+            'clé Lasso inconnue justifiée comme non applicable'
+        );
+        $confirmedLasso = $lasso->confirm(
+            $organisationId,
+            $dossierId,
+            2027,
+            (string) $lassoPreview['fingerprint'],
+            '2027-01-15'
+        );
+        $this->false($confirmedLasso['idempotent'], 'confirmation Lasso auditée');
+        $this->true(
+            $lasso->confirm(
+                $organisationId,
+                $dossierId,
+                2027,
+                (string) $lassoPreview['fingerprint'],
+                '2027-01-15'
+            )['idempotent'],
+            'rejeu de confirmation Lasso idempotent'
+        );
         $payrollId = $payrolls->createDraft(
             $organisationId,
             $dossierId,
@@ -5288,11 +5490,14 @@ final class Tests
         );
         $changedRates = $rates;
         $changedRates['avs_ppm'] = 99000;
-        $configuration->saveRates(
-            $organisationId,
-            $dossierId,
-            2026,
-            $changedRates
+        $this->throws(
+            fn () => $configuration->saveRates(
+                $organisationId,
+                $dossierId,
+                2026,
+                $changedRates
+            ),
+            'taux annuel utilisé impossible à remplacer'
         );
         $validated = $payrolls->payroll(
             $organisationId,
@@ -5303,7 +5508,7 @@ final class Tests
         $this->same(
             $rateSnapshot,
             (string) $validated['taux_snapshot_json'],
-            'taux de la fiche validée immuables après changement annuel'
+            'snapshot de taux de la fiche validée immuable'
         );
         $this->same(
             5,
@@ -5499,6 +5704,21 @@ final class Tests
                 'SELECT empreinte_sha256 FROM certificats_salaires'
             )->fetchColumn()),
             'empreinte du certificat archivée'
+        );
+        $certificate->control($organisationId, $dossierId, $employee, 2026);
+        $exportedXml = $certificate->export(
+            $organisationId,
+            $dossierId,
+            $employee,
+            2026
+        );
+        $this->same($xml, $exportedXml, 'certificat contrôlé exporté sans mutation');
+        $this->same(
+            'exporte:0',
+            (string) $pdo->query(
+                "SELECT statut || ':' || transmis FROM certificats_salaires"
+            )->fetchColumn(),
+            'certificat exporté toujours explicitement non transmis'
         );
 
         $import = new PayrollImportService($pdo, $audit, $payrolls);
