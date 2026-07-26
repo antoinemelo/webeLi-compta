@@ -11,6 +11,7 @@ use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Facturation\Http\BillingApiController;
+use Compta\Modules\Immobilisations\AssetApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
 use Compta\Modules\Tresorerie\Http\TreasuryApiController;
@@ -27,6 +28,7 @@ final class ApiRouteRegistry
         private readonly ?ExpenseApiController $expenses = null,
         private readonly ?TreasuryApiController $treasury = null,
         private readonly ?BillingApiController $billing = null,
+        private readonly ?AssetApiController $assets = null,
     ) {
     }
 
@@ -188,6 +190,50 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/accounting/tax-file/adjustments/status', $this->accounting->setTaxAdjustmentStatus(...));
             $this->add($router, 'POST', '/api/v1/accounting/archives', $this->accounting->archive(...));
             $this->add($router, 'GET', '/api/v1/accounting/archives/download', $this->accounting->downloadArchive(...));
+        }
+        if ($this->assets !== null) {
+            $this->add(
+                $router,
+                'GET',
+                '/api/v1/accounting/assets',
+                $this->assets->show(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/assets/categories',
+                $this->assets->saveCategory(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/assets/records',
+                $this->assets->saveAsset(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/assets/depreciations',
+                $this->assets->postDepreciation(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/assets/depreciations/reverse',
+                $this->assets->reverseDepreciation(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/assets/disposals',
+                $this->assets->dispose(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/assets/disposals/reverse',
+                $this->assets->reverseDisposal(...)
+            );
         }
         if ($this->expenses !== null) {
             $this->add($router, 'GET', '/api/v1/liquidites', $this->expenses->show(...));

@@ -571,6 +571,22 @@ final class ClosingAndTaxService
             $dateEnd,
         ]);
         $draftCount = (int) $draft->fetchColumn();
+        $assetSchedules = $this->pdo->prepare(
+            "SELECT COUNT(*)
+             FROM echeances_amortissement e
+             JOIN immobilisations i ON i.id = e.immobilisation_id
+             WHERE i.organisation_id = ? AND i.dossier_id = ?
+               AND i.statut = 'actif' AND e.statut = 'planifiee'
+               AND e.montant_centimes > 0
+               AND e.date_comptable BETWEEN ? AND ?"
+        );
+        $assetSchedules->execute([
+            $organisationId,
+            $dossierId,
+            $dateStart,
+            $dateEnd,
+        ]);
+        $pendingAssetSchedules = (int) $assetSchedules->fetchColumn();
         return [
             [
                 'code' => 'balance',
@@ -595,6 +611,12 @@ final class ClosingAndTaxService
                 'label' => 'Flux réconcilié avec la variation des liquidités',
                 'passed' => (bool) $reports['controls']['cash_reconciled'],
                 'detail' => '',
+            ],
+            [
+                'code' => 'immobilisations',
+                'label' => 'Dotations d’amortissement échues comptabilisées',
+                'passed' => $pendingAssetSchedules === 0,
+                'detail' => $pendingAssetSchedules . ' échéance(s) à comptabiliser',
             ],
             [
                 'code' => 'brouillons',

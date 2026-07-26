@@ -125,6 +125,26 @@ CREATE TABLE audit_events (
     cree_le TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE categories_immobilisations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    code TEXT NOT NULL COLLATE NOCASE,
+    libelle TEXT NOT NULL,
+    duree_defaut_mois INTEGER NOT NULL CHECK (duree_defaut_mois BETWEEN 1 AND 1200),
+    compte_actif_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_amortissement_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_dotation_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_gain_cession_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_perte_cession_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (dossier_id, code)
+);
+
 CREATE TABLE certificats_salaires (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
@@ -471,6 +491,29 @@ CREATE TABLE dossiers (
     UNIQUE (organisation_id, slug)
 );
 
+CREATE TABLE echeances_amortissement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    immobilisation_id INTEGER NOT NULL
+        REFERENCES immobilisations(id) ON DELETE RESTRICT,
+    ordre INTEGER NOT NULL CHECK (ordre > 0),
+    date_debut TEXT NOT NULL,
+    date_fin TEXT NOT NULL,
+    date_comptable TEXT NOT NULL,
+    jours INTEGER NOT NULL CHECK (jours > 0),
+    montant_centimes INTEGER NOT NULL CHECK (montant_centimes >= 0),
+    statut TEXT NOT NULL DEFAULT 'planifiee'
+        CHECK (statut IN ('planifiee', 'comptabilisee', 'contre_passee', 'annulee')),
+    ecriture_id INTEGER UNIQUE REFERENCES ecritures(id) ON DELETE RESTRICT,
+    ecriture_contrepassation_id INTEGER UNIQUE
+        REFERENCES ecritures(id) ON DELETE RESTRICT,
+    comptabilisee_le TEXT,
+    contrepassee_le TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    CHECK (date_debut <= date_fin),
+    UNIQUE (immobilisation_id, ordre),
+    UNIQUE (immobilisation_id, date_debut, date_fin)
+);
+
 CREATE TABLE ecritures (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
@@ -688,6 +731,47 @@ CREATE TABLE imports_salaires (
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     UNIQUE (dossier_id, empreinte_sha256)
+);
+
+CREATE TABLE immobilisations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    categorie_id INTEGER NOT NULL
+        REFERENCES categories_immobilisations(id) ON DELETE RESTRICT,
+    code TEXT NOT NULL COLLATE NOCASE,
+    libelle TEXT NOT NULL,
+    reference_piece TEXT NOT NULL,
+    document_acquisition_id INTEGER
+        REFERENCES documents_financiers(id) ON DELETE RESTRICT,
+    piece_acquisition_id INTEGER REFERENCES pieces_jointes(id) ON DELETE RESTRICT,
+    date_acquisition TEXT NOT NULL,
+    date_mise_service TEXT NOT NULL,
+    valeur_acquisition_centimes INTEGER NOT NULL
+        CHECK (valeur_acquisition_centimes > 0),
+    valeur_residuelle_centimes INTEGER NOT NULL DEFAULT 0
+        CHECK (valeur_residuelle_centimes >= 0
+               AND valeur_residuelle_centimes < valeur_acquisition_centimes),
+    duree_mois INTEGER NOT NULL CHECK (duree_mois BETWEEN 1 AND 1200),
+    methode TEXT NOT NULL DEFAULT 'lineaire_journaliere'
+        CHECK (methode = 'lineaire_journaliere'),
+    regle_prorata TEXT NOT NULL DEFAULT 'jours_reels'
+        CHECK (regle_prorata = 'jours_reels'),
+    compte_actif_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_amortissement_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_dotation_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_gain_cession_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_perte_cession_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    statut TEXT NOT NULL DEFAULT 'actif'
+        CHECK (statut IN ('actif', 'cede', 'mis_au_rebut')),
+    date_sortie TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    CHECK (date_acquisition <= date_mise_service),
+    UNIQUE (dossier_id, code)
 );
 
 CREATE TABLE indices_exercice (
@@ -1223,6 +1307,32 @@ CREATE TABLE soldes_bancaires (
     UNIQUE (compte_tresorerie_id, empreinte)
 );
 
+CREATE TABLE sorties_immobilisations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    immobilisation_id INTEGER NOT NULL
+        REFERENCES immobilisations(id) ON DELETE RESTRICT,
+    type TEXT NOT NULL CHECK (type IN ('cession', 'mise_au_rebut')),
+    date_sortie TEXT NOT NULL,
+    produit_cession_centimes INTEGER NOT NULL DEFAULT 0
+        CHECK (produit_cession_centimes >= 0),
+    compte_produit_id INTEGER REFERENCES comptes(id) ON DELETE RESTRICT,
+    valeur_brute_centimes INTEGER NOT NULL CHECK (valeur_brute_centimes > 0),
+    amortissement_cumule_centimes INTEGER NOT NULL
+        CHECK (amortissement_cumule_centimes >= 0),
+    valeur_nette_centimes INTEGER NOT NULL CHECK (valeur_nette_centimes >= 0),
+    resultat_cession_centimes INTEGER NOT NULL,
+    ecriture_id INTEGER NOT NULL UNIQUE REFERENCES ecritures(id) ON DELETE RESTRICT,
+    ecriture_contrepassation_id INTEGER UNIQUE
+        REFERENCES ecritures(id) ON DELETE RESTRICT,
+    statut TEXT NOT NULL DEFAULT 'comptabilisee'
+        CHECK (statut IN ('comptabilisee', 'contre_passee')),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    contrepassee_le TEXT
+);
+
 CREATE TABLE suggestions_comptabilisation (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
@@ -1661,6 +1771,9 @@ CREATE INDEX idx_comptes_scope_type ON comptes(dossier_id, type, actif, numero);
 CREATE INDEX idx_comptes_tresorerie_scope
     ON comptes_tresorerie(organisation_id, dossier_id, actif, type);
 
+CREATE INDEX idx_categories_immobilisations_scope
+    ON categories_immobilisations(dossier_id, actif, code);
+
 CREATE INDEX idx_conditions_paiement_scope_date
     ON conditions_paiement(dossier_id, direction, actif, date_debut, date_fin);
 
@@ -1713,6 +1826,9 @@ CREATE UNIQUE INDEX idx_ajustements_fiscaux_idempotence
 CREATE INDEX idx_ecritures_journal
     ON ecritures(dossier_id, exercice_id, date_comptable, journal_id, statut);
 
+CREATE INDEX idx_echeances_amortissement_date
+    ON echeances_amortissement(immobilisation_id, date_comptable, statut);
+
 CREATE INDEX idx_employes_scope_nom ON employes(dossier_id, actif, nom, prenom);
 
 CREATE INDEX idx_fiches_salaires_scope
@@ -1720,6 +1836,9 @@ CREATE INDEX idx_fiches_salaires_scope
 
 CREATE INDEX idx_imports_bancaires_scope
     ON imports_bancaires(dossier_id, statut, cree_le);
+
+CREATE INDEX idx_immobilisations_scope
+    ON immobilisations(dossier_id, statut, date_mise_service, code);
 
 CREATE INDEX idx_lignes_bancaires_compte_date
     ON lignes_bancaires(compte_tresorerie_id, date_comptabilisation, id);
@@ -1760,6 +1879,9 @@ CREATE INDEX idx_rubriques_scope
 
 CREATE INDEX idx_soldes_bancaires_date
     ON soldes_bancaires(compte_tresorerie_id, date_solde, id);
+
+CREATE INDEX idx_sorties_immobilisations_scope
+    ON sorties_immobilisations(dossier_id, date_sortie, statut);
 
 CREATE INDEX idx_tentatives_connexion ON tentatives_connexion(email, ip, tente_le);
 
@@ -1826,6 +1948,10 @@ CREATE UNIQUE INDEX uq_rapprochement_ligne_comptable_active
 CREATE UNIQUE INDEX uq_ordre_paiement_document_actif
     ON ordres_paiement_sortants(document_id)
     WHERE statut IN ('prepare', 'exporte');
+
+CREATE UNIQUE INDEX uq_sortie_immobilisation_active
+    ON sorties_immobilisations(immobilisation_id)
+    WHERE statut = 'comptabilisee';
 
 CREATE UNIQUE INDEX uq_rubriques_code
     ON rubriques_comptables(dossier_id, code)

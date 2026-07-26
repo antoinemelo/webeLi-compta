@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
+import AssetsPanel from '@/components/accounting/AssetsPanel.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
@@ -986,11 +987,12 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         </section>
       </section>
 
-      <EmptyState
-        v-else
-        title="Amortissements"
-        description="Ce parcours sera porté dans Vue par le lot spécialisé prévu, en conservant le même grand livre."
+      <AssetsPanel
+        v-else-if="currentTab === 'amortissements'"
+        :exercise-id="exerciseId"
+        :currency="currency"
       />
+      <EmptyState v-else title="Section inconnue" description="Choisissez un onglet comptable disponible." />
     </template>
   </template>
 </template>

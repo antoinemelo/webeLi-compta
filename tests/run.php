@@ -51,6 +51,9 @@ use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Facturation\Http\BillingInputValidator;
 use Compta\Modules\Facturation\ScorReference;
 use Compta\Modules\Facturation\SwissQrService;
+use Compta\Modules\Immobilisations\AssetApiController;
+use Compta\Modules\Immobilisations\AssetInputValidator;
+use Compta\Modules\Immobilisations\AssetService;
 use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\BankCoordinates;
 use Compta\Modules\Tresorerie\InternalTransferService;
@@ -135,6 +138,10 @@ final class Tests
             'comptabilité générale et rapports' => [
                 'integration',
                 fn () => $this->accountingTests(),
+            ],
+            'immobilisations et amortissements' => [
+                'integration',
+                fn () => $this->assetTests(),
             ],
             'trésorerie, CAMT et rapprochements' => [
                 'integration',
@@ -1677,6 +1684,13 @@ final class Tests
                 new InvoicePdfService($pdo, $httpAudit),
                 new AttachmentService($pdo, $httpAudit),
                 new BillingInputValidator()
+            ),
+            new AssetApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new AssetService($pdo, $httpAudit, $httpEntries),
+                new AssetInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -2682,6 +2696,7 @@ final class Tests
             'dashboard.success.json',
             'configuration.success.json',
             'accounting.success.json',
+            'assets.success.json',
             'managed-references.success.json',
             'treasury.success.json',
             'billing.success.json',
@@ -2788,6 +2803,124 @@ final class Tests
             count($apiAccountingJson['data']['chart']['accounts'] ?? []) > 100
             && count($apiAccountingJson['data']['chart']['rubrics'] ?? []) > 10,
             'plan et structure exposés depuis la source métier unique'
+        );
+        $assetWorkspace = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/assets',
+            query: ['exercise_id' => (string) $exerciseId]
+        ));
+        $this->same(
+            200,
+            $assetWorkspace->status,
+            'registre des immobilisations exposé dans Comptabilité Vue'
+        );
+        $this->same(
+            [
+                'exercise', 'categories', 'assets', 'selected_asset',
+                'reconciliation', 'catalog', 'pagination', 'definitions',
+                'capabilities',
+            ],
+            array_keys($this->responseJson($assetWorkspace)['data'] ?? []),
+            'contrat immobilisations complet et stable'
+        );
+        $assetNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/assets/categories',
+            json: ['data' => []]
+        ));
+        $this->same(
+            403,
+            $assetNoCsrf->status,
+            'mutation immobilisation sans CSRF refusée'
+        );
+        $httpAssetCategory = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/assets/categories',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'code' => 'INFO',
+                'label' => 'Informatique',
+                'default_duration_months' => 36,
+                'asset_account_id' =>
+                    $this->accountId($pdo, $ids['dossier_a'], '1520'),
+                'accumulated_depreciation_account_id' =>
+                    $this->accountId($pdo, $ids['dossier_a'], '1529'),
+                'depreciation_expense_account_id' =>
+                    $this->accountId($pdo, $ids['dossier_a'], '6800'),
+                'disposal_gain_account_id' =>
+                    $this->accountId($pdo, $ids['dossier_a'], '8510'),
+                'disposal_loss_account_id' =>
+                    $this->accountId($pdo, $ids['dossier_a'], '8500'),
+                'active' => true,
+            ]]
+        ));
+        $this->same(
+            200,
+            $httpAssetCategory->status,
+            'catégorie d’immobilisation créée par API'
+        );
+        $httpAssetCategoryId = (int) (
+            $this->responseJson($httpAssetCategory)['data']['id'] ?? 0
+        );
+        $httpAsset = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/assets/records',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'category_id' => $httpAssetCategoryId,
+                'code' => 'PC-001',
+                'label' => 'Ordinateur pédagogique',
+                'acquisition_reference' => 'FAC-PC-001',
+                'acquisition_document_id' => null,
+                'acquisition_attachment_id' => null,
+                'acquisition_date' => '2026-02-01',
+                'in_service_date' => '2026-02-15',
+                'acquisition_value_cents' => 240000,
+                'residual_value_cents' => 0,
+                'duration_months' => 36,
+                'note' => '',
+            ]]
+        ));
+        $this->same(
+            200,
+            $httpAsset->status,
+            'fiche et échéancier d’immobilisation créés par API'
+        );
+        $httpAssetId = (int) (
+            $this->responseJson($httpAsset)['data']['id'] ?? 0
+        );
+        $assetDetail = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/assets',
+            query: [
+                'exercise_id' => (string) $exerciseId,
+                'asset_id' => (string) $httpAssetId,
+            ]
+        ));
+        $assetDetailJson = $this->responseJson($assetDetail);
+        $this->true(
+            ($assetDetailJson['data']['selected_asset']['code'] ?? '') === 'PC-001'
+            && count(
+                $assetDetailJson['data']['selected_asset']['schedule'] ?? []
+            ) > 30,
+            'registre et plan prévisionnel relus depuis la source métier'
+        );
+        $assetInjectedScope = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/assets',
+            query: [
+                'exercise_id' => (string) $exerciseId,
+                'organisation_id' => (string) $ids['organisation_b'],
+            ]
+        ));
+        $this->same(
+            422,
+            $assetInjectedScope->status,
+            'API immobilisations refuse un scope injecté'
         );
         $entryNoCsrf = $app->handle(new Request(
             'POST',
@@ -3236,6 +3369,303 @@ final class Tests
         ));
         $this->same(422, $scopeInjection->status, 'API comptable refuse un scope injecté');
     }
+    private function assetTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $ids = $this->seedScopes($pdo);
+        $audit = new AuditLogger($pdo);
+        $scope = new ScopeManager($pdo, $audit);
+        $exerciseId = $scope->createExercise(
+            $ids['dossier_a'],
+            'Exercice décalé 2026–2027',
+            '2026-07-01',
+            '2027-06-30'
+        );
+        (new PlanSeeder(
+            $pdo,
+            dirname(__DIR__) . '/database/seeds'
+        ))->installForDossier(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'personne_morale'
+        );
+        $setup = new AccountingSetupService($pdo, $audit);
+        $julyPeriodId = $setup->createPeriod(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseId,
+            'Juillet 2026',
+            '2026-07-01',
+            '2026-07-31'
+        );
+        $setup->createPeriod(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseId,
+            'Août 2026 à juin 2027',
+            '2026-08-01',
+            '2027-06-30'
+        );
+        $journalId = $setup->createJournal(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'AMO',
+            'Immobilisations'
+        );
+        $assetAccount = $this->accountId($pdo, $ids['dossier_a'], '1500');
+        $accumulatedAccount = $this->accountId(
+            $pdo,
+            $ids['dossier_a'],
+            '1509'
+        );
+        $expenseAccount = $this->accountId($pdo, $ids['dossier_a'], '6800');
+        $gainAccount = $this->accountId($pdo, $ids['dossier_a'], '8510');
+        $lossAccount = $this->accountId($pdo, $ids['dossier_a'], '8500');
+        $bankAccount = $this->accountId($pdo, $ids['dossier_a'], '1020');
+        $entries = new EntryService($pdo, $audit);
+        $assets = new AssetService($pdo, $audit, $entries);
+        $categoryId = $assets->saveCategory(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            [
+                'code' => 'MACH',
+                'label' => 'Machines',
+                'default_duration_months' => 12,
+                'asset_account_id' => $assetAccount,
+                'accumulated_depreciation_account_id' => $accumulatedAccount,
+                'depreciation_expense_account_id' => $expenseAccount,
+                'disposal_gain_account_id' => $gainAccount,
+                'disposal_loss_account_id' => $lossAccount,
+                'active' => true,
+            ]
+        );
+        $assetId = $assets->createAsset(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            [
+                'category_id' => $categoryId,
+                'code' => 'M-001',
+                'label' => 'Machine de production',
+                'acquisition_reference' => 'FAC-IMM-001',
+                'acquisition_document_id' => null,
+                'acquisition_attachment_id' => null,
+                'acquisition_date' => '2026-07-10',
+                'in_service_date' => '2026-07-15',
+                'acquisition_value_cents' => 120_001,
+                'residual_value_cents' => 1,
+                'duration_months' => 12,
+                'note' => 'Test exercice décalé',
+            ]
+        );
+        $plan = AssetService::linearSchedule('2026-07-15', 12, 120000);
+        $this->same(
+            120000,
+            array_sum(array_column($plan, 'amount_cents')),
+            'plan linéaire répartit exactement la base amortissable'
+        );
+        $this->same(
+            '2026-07-15|2026-07-31',
+            $plan[0]['start_date'] . '|' . $plan[0]['end_date'],
+            'prorata de mise en service borné aux jours réels'
+        );
+        $this->same(
+            '2027-07-14',
+            $plan[array_key_last($plan)]['end_date'],
+            'durée en mois exacte malgré exercice décalé'
+        );
+        $centPlan = AssetService::linearSchedule('2026-01-31', 7, 10001);
+        $this->same(
+            10001,
+            array_sum(array_column($centPlan, 'amount_cents')),
+            'dernier centime conservé sans flottant'
+        );
+        $entries->postGenerated([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'exercice_id' => $exerciseId,
+            'journal_id' => $journalId,
+            'date_comptable' => '2026-07-10',
+            'libelle' => 'Acquisition machine',
+            'source_type' => 'test_immobilisation',
+            'source_id' => (string) $assetId,
+            'source_action' => 'acquisition',
+            'lignes' => [
+                [
+                    'compte_id' => $assetAccount,
+                    'debit_centimes' => 120001,
+                    'credit_centimes' => 0,
+                ],
+                [
+                    'compte_id' => $bankAccount,
+                    'debit_centimes' => 0,
+                    'credit_centimes' => 120001,
+                ],
+            ],
+        ], 'test:immobilisation:acquisition:' . $assetId);
+        $setup->closePeriod(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $julyPeriodId
+        );
+        $workspace = $assets->read(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseId,
+            $assetId
+        );
+        $schedule = $workspace['selected_asset']['schedule'];
+        $julyScheduleId = (int) $schedule[0]['id'];
+        $augustScheduleId = (int) $schedule[1]['id'];
+        $this->throws(
+            fn () => $assets->postDepreciation(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $julyScheduleId,
+                $exerciseId,
+                $journalId
+            ),
+            'aucune dotation dans une période close'
+        );
+        $augustEntry = $assets->postDepreciation(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $augustScheduleId,
+            $exerciseId,
+            $journalId
+        );
+        $this->same(
+            $augustEntry,
+            $assets->postDepreciation(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $augustScheduleId,
+                $exerciseId,
+                $journalId
+            ),
+            'dotation périodique idempotente'
+        );
+        $reversalEntry = $assets->reverseDepreciation(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $augustScheduleId,
+            '2026-08-31'
+        );
+        $this->true(
+            $reversalEntry > $augustEntry,
+            'correction de dotation par contre-passation'
+        );
+        $repostedEntry = $assets->postDepreciation(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $augustScheduleId,
+            $exerciseId,
+            $journalId
+        );
+        $this->true(
+            $repostedEntry > $reversalEntry,
+            'échéance corrigée de nouveau comptabilisable'
+        );
+        $pdo->prepare(
+            "UPDATE periodes SET statut = 'ouverte', version = version + 1
+             WHERE id = ?"
+        )->execute([$julyPeriodId]);
+        $assets->postDepreciation(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $julyScheduleId,
+            $exerciseId,
+            $journalId
+        );
+        $disposalEntry = $assets->dispose(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $assetId,
+            'cession',
+            '2026-09-15',
+            90000,
+            $bankAccount,
+            $exerciseId,
+            $journalId
+        );
+        $this->same(
+            $disposalEntry,
+            $assets->dispose(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $assetId,
+                'cession',
+                '2026-09-15',
+                90000,
+                $bankAccount,
+                $exerciseId,
+                $journalId
+            ),
+            'cession idempotente'
+        );
+        $disposed = $assets->read(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseId,
+            $assetId
+        );
+        $this->same(
+            'cede',
+            $disposed['selected_asset']['status'],
+            'cession ferme le registre et annule le futur plan'
+        );
+        $this->same(
+            0,
+            $disposed['reconciliation'][0]['gross_difference_cents'],
+            'registre brut réconcilié avec le compte d’actif'
+        );
+        $this->same(
+            0,
+            $disposed['reconciliation'][0]['accumulated_difference_cents'],
+            'amortissements cumulés réconciliés au grand livre'
+        );
+        $exitReversal = $assets->reverseDisposal(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $assetId,
+            '2026-09-15'
+        );
+        $this->true(
+            $exitReversal > $disposalEntry,
+            'sortie contre-passable sans effacer son historique'
+        );
+        $restored = $assets->read(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseId,
+            $assetId
+        );
+        $this->same(
+            'actif',
+            $restored['selected_asset']['status'],
+            'contre-passation restaure l’actif et son échéancier'
+        );
+        $this->same(
+            120000,
+            $restored['selected_asset']['totals']['posted_depreciation_cents']
+                + $restored['selected_asset']['totals']['remaining_depreciable_cents'],
+            'dotations plus base restante concordent au centime'
+        );
+        $this->throws(
+            fn () => $assets->read(
+                $ids['organisation_b'],
+                $ids['dossier_a'],
+                $exerciseId,
+                $assetId
+            ),
+            'registre strictement isolé entre organisations'
+        );
+        $this->true(
+            IntegrityChecker::check($pdo)['ok'],
+            'intégrité après immobilisations'
+        );
+    }
+
     private function accountingTests(): void
     {
         [$pdo, $runner] = $this->database();

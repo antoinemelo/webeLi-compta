@@ -1,0 +1,41 @@
+{
+  "data": {
+    "exercise": {
+      "id": 1,
+      "label": "2026",
+      "start_date": "2026-01-01",
+      "end_date": "2026-12-31",
+      "status": "ouvert"
+    },
+    "categories": [],
+    "assets": [],
+    "selected_asset": null,
+    "reconciliation": [],
+    "catalog": {
+      "accounts": [],
+      "journals": [],
+      "acquisition_documents": []
+    },
+    "pagination": {
+      "page": 1,
+      "per_page": 50,
+      "total": 0,
+      "pages": 1
+    },
+    "definitions": {
+      "method": "Linéaire journalier en centimes.",
+      "correction": "Contre-passation après comptabilisation.",
+      "reconciliation": "Comparaison avec le grand livre."
+    },
+    "capabilities": {
+      "setup": true,
+      "post": true,
+      "reverse": true
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "contract-example-assets"
+  },
+  "errors": []
+}

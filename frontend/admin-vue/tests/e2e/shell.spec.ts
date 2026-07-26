@@ -219,6 +219,68 @@ test('états, clôture et dossier fiscal utilisent le grand livre unique', async
   expect(legacy.headers().location).toBe('/e2e/app/compta/etats');
 });
 
+test('registre, plan et dotation des immobilisations utilisent le grand livre unique', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
+  await page.getByRole('link', { name: 'Amortissements', exact: true }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Immobilisations et amortissements'
+  })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Catégories', exact: true }).click();
+  await page.getByLabel('Code', { exact: true }).fill('INFO-E2E');
+  await page.getByLabel('Libellé', { exact: true }).fill('Informatique E2E');
+  await page.getByLabel('Durée proposée (mois)').fill('36');
+  for (const [label, account] of [
+    ['Compte d’actif', '1520'],
+    ['Amortissements cumulés', '1529'],
+    ['Dotation', '6800'],
+    ['Gain de cession', '8510'],
+    ['Perte de cession', '8500']
+  ] as const) {
+    const select = page.getByRole('combobox', { name: label, exact: true });
+    await expect(select).toContainText(account);
+    const value = await select.evaluate((element, accountCode) => {
+      const option = Array.from((element as HTMLSelectElement).options)
+        .find((candidate) => candidate.textContent?.trim().startsWith(accountCode));
+      return option?.value ?? '';
+    }, account);
+    expect(value).not.toBe('');
+    await select.selectOption(String(value));
+  }
+  await page.getByRole('button', { name: 'Enregistrer', exact: true }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'INFO-E2E' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Registre', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Catégorie', exact: true }).selectOption({
+    label: 'INFO-E2E — Informatique E2E'
+  });
+  await page.getByLabel('Code', { exact: true }).fill('PC-E2E');
+  await page.getByLabel('Libellé', { exact: true }).fill('Poste de test E2E');
+  await page.getByLabel('Référence de pièce').fill('FAC-PC-E2E');
+  await page.getByLabel('Date d’acquisition').fill('2026-07-10');
+  await page.getByLabel('Mise en service').fill('2026-07-15');
+  await page.getByLabel('Valeur d’acquisition').fill('2400.01');
+  await page.getByLabel('Valeur résiduelle').fill('0.01');
+  await page.getByRole('button', { name: 'Créer la fiche et le plan' }).click();
+  const assetRow = page.getByRole('row').filter({ hasText: 'PC-E2E' });
+  await expect(assetRow).toContainText(/CHF 2\s400\.01/);
+  await assetRow.getByRole('button', { name: 'Ouvrir' }).click();
+  await expect(page.getByRole('heading', {
+    name: 'PC-E2E — Poste de test E2E'
+  })).toBeVisible();
+  await page.getByRole('button', { name: 'Comptabiliser', exact: true }).first().click();
+  await expect(page.getByText('Dotation comptabilisée dans le grand livre.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Registre', exact: true }).click();
+  await assetRow.getByRole('button', { name: 'Corriger' }).click();
+  await page.getByRole('button', { name: 'Enregistrer la correction' }).click();
+  await expect(page.getByText(/corrige par contre-passation/i)).toBeVisible();
+});
+
 test('facturation client, contact 360 et aging utilisent le parcours Vue unique', async ({ page }) => {
   await loginAsAdministrator(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({

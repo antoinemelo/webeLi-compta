@@ -40,6 +40,9 @@ use Compta\Modules\Facturation\PaymentService;
 use Compta\Modules\Facturation\RecurringBillingService;
 use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Facturation\Http\BillingInputValidator;
+use Compta\Modules\Immobilisations\AssetApiController;
+use Compta\Modules\Immobilisations\AssetInputValidator;
+use Compta\Modules\Immobilisations\AssetService;
 use Compta\Modules\Salaires\PayrollCertificateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
 use Compta\Modules\Salaires\PayrollImportService;
@@ -212,6 +215,13 @@ $apiRoutes = new ApiRouteRegistry(
         new InvoicePdfService($pdo, $audit),
         new AttachmentService($pdo, $audit),
         new BillingInputValidator()
+    ),
+    new AssetApiController(
+        $session,
+        $auth,
+        $access,
+        new AssetService($pdo, $audit, $entries),
+        new AssetInputValidator()
     )
 );
 $shellPage = new ShellPageController(

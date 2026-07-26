@@ -98,6 +98,11 @@ checklist de clôture et le dossier fiscal préparatoire. Les anciennes routes d
 rapports ne rendent plus d’écran parallèle et redirigent vers ce parcours
 unique. Voir [le guide rapports, clôture et fiscal](docs/rapports-cloture-fiscal.md).
 
+L’onglet **Amortissements** fournit le registre des immobilisations, leur plan
+linéaire journalier en centimes, les dotations idempotentes, cessions, mises au
+rebut, contre-passations et la réconciliation avec le grand livre. Voir
+[le guide des immobilisations](docs/immobilisations.md).
+
 L’écran **Plan comptable et ouvertures** permet de configurer les préfixes
 moins / plus, les rubriques de regroupement, les numéros/libellés/types des
 comptes et les soldes initiaux. Les exceptions VEB restent explicites et une

@@ -683,6 +683,150 @@ export type AccountingWorkspace = {
   };
 };
 
+export type AssetCategory = {
+  id: number;
+  code: string;
+  label: string;
+  default_duration_months: number;
+  asset_account_id: number;
+  accumulated_depreciation_account_id: number;
+  depreciation_expense_account_id: number;
+  disposal_gain_account_id: number;
+  disposal_loss_account_id: number;
+  accounts: {
+    asset: string;
+    accumulated: string;
+    expense: string;
+    gain: string;
+    loss: string;
+  };
+  active: boolean;
+  version: number;
+};
+
+export type AssetRecord = {
+  id: number;
+  category_id: number;
+  category_code: string;
+  category: string;
+  code: string;
+  label: string;
+  acquisition_reference: string;
+  acquisition_document_id: number | null;
+  acquisition_attachment_id: number | null;
+  acquisition_date: string;
+  in_service_date: string;
+  acquisition_value_cents: number;
+  residual_value_cents: number;
+  duration_months: number;
+  method: 'lineaire_journaliere';
+  prorata_rule: 'jours_reels';
+  asset_account_id: number;
+  accumulated_depreciation_account_id: number;
+  depreciation_expense_account_id: number;
+  disposal_gain_account_id: number;
+  disposal_loss_account_id: number;
+  status: 'actif' | 'cede' | 'mis_au_rebut';
+  exit_date: string | null;
+  posted_depreciation_cents: number;
+  net_book_value_cents: number;
+  note: string;
+  version: number;
+};
+
+export type AssetWorkspace = {
+  exercise: {
+    id: number;
+    label: string;
+    start_date: string;
+    end_date: string;
+    status: 'ouvert' | 'ferme';
+  };
+  categories: AssetCategory[];
+  assets: AssetRecord[];
+  selected_asset: null | AssetRecord & {
+    schedule: Array<{
+      id: number;
+      order: number;
+      start_date: string;
+      end_date: string;
+      posting_date: string;
+      days: number;
+      amount_cents: number;
+      status: 'planifiee' | 'comptabilisee' | 'contre_passee' | 'annulee';
+      entry_id: number | null;
+      reversal_entry_id: number | null;
+      version: number;
+    }>;
+    totals: {
+      depreciable_base_cents: number;
+      posted_depreciation_cents: number;
+      remaining_depreciable_cents: number;
+      net_book_value_cents: number;
+      schedule_cents: number;
+    };
+    exits: Array<{
+      id: number;
+      type: 'cession' | 'mise_au_rebut';
+      date: string;
+      proceeds_cents: number;
+      gross_cents: number;
+      accumulated_cents: number;
+      net_cents: number;
+      result_cents: number;
+      entry_id: number;
+      reversal_entry_id: number | null;
+      status: 'comptabilisee' | 'contre_passee';
+    }>;
+  };
+  reconciliation: Array<{
+    asset_account_id: number;
+    asset_account: string;
+    accumulated_account_id: number;
+    accumulated_account: string;
+    register_gross_cents: number;
+    ledger_gross_cents: number;
+    gross_difference_cents: number;
+    register_accumulated_cents: number;
+    ledger_accumulated_cents: number;
+    accumulated_difference_cents: number;
+    reconciled: boolean;
+    as_of_date: string;
+  }>;
+  catalog: {
+    accounts: Array<{
+      id: number;
+      number: string;
+      label: string;
+      type: string;
+      normal_side: 'debit' | 'credit';
+    }>;
+    journals: Array<{ id: number; code: string; label: string }>;
+    acquisition_documents: Array<{
+      id: number;
+      number: string;
+      date: string;
+      gross_cents: number;
+    }>;
+  };
+  pagination: {
+    page: number;
+    per_page: number;
+    total: number;
+    pages: number;
+  };
+  definitions: {
+    method: string;
+    correction: string;
+    reconciliation: string;
+  };
+  capabilities: {
+    setup: boolean;
+    post: boolean;
+    reverse: boolean;
+  };
+};
+
 export type DashboardAging = {
   not_due: number;
   days_1_30: number;

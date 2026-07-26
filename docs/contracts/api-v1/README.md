@@ -84,6 +84,13 @@ Les exemples versionnés sont :
 | POST | `/api/v1/accounting/tax-file/adjustments/status` | validation ou mise à l’écart d’un ajustement |
 | POST | `/api/v1/accounting/archives` | archive financière immuable et vérifiable |
 | GET | `/api/v1/accounting/archives/download` | téléchargement JSON avec empreinte |
+| GET | `/api/v1/accounting/assets` | registre, échéancier et réconciliation des immobilisations |
+| POST | `/api/v1/accounting/assets/categories` | création ou modification d’une catégorie et de ses comptes |
+| POST | `/api/v1/accounting/assets/records` | création ou correction d’une fiche avant comptabilisation |
+| POST | `/api/v1/accounting/assets/depreciations` | dotation périodique idempotente via le grand livre |
+| POST | `/api/v1/accounting/assets/depreciations/reverse` | contre-passation d’une dotation |
+| POST | `/api/v1/accounting/assets/disposals` | cession ou mise au rebut comptabilisée |
+| POST | `/api/v1/accounting/assets/disposals/reverse` | contre-passation d’une sortie |
 | GET | `/api/v1/liquidites` | dépenses, récurrences, pièces et catalogues du dossier |
 | POST | `/api/v1/liquidites/depenses` | création d’une dépense en brouillon |
 | POST | `/api/v1/liquidites/depenses/soumettre` | soumission à approbation |
