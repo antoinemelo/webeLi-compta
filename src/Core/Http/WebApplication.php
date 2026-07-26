@@ -231,7 +231,7 @@ final class WebApplication
             '/compta' => '/app/compta',
             '/compta/saisie' => '/app/compta',
             '/compta/compte' => '/app/compta/extraits',
-            '/compta/plan' => '/app/compta/plan',
+            '/compta/plan' => '/app/configuration/referentiels/plan',
             '/compta/journal' => '/app/compta',
             '/compta/grand-livre' => '/app/compta/etats',
             '/compta/balance' => '/app/compta/etats',
@@ -361,7 +361,10 @@ final class WebApplication
                 $userId, $organisationId, $dossierId, 'compta.view'
             )) {
                 $navigation[] = ['path' => '/compta/compte', 'label' => 'Extrait de compte'];
-                $navigation[] = ['path' => '/compta/plan', 'label' => 'Plan comptable'];
+                $navigation[] = [
+                    'path' => '/app/configuration/referentiels/plan',
+                    'label' => 'Plan comptable',
+                ];
             }
             foreach ([
                 'facturation.view' => ['/facturation', 'Facturation'],

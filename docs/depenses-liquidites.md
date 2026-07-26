@@ -13,8 +13,8 @@ Une création ou une génération récurrente ne produit jamais d’écriture.
 
 ## Cycle
 
-1. `brouillon` : lignes modifiables et justificatif archivé dans SQLite, hors
-   du webroot ;
+1. `brouillon` : lignes modifiables et justificatif numérique facultatif ;
+   lorsqu’il existe, il est archivé dans SQLite hors du webroot ;
 2. `a_approuver` : numéro interne attribué, document figé ;
 3. `approuve` : décision tracée avec opérateur et horodatage ;
 4. `comptabilise` : écriture fournisseur équilibrée et idempotente ;
@@ -38,8 +38,8 @@ php bin/console depenses:recurrences-generer \
 ```
 
 La commande convient à cron sur hébergement mutualisé. Chaque échéance devient
-un brouillon sans justificatif : l’opérateur doit joindre la preuve, soumettre,
-faire approuver, puis comptabiliser explicitement.
+un brouillon sans justificatif qui peut être soumis, approuvé et comptabilisé.
+Une preuve numérique peut être ajoutée, mais elle n’est jamais obligatoire.
 
 ## Paiements
 

@@ -612,8 +612,8 @@ async function toggleRecurrence(item: {
               </select>
             </template>
           </FormField>
-          <FormField id="expense-proof" label="Justificatif" hint="PDF, JPEG, PNG ou WebP, 10 Mo maximum.">
-            <template #default="{ describedBy }"><input id="expense-proof" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" :aria-describedby="describedBy" required @change="fileSelected"></template>
+          <FormField id="expense-proof" label="Justificatif facultatif" hint="PDF, JPEG, PNG ou WebP, 10 Mo maximum.">
+            <template #default="{ describedBy }"><input id="expense-proof" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" :aria-describedby="describedBy" @change="fileSelected"></template>
           </FormField>
         </div>
         <fieldset v-for="(line, index) in expense.lines" :key="index" class="line-editor">

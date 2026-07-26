@@ -24,24 +24,21 @@ const managedReferences = computed(() => store.managedReferences);
 const canManage = computed(() => context.can('dossier.manage'));
 const currentUserId = computed(() => context.context?.user.id ?? 0);
 const today = new Date().toISOString().slice(0, 10);
-const requestedReferenceSection = String(route.query.section || 'overview');
+const requestedReferenceSection = String(route.query.section || 'treasury');
 type ReferenceSection =
-  | 'overview'
   | 'treasury'
   | 'contacts'
   | 'vat'
   | 'payroll'
   | 'journals'
-  | 'exercises'
-  | 'periods';
+  | 'exercises';
 const referenceSections: ReferenceSection[] = [
-  'overview', 'treasury', 'contacts', 'vat', 'payroll',
-  'journals', 'exercises', 'periods'
+  'treasury', 'contacts', 'vat', 'payroll', 'journals', 'exercises'
 ];
 const referenceSection = ref<ReferenceSection>(
   referenceSections.includes(requestedReferenceSection as ReferenceSection)
     ? requestedReferenceSection as ReferenceSection
-    : 'overview'
+    : 'treasury'
 );
 
 const identity = reactive({
@@ -172,103 +169,6 @@ const periodDraft = reactive({
   status: 'ouverte' as 'ouverte' | 'fermee'
 });
 const accessSelections = reactive<Record<number, number[]>>({});
-const referenceCards = computed(() => {
-  const data = managedReferences.value;
-  if (!data) return [];
-  return [
-    {
-      key: 'treasury',
-      label: 'Comptes bancaires et de trésorerie',
-      count: data.treasury.accounts.length,
-      section: 'treasury' as ReferenceSection,
-      items: data.treasury.accounts.map((item) => ({
-        id: item.id,
-        label: item.label,
-        type: item.type,
-        detail: `${item.currency} · ${item.ledger_account_number}`,
-        active: item.active
-      }))
-    },
-    {
-      key: 'vat',
-      label: 'Codes et taux TVA',
-      count: data.vat.codes.length,
-      section: 'vat' as ReferenceSection,
-      items: data.vat.codes.map((item) => ({
-        id: item.id,
-        label: item.code,
-        type: item.treatment,
-        detail: item.label,
-        active: item.active
-      }))
-    },
-    {
-      key: 'payroll',
-      label: 'Taux de charges sociales',
-      count: data.payroll.rates.length,
-      section: 'payroll' as ReferenceSection,
-      items: data.payroll.rates.map((item) => ({
-        id: Number(item.id),
-        label: String(item.year),
-        type: 'Genève',
-        detail: String(item.source),
-        active: true
-      }))
-    },
-    {
-      key: 'journals',
-      label: 'Journaux',
-      count: data.accounting_setup.journals.length,
-      section: 'journals' as ReferenceSection,
-      items: data.accounting_setup.journals.map((item) => ({
-        id: item.id,
-        label: item.code,
-        type: item.type,
-        detail: item.label,
-        active: item.active
-      }))
-    },
-    {
-      key: 'exercises',
-      label: 'Exercices comptables',
-      count: data.accounting_setup.exercises.length,
-      section: 'exercises' as ReferenceSection,
-      items: data.accounting_setup.exercises.map((item) => ({
-        id: item.id,
-        label: item.label,
-        type: item.status,
-        detail: `${item.start_date} — ${item.end_date}`,
-        active: item.status === 'ouvert'
-      }))
-    },
-    {
-      key: 'periods',
-      label: 'Périodes',
-      count: data.accounting_setup.periods.length,
-      section: 'periods' as ReferenceSection,
-      items: data.accounting_setup.periods.map((item) => ({
-        id: item.id,
-        label: item.label,
-        type: item.status,
-        detail: `${item.start_date} — ${item.end_date}`,
-        active: item.status === 'ouverte'
-      }))
-    },
-    {
-      key: 'contacts',
-      label: 'Débiteurs et créanciers',
-      count: data.contacts.length,
-      section: 'contacts' as ReferenceSection,
-      items: data.contacts.map((item) => ({
-        id: item.id,
-        label: contactName(item),
-        type: item.roles.join(', '),
-        detail: item.email,
-        active: true
-      }))
-    }
-  ];
-});
 const vatTreatmentsWithRate = ['normal', 'reduit', 'special', 'acquisition', 'import'];
 const paymentRows = computed<Array<Record<string, unknown>>>(() =>
   (configuration.value?.payment_terms ?? []).map((item) => ({
@@ -1009,13 +909,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
 
       <section v-else-if="activeTab === 'referentiels'" class="configuration-stack">
         <nav class="subtabs" aria-label="Référentiels gérés">
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'overview' }"
-            @click="referenceSection = 'overview'"
-          >
-            Vue d’ensemble
-          </button>
+          <RouterLink to="/configuration/referentiels/plan">Plan comptable</RouterLink>
           <button
             type="button"
             :class="{ active: referenceSection === 'treasury' }"
@@ -1056,58 +950,11 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             :class="{ active: referenceSection === 'exercises' }"
             @click="referenceSection = 'exercises'"
           >
-            Exercices
-          </button>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'periods' }"
-            @click="referenceSection = 'periods'"
-          >
-            Périodes
+            Exercices et périodes
           </button>
         </nav>
 
-        <div v-if="referenceSection === 'overview'" class="reference-grid">
-          <article v-for="reference in referenceCards" :key="reference.key" class="panel reference-card">
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Source métier unique</p>
-                <h2>{{ reference.label }}</h2>
-              </div>
-              <strong>{{ reference.count }}</strong>
-            </div>
-            <ul v-if="reference.items.length" class="compact-list">
-              <li v-for="item in reference.items.slice(0, 8)" :key="item.id">
-                <span>
-                  <strong>{{ item.label }}</strong>
-                  <small>{{ item.type }} · {{ item.detail }}</small>
-                </span>
-                <span class="status-badge" :class="item.active ? 'status-ouverte' : 'status-fermee'">
-                  {{ item.active ? 'Actif' : 'Inactif' }}
-                </span>
-              </li>
-            </ul>
-            <p v-else>Aucune donnée configurée.</p>
-            <button
-              class="button secondary compact"
-              type="button"
-              @click="referenceSection = reference.section"
-            >
-              Gérer dans Configuration
-            </button>
-          </article>
-          <article class="panel reference-card">
-            <div class="panel-heading">
-              <div><p class="eyebrow">Comptabilité</p><h2>Plan comptable</h2></div>
-            </div>
-            <p>Types, structure, comptes, règles de sens et soldes d’ouverture.</p>
-            <RouterLink class="button secondary compact" to="/compta/plan">
-              Gérer le plan comptable
-            </RouterLink>
-          </article>
-        </div>
-
-        <template v-else-if="managedReferences && referenceSection === 'treasury'">
+        <template v-if="managedReferences && referenceSection === 'treasury'">
           <form
             v-if="managedReferences.capabilities.treasury"
             class="panel configuration-form"
@@ -1627,6 +1474,15 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'exercises'">
+          <article class="panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Organisation temporelle</p><h2>Exercices et périodes</h2></div>
+            </div>
+            <p>
+              L’exercice délimite l’année de reporting et de clôture. Ses périodes
+              découpent cette enveloppe pour ouvrir ou verrouiller les saisies.
+            </p>
+          </article>
           <form
             v-if="managedReferences.capabilities.accounting_setup"
             class="panel configuration-form"
@@ -1680,9 +1536,6 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               </table>
             </div>
           </article>
-        </template>
-
-        <template v-else-if="managedReferences && referenceSection === 'periods'">
           <form
             v-if="managedReferences.capabilities.accounting_setup"
             class="panel configuration-form"

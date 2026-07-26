@@ -81,7 +81,10 @@ const entry = reactive({
 let initializedDossierId = 0;
 
 const workspace = computed(() => accounting.workspace);
-const currentTab = computed(() => String(route.params.tab || 'journalisation'));
+const isChartSettings = computed(() => route.name === 'chart-settings');
+const currentTab = computed(() =>
+  isChartSettings.value ? 'plan' : String(route.params.tab || 'journalisation')
+);
 const currency = computed(() => context.selection?.dossier.currency || 'CHF');
 const allowed = computed(() =>
   context.moduleEnabled('comptabilite') && context.can('compta.view')
@@ -601,9 +604,13 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
 <template>
   <header class="page-header accounting-header">
     <div>
-      <p class="eyebrow">Moteur comptable unique</p>
-      <h1>Comptabilité</h1>
-      <p>Journal, extraits et plan pilotés par les mêmes services PHP et la même base SQLite.</p>
+      <p class="eyebrow">{{ isChartSettings ? 'Configuration · Référentiels' : 'Moteur comptable unique' }}</p>
+      <h1>{{ isChartSettings ? 'Plan comptable' : 'Comptabilité' }}</h1>
+      <p>
+        {{ isChartSettings
+          ? 'Structure, comptes, règles de sens et soldes d’ouverture du dossier.'
+          : 'Journal et états pilotés par les mêmes services PHP et la même base SQLite.' }}
+      </p>
     </div>
     <label v-if="context.exercises.length" class="compact-control">
       <span>Exercice</span>
@@ -615,7 +622,21 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
     </label>
   </header>
 
-  <CompactTabs v-if="allowed" :items="subNavigation.accounting" label="Navigation comptable" />
+  <CompactTabs
+    v-if="allowed"
+    :items="isChartSettings ? subNavigation.settings : subNavigation.accounting"
+    :label="isChartSettings ? 'Navigation Configuration' : 'Navigation comptable'"
+  />
+
+  <nav v-if="allowed && isChartSettings" class="subtabs" aria-label="Référentiels gérés">
+    <strong>Plan comptable</strong>
+    <RouterLink to="/configuration/referentiels?section=treasury">Trésorerie</RouterLink>
+    <RouterLink to="/configuration/referentiels?section=contacts">Débiteurs et créanciers</RouterLink>
+    <RouterLink to="/configuration/referentiels?section=vat">TVA</RouterLink>
+    <RouterLink to="/configuration/referentiels?section=payroll">Charges sociales</RouterLink>
+    <RouterLink to="/configuration/referentiels?section=journals">Journaux</RouterLink>
+    <RouterLink to="/configuration/referentiels?section=exercises">Exercices et périodes</RouterLink>
+  </nav>
 
   <EmptyState
     v-if="!context.selection"

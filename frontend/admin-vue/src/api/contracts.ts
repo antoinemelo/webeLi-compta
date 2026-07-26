@@ -719,8 +719,8 @@ export type AssetRecord = {
   acquisition_value_cents: number;
   residual_value_cents: number;
   duration_months: number;
-  method: 'lineaire_journaliere';
-  prorata_rule: 'jours_reels';
+  method: 'lineaire_30_360';
+  prorata_rule: 'jours_30_360';
   asset_account_id: number;
   accumulated_depreciation_account_id: number;
   depreciation_expense_account_id: number;

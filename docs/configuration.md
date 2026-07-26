@@ -31,17 +31,19 @@ Sous `/app/configuration/referentiels`, les référentiels sont gérés dans Vue
 - codes TVA : taux légaux en lecture et création de codes datés via
   `VatConfigurationService` ;
 - charges sociales : millésimes en ppm via
-  `PayrollConfigurationService`, avec reprise proposée des valeurs Lasso 2026.
+  `PayrollConfigurationService`, avec import Lasso prévisualisé et contrôlé ;
 - comptes bancaires, postaux, caisse et cartes : création, édition et
   activation via `TreasuryAccountService`, toujours liés au grand livre ;
 - journaux : création et édition optimiste via `AccountingSetupService` ;
-- exercices et périodes : création, fermeture et réouverture contrôlées ; un
-  exercice ne peut être fermé tant qu’une de ses périodes reste ouverte ;
+- exercices et périodes : regroupés dans un seul écran ; l’exercice constitue
+  l’enveloppe de reporting et ses périodes pilotent les verrouillages de saisie ;
+  un exercice ne peut être fermé tant qu’une période reste ouverte ;
 - rôles directs du dossier : affectation transactionnelle et auditée, sans
   modifier les rôles hérités de l’organisation ou de l’installation.
 
-Le plan comptable est géré par l’écran Vue spécialisé `/app/compta/plan`. Les
-instantanés des factures et fiches validées restent inchangés.
+Le plan comptable est le premier référentiel de Configuration, sous
+`/app/configuration/referentiels/plan`. Les instantanés des factures et fiches
+validées restent inchangés.
 
 ## Modules
 

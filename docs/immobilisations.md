@@ -6,9 +6,9 @@ d’acquisition, cinq comptes du plan comptable et un échéancier.
 
 ## Règle de calcul
 
-La première méthode disponible est `lineaire_journaliere`. La base
-amortissable est la valeur d’acquisition moins la valeur résiduelle. Elle est
-répartie sur la durée utile en mois selon les jours calendaires réels :
+La méthode disponible est `lineaire_30_360`. La base amortissable est la
+valeur d’acquisition moins la valeur résiduelle. Elle est répartie sur la durée
+utile selon une convention de 30 jours par mois et 360 jours par année :
 
 - le premier et le dernier mois sont proratisés ;
 - tous les montants restent des centimes entiers ;

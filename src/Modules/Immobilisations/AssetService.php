@@ -168,8 +168,8 @@ final class AssetService
                     'base_amortissable_centimes' =>
                         $values['acquisition_value_cents']
                         - $values['residual_value_cents'],
-                    'methode' => 'lineaire_journaliere',
-                    'prorata' => 'jours_reels',
+                    'methode' => 'lineaire_30_360',
+                    'prorata' => 'jours_30_360',
                 ]
             );
             return $id;
@@ -860,8 +860,8 @@ final class AssetService
             ],
             'definitions' => [
                 'method' =>
-                    'Linéaire journalier : la base amortissable est répartie '
-                    . 'selon les jours calendaires réels, sans flottants.',
+                    'Linéaire 30/360 : chaque mois compte 30 jours et chaque '
+                    . 'année 360 jours, sans flottants.',
                 'correction' =>
                     'Une fiche sans écriture peut être corrigée. Toute dotation '
                     . 'ou sortie validée est corrigée par contre-passation.',
@@ -1629,7 +1629,10 @@ final class AssetService
 
     private function daysInclusive(string $start, string $end): int
     {
-        return self::parsedDate($start)->diff(self::parsedDate($end))->days + 1;
+        return self::conventionDays(
+            self::parsedDate($start),
+            self::parsedDate($end)->modify('+1 day')
+        );
     }
 
     private function assertDate(string $date): void
@@ -1680,7 +1683,7 @@ final class AssetService
         if ($start > $end) {
             return [];
         }
-        $totalDays = $start->diff($end)->days + 1;
+        $totalDays = self::conventionDays($start, $end->modify('+1 day'));
         $rows = [];
         $current = $start;
         $cumulativeDays = 0;
@@ -1689,7 +1692,10 @@ final class AssetService
         while ($current <= $end) {
             $monthEnd = $current->modify('last day of this month');
             $segmentEnd = $monthEnd < $end ? $monthEnd : $end;
-            $days = $current->diff($segmentEnd)->days + 1;
+            $days = self::conventionDays(
+                $current,
+                $segmentEnd->modify('+1 day')
+            );
             $cumulativeDays += $days;
             $cumulativeAmount = intdiv(
                 $amountCents * $cumulativeDays,
@@ -1708,6 +1714,27 @@ final class AssetService
             $current = $segmentEnd->modify('+1 day');
         }
         return $rows;
+    }
+
+    private static function conventionDays(
+        DateTimeImmutable $start,
+        DateTimeImmutable $endExclusive,
+    ): int {
+        $startDay = self::conventionDay($start);
+        $endDay = self::conventionDay($endExclusive);
+        return max(
+            0,
+            ((int) $endExclusive->format('Y') - (int) $start->format('Y')) * 360
+            + ((int) $endExclusive->format('n') - (int) $start->format('n')) * 30
+            + $endDay
+            - $startDay
+        );
+    }
+
+    private static function conventionDay(DateTimeImmutable $date): int
+    {
+        $day = (int) $date->format('j');
+        return $day === (int) $date->format('t') ? 30 : min($day, 30);
     }
 
     private function transaction(callable $callback): mixed

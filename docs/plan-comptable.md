@@ -1,8 +1,9 @@
 # Plan comptable configurable
 
-L’écran Vue **Plan comptable** est disponible sous `/app/compta/plan` après
-sélection d’un dossier. Les anciennes routes PHP redirigent vers cette vue
-unique. Les modifications exigent la permission
+L’écran Vue **Plan comptable** est disponible sous
+`/app/configuration/referentiels/plan`, comme premier référentiel de
+Configuration, après sélection d’un dossier. Les anciennes routes PHP
+redirigent vers cette vue unique. Les modifications exigent la permission
 `compta.setup`; la validation d’une ouverture exige aussi `compta.validate`.
 Chaque plan est propre au couple organisation/dossier : types, règles,
 rubriques, comptes et ordre peuvent diverger sans affecter un autre dossier.

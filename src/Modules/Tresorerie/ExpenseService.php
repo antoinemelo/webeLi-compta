@@ -129,11 +129,10 @@ final class ExpenseService
         if (
             $document['statut'] !== 'brouillon'
             || (int) $document['version'] !== $expectedVersion
-            || $document['justificatif_id'] === null
             || (int) $document['total_brut_centimes'] <= 0
         ) {
             throw new ExpenseException(
-                'La dépense doit être un brouillon complet avec justificatif.'
+                'La dépense doit être un brouillon complet avec un montant positif.'
             );
         }
         $this->pdo->beginTransaction();

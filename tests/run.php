@@ -2794,8 +2794,11 @@ final class Tests
         );
         $this->false(str_contains($dashboard->body, 'Organisation B'), 'autre organisation absente du HTML');
         $this->true(
-            str_contains($dashboard->body, '/edu/app/compta/plan'),
-            'accès au plan comptable depuis le tableau de bord'
+            str_contains(
+                $dashboard->body,
+                '/edu/app/configuration/referentiels/plan'
+            ),
+            'accès au plan comptable depuis Configuration'
         );
         $this->true(
             str_contains($dashboard->body, '/edu/facturation'),
@@ -3396,9 +3399,9 @@ final class Tests
         $plan = $app->handle(new Request('GET', '/compta/plan'));
         $this->same(303, $plan->status, 'ancien plan comptable redirigé');
         $this->same(
-            '/edu/app/compta/plan',
+            '/edu/app/configuration/referentiels/plan',
             $plan->headers['Location'] ?? '',
-            'plan comptable servi par Vue'
+            'plan comptable servi par Configuration Vue'
         );
         $this->true(
             !is_file(dirname(__DIR__) . '/templates/compta/plan.php')
@@ -3543,7 +3546,22 @@ final class Tests
         $this->same(
             '2026-07-15|2026-07-31',
             $plan[0]['start_date'] . '|' . $plan[0]['end_date'],
-            'prorata de mise en service borné aux jours réels'
+            'prorata de mise en service borné à son mois civil'
+        );
+        $this->same(
+            360,
+            array_sum(array_column($plan, 'days')),
+            'plan annuel calculé sur 360 jours conventionnels'
+        );
+        $this->same(
+            16,
+            $plan[0]['days'],
+            'premier mois calculé sur une base mensuelle de 30 jours'
+        );
+        $this->same(
+            30,
+            $plan[1]['days'],
+            'mois complet limité à 30 jours'
         );
         $this->same(
             '2027-07-14',
@@ -6821,14 +6839,15 @@ final class Tests
             'fin de mois calculée sans saut de février'
         );
         $generatedId = $firstRun[0];
-        $this->throws(
-            fn () => $expenses->submit(
-                $organisationId,
-                $dossierId,
-                $generatedId,
-                2
-            ),
-            'brouillon récurrent sans justificatif non soumis'
+        $generatedNumber = $expenses->submit(
+            $organisationId,
+            $dossierId,
+            $generatedId,
+            2
+        );
+        $this->true(
+            str_starts_with($generatedNumber, 'DEP-2026-'),
+            'brouillon sans justificatif numérique soumis explicitement'
         );
         $this->same(
             [],

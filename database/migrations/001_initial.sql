@@ -810,10 +810,10 @@ CREATE TABLE immobilisations (
         CHECK (valeur_residuelle_centimes >= 0
                AND valeur_residuelle_centimes < valeur_acquisition_centimes),
     duree_mois INTEGER NOT NULL CHECK (duree_mois BETWEEN 1 AND 1200),
-    methode TEXT NOT NULL DEFAULT 'lineaire_journaliere'
-        CHECK (methode = 'lineaire_journaliere'),
-    regle_prorata TEXT NOT NULL DEFAULT 'jours_reels'
-        CHECK (regle_prorata = 'jours_reels'),
+    methode TEXT NOT NULL DEFAULT 'lineaire_30_360'
+        CHECK (methode = 'lineaire_30_360'),
+    regle_prorata TEXT NOT NULL DEFAULT 'jours_30_360'
+        CHECK (regle_prorata = 'jours_30_360'),
     compte_actif_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
     compte_amortissement_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
     compte_dotation_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,

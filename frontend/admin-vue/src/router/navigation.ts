@@ -26,7 +26,6 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
   accounting: [
     { key: 'entries', label: 'Journalisation', path: '/compta' },
     { key: 'accounts', label: 'Extraits', path: '/compta/extraits' },
-    { key: 'chart', label: 'Plan comptable', path: '/compta/plan' },
     { key: 'statements', label: 'États financiers', path: '/compta/etats' },
     { key: 'vat', label: 'TVA', path: '/compta/tva' },
     { key: 'closing', label: 'Clôture', path: '/compta/cloture' },
@@ -43,7 +42,11 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
     { key: 'entity', label: 'Entité', path: '/configuration' },
     { key: 'modules', label: 'Modules', path: '/configuration/modules' },
     { key: 'payments', label: 'Paiements', path: '/configuration/paiements' },
-    { key: 'references', label: 'Référentiels', path: '/configuration/referentiels' },
+    {
+      key: 'references',
+      label: 'Référentiels',
+      path: '/configuration/referentiels/plan'
+    },
     { key: 'access', label: 'Accès', path: '/configuration/acces' },
     { key: 'audit', label: 'Audit', path: '/configuration/audit' }
   ]

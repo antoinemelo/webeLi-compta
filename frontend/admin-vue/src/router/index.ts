@@ -50,6 +50,12 @@ const routes: RouteRecordRaw[] = [
     meta: { label: 'Salaires', section: 'payroll' }
   },
   {
+    path: '/configuration/referentiels/plan',
+    name: 'chart-settings',
+    component: AccountingView,
+    meta: { label: 'Configuration', section: 'settings' }
+  },
+  {
     path: '/configuration/:tab?',
     name: 'settings',
     component: ConfigurationView,

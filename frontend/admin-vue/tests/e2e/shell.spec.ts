@@ -124,10 +124,10 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('link', { name: 'Paiements', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouvelle condition de paiement' })).toBeVisible();
   await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Plan comptable' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Débiteurs et créanciers' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
+  await expect(page.getByText('Vue d’ensemble', { exact: true })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Trésorerie' }).click();
+  await page.getByRole('link', { name: 'Trésorerie', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau compte de trésorerie' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Débiteurs et créanciers' }).click();
@@ -157,16 +157,17 @@ test('configuration des modules et référentiels', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Journaux' }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau journal' })).toBeVisible();
-  await page.getByRole('button', { name: 'Exercices' }).click();
+  await page.getByRole('button', { name: 'Exercices et périodes' }).click();
   await expect(page.getByRole('heading', { name: 'Nouvel exercice comptable' })).toBeVisible();
-  await page.getByRole('button', { name: 'Périodes' }).click();
   await expect(page.getByRole('heading', { name: 'Nouvelle période' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Accès', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Rôles du dossier' })).toBeVisible();
 });
 
-test('journal, extrait et plan comptable utilisent le parcours Vue unique', async ({ page }) => {
+test('journal, extrait et plan comptable de Configuration utilisent le parcours Vue unique', async ({
+  page
+}) => {
   await loginAsAdministrator(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({
     label: 'Comptabilité principale'
@@ -179,14 +180,15 @@ test('journal, extrait et plan comptable utilisent le parcours Vue unique', asyn
   await page.getByRole('link', { name: 'Extraits', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Extrait de compte' })).toBeVisible();
 
-  await page.getByRole('link', { name: 'Plan comptable' }).click();
-  await expect(page).toHaveURL(/\/e2e\/app\/compta\/plan$/);
-  await expect(page.getByRole('heading', { name: 'Plan comptable' })).toBeVisible();
+  await page.getByRole('link', { name: 'Configuration', exact: true }).click();
+  await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
+  await expect(page).toHaveURL(/\/e2e\/app\/configuration\/referentiels\/plan$/);
+  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
   await expect(page.getByLabel('Sections du plan comptable')).toBeVisible();
 
   const legacy = await page.request.get('/e2e/compta/plan', { maxRedirects: 0 });
   expect(legacy.status()).toBe(303);
-  expect(legacy.headers().location).toBe('/e2e/app/compta/plan');
+  expect(legacy.headers().location).toBe('/e2e/app/configuration/referentiels/plan');
 });
 
 test('états, clôture et dossier fiscal utilisent le grand livre unique', async ({ page }) => {
@@ -355,11 +357,7 @@ test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page
   const payable = page.getByLabel('Compte collectif fournisseur');
   const payableValue = await payable.locator('option').filter({ hasText: '2000' }).getAttribute('value');
   await payable.selectOption(String(payableValue));
-  await page.getByLabel('Justificatif').setInputFiles({
-    name: 'preuve.pdf',
-    mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.4\\n%%EOF')
-  });
+  await expect(page.getByLabel('Justificatif facultatif')).toBeVisible();
   await page.getByLabel('Libellé', { exact: true }).fill('Fournitures de bureau');
   await page.getByLabel('Montant', { exact: true }).fill('100.00');
   const expenseAccount = page.getByLabel('Compte de charge');
