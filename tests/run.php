@@ -7979,6 +7979,36 @@ XML;
             ),
             'exercice étranger refusé sans fuite de cache'
         );
+        $pdo->exec(
+            "DELETE FROM series_marche_publiques WHERE jeu_donnees = 'devkum'"
+        );
+        $pdo->exec('DELETE FROM taux_change_publics_quotidiens');
+        $pdo->exec(
+            "UPDATE actualisations_marche_publiques
+             SET statut = 'echec', tente_le = '2026-07-26 08:00:00',
+                 erreur = 'source indisponible'
+             WHERE jeu_donnees IN ('devkum', 'bazg_daily')"
+        );
+        $repeatedFailure = $service->exchangeHistory(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseA
+        );
+        $this->same(
+            'Actualisation BNS impossible : les dernières données conservées sont affichées.',
+            $repeatedFailure['refresh']['monthly']['warning'],
+            'échec BNS du jour reste visible sans nouvelle tentative'
+        );
+        $this->same(
+            'Actualisation OFDF impossible : le dernier taux quotidien conservé est affiché.',
+            $repeatedFailure['refresh']['daily']['warning'],
+            'échec OFDF du jour reste visible sans nouvelle tentative'
+        );
+        $this->same(
+            ['devkum' => 1, 'zimoma' => 1, 'daily' => 1],
+            $calls,
+            'échec déjà tenté ne relance pas les sources le même jour'
+        );
         $this->true(
             IntegrityChecker::check($pdo)['ok'],
             'intégrité après synchronisation des données de marché'

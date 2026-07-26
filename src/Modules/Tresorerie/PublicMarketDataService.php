@@ -144,13 +144,22 @@ final class PublicMarketDataService
         $stmt->execute([$dataset]);
         $latest = (string) ($stmt->fetchColumn() ?: '');
         $lastAttempt = $this->pdo->prepare(
-            'SELECT substr(tente_le, 1, 10) FROM actualisations_marche_publiques
+            'SELECT substr(tente_le, 1, 10) AS date_tentative, statut
+             FROM actualisations_marche_publiques
              WHERE jeu_donnees = ?'
         );
         $lastAttempt->execute([$dataset]);
-        $attemptDate = (string) ($lastAttempt->fetchColumn() ?: '');
-        if ($latest >= $expected || $attemptDate === $today->format('Y-m-d')) {
+        $attempt = $lastAttempt->fetch();
+        if ($latest >= $expected) {
             return '';
+        }
+        if (
+            $attempt !== false
+            && (string) $attempt['date_tentative'] === $today->format('Y-m-d')
+        ) {
+            return (string) $attempt['statut'] === 'echec'
+                ? 'Actualisation BNS impossible : les dernières données conservées sont affichées.'
+                : '';
         }
         $url = $dataset === 'devkum' ? self::SNB_EXCHANGE_URL : self::SNB_INTEREST_URL;
         try {
@@ -180,12 +189,19 @@ final class PublicMarketDataService
             return '';
         }
         $lastAttempt = $this->pdo->prepare(
-            'SELECT substr(tente_le, 1, 10) FROM actualisations_marche_publiques
+            'SELECT substr(tente_le, 1, 10) AS date_tentative, statut
+             FROM actualisations_marche_publiques
              WHERE jeu_donnees = \'bazg_daily\''
         );
         $lastAttempt->execute();
-        if ((string) ($lastAttempt->fetchColumn() ?: '') === $requested) {
-            return '';
+        $attempt = $lastAttempt->fetch();
+        if (
+            $attempt !== false
+            && (string) $attempt['date_tentative'] === $requested
+        ) {
+            return (string) $attempt['statut'] === 'echec'
+                ? 'Actualisation OFDF impossible : le dernier taux quotidien conservé est affiché.'
+                : '';
         }
         $error = 'Aucun taux quotidien disponible.';
         for ($offset = 0; $offset <= 7; $offset++) {
