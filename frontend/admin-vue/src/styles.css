@@ -883,6 +883,174 @@ textarea {
   white-space: nowrap !important;
 }
 
+.accounting-header,
+.section-heading,
+.button-row,
+.inline-create,
+.metric-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.compact-control,
+.wide-control,
+.stack,
+.entry-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.compact-control {
+  min-width: 14rem;
+}
+
+.wide-control {
+  max-width: 38rem;
+  margin-bottom: 1rem;
+}
+
+.workspace-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.form-grid.three {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.editable-table {
+  min-width: 760px;
+}
+
+.editable-table input,
+.editable-table select {
+  min-width: 7rem;
+  width: 100%;
+}
+
+.editable-table td,
+.editable-table th {
+  vertical-align: middle;
+}
+
+.editable-table .inactive {
+  opacity: 0.62;
+}
+
+.icon-button {
+  min-width: 2rem;
+  min-height: 2rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.button.small {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.button.danger {
+  border-color: #a73b42;
+  color: #8e222b;
+  background: #fff7f7;
+}
+
+.notice.success {
+  padding: 0.75rem 1rem;
+  border: 1px solid #91b89a;
+  border-radius: 0.55rem;
+  color: #245c31;
+  background: #f2faf4;
+}
+
+.status-chip.ok {
+  color: #245c31;
+  background: #eaf7ed;
+}
+
+.status-chip.warning {
+  color: #7c4c00;
+  background: #fff4d9;
+}
+
+.metric-strip {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+
+.metric-strip > span {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 12rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+}
+
+.metric-strip small {
+  color: var(--muted);
+}
+
+.t-account > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 2px solid var(--primary);
+}
+
+.t-account section {
+  min-height: 12rem;
+  padding: 1rem;
+}
+
+.t-account section + section {
+  border-left: 2px solid var(--primary);
+}
+
+.subtabs {
+  display: flex;
+  gap: 0.25rem;
+  margin: 1rem 0;
+  overflow-x: auto;
+}
+
+.subtabs button {
+  padding: 0.55rem 0.8rem;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.subtabs button.active {
+  border-bottom-color: var(--primary);
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.inline-create {
+  align-items: end;
+  margin-top: 1rem;
+}
+
+.inline-create > * {
+  min-width: 0;
+  flex: 1;
+}
+
 @keyframes skeleton {
   to {
     background-position-x: -200%;
@@ -960,6 +1128,29 @@ textarea {
 
   .page-header {
     display: block;
+  }
+
+  .form-grid.three,
+  .t-account > div {
+    grid-template-columns: 1fr;
+  }
+
+  .t-account section + section {
+    border-top: 2px solid var(--primary);
+    border-left: 0;
+  }
+
+  .accounting-header,
+  .section-heading,
+  .inline-create,
+  .metric-strip {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .compact-control {
+    width: 100%;
+    margin-top: 1rem;
   }
 }
 

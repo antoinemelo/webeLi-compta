@@ -5,27 +5,28 @@
 Conserver la base SQLite et faire évoluer le schéma courant. Ne pas créer une
 seconde base applicative et ne pas convertir vers PostgreSQL.
 
-Les migrations 001 à 010 sont un historique immuable. La première évolution
-porte le numéro 011. Avant application : verrou de maintenance, sauvegarde
-SQLite vérifiée, espace disque contrôlé, plan affiché, puis `integrity_check` et
-`foreign_key_check`.
+Le projet étant encore exclusivement en développement, les anciens incréments
+001 à 012 sont consolidés dans `001_initial.sql`. Une base vide atteint
+directement le modèle courant. Cette base initiale peut encore être corrigée
+avant son gel, avec reconstruction explicite de la base de développement,
+sauvegarde de confort, `integrity_check` et `foreign_key_check`.
 
-## Évolutions proposées
+À partir du premier déploiement contenant des données à conserver, la base
+initiale est gelée. Toute évolution suivante reçoit alors un nouveau numéro et
+respecte sauvegarde, préconditions, transformation idempotente et contrôles.
 
-- 011 : registre des modules, préférences d'interface et métadonnées d'entité
-  légale sur `organisations`.
-- 012 : conditions de paiement et projections de tableau de bord si des tables
-  matérialisées sont réellement nécessaires.
-- 013 : dépenses et modèles récurrents.
-- 014 : factures récurrentes et échéances explicites.
-- 015 : ordres de paiement et lots pain.001.
-- 016 : immobilisations, plans et dotations.
-- 017 : paie mensuelle et récapitulatifs annuels.
-- 018 : montants d'origine, devises et snapshots de taux de change.
-- 019 : groupes de consolidation, mappings et éliminations.
+## Évolutions proposées après gel
 
-Les numéros sont réservés par le plan ; l'agent doit vérifier le dépôt avant de
-les employer et prendre les prochains numéros libres.
+- dépenses et modèles récurrents ;
+- factures récurrentes et échéances explicites ;
+- ordres de paiement et lots pain.001 ;
+- immobilisations, plans et dotations ;
+- paie mensuelle et récapitulatifs annuels ;
+- montants d'origine, devises et snapshots de taux de change ;
+- groupes de consolidation, mappings et éliminations.
+
+Les numéros ne sont pas réservés par le plan : l'agent vérifie le dépôt et
+prend le prochain numéro libre seulement après le gel.
 
 ## Multi-devise
 

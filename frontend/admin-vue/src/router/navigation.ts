@@ -25,6 +25,7 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
   accounting: [
     { key: 'entries', label: 'Journalisation', path: '/compta' },
     { key: 'accounts', label: 'Extraits', path: '/compta/extraits' },
+    { key: 'chart', label: 'Plan comptable', path: '/compta/plan' },
     { key: 'statements', label: 'États financiers', path: '/compta/etats' },
     { key: 'vat', label: 'TVA', path: '/compta/tva' },
     { key: 'assets', label: 'Amortissements', path: '/compta/amortissements' }

@@ -31,6 +31,7 @@ Les exemples versionnés sont :
 - `collection.success.json` ;
 - `dashboard.success.json` ;
 - `configuration.success.json` ;
+- `accounting.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -50,6 +51,13 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
 | POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
 | POST | `/api/v1/configuration/payment-defaults` | nouveau défaut client ou fournisseur |
+| GET | `/api/v1/accounting` | exercice, journal, extrait et plan issus du moteur comptable |
+| POST | `/api/v1/accounting/entries` | création et éventuelle validation d’une écriture |
+| POST | `/api/v1/accounting/chart/types` | libellés des types de comptes |
+| POST | `/api/v1/accounting/chart/sense-rules` | préfixes de fonctionnement créditeur |
+| POST | `/api/v1/accounting/chart/rubrics` | création, édition, ordre ou retrait d’une rubrique |
+| POST | `/api/v1/accounting/chart/accounts` | création, édition, ordre ou désactivation d’un compte |
+| POST | `/api/v1/accounting/opening` | enregistrement ou validation des soldes d’ouverture |
 
 Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
@@ -78,6 +86,12 @@ scope de session : les identifiants d’organisation ou de dossier sont refusés
 dans la charge utile. Les versions optimistes protègent l’identité et les
 modules contre les écrasements concurrents.
 
+La lecture comptable exige `exercise_id` et accepte `account_id` pour demander
+un extrait. Les mutations utilisent uniquement le scope de session et les
+services `EntryService` et `ChartOfAccountsService`. Elles exigent
+respectivement `compta.edit`, `compta.setup` ou `compta.validate`. Tous les
+montants transmis sont des centimes entiers.
+
 ## Erreurs
 
 - `401 AUTHENTICATION_REQUIRED` : session absente ou utilisateur inactif ;
@@ -93,7 +107,7 @@ générique sans nom ni métadonnée de la ressource visée.
 
 ## Retour arrière
 
-Les routes initiales restent compatibles. Les migrations de configuration
-étant additives, revenir avant leur introduction nécessite de restaurer la
+La base de développement est reconstruite depuis `001_initial.sql`. Après le
+gel de production, tout retour arrière de schéma se fera par restauration de la
 sauvegarde SQLite créée avant migration. Voir
 [`../../configuration.md`](../../configuration.md).

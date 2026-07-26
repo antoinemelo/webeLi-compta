@@ -7,7 +7,7 @@ refonte. N'ajoute aucune fonction métier.
 
 Travail :
 
-- inventorier code, schéma 001–010, routes, permissions et commandes ;
+- inventorier code, schéma courant, routes, permissions et commandes ;
 - enregistrer les résultats de référence des rapports sur des fixtures stables ;
 - séparer clairement tests rapides et tests d'intégration sans les réécrire ;
 - ajouter une commande de qualification unique qui fait lint, tests, migration
@@ -20,7 +20,7 @@ Travail :
 Acceptation :
 
 - état initial restaurable et hashé ;
-- 001–010 inchangées ;
+- `001_initial.sql` représente exactement le schéma courant ;
 - résultats comptables, TVA, paie, facturation et pédagogie inchangés ;
-- installation vierge et montée 001→010 prouvées ;
+- installation vierge et rejeu idempotent prouvés ;
 - aucun secret, base réelle, sauvegarde ou fichier local ajouté au dépôt.

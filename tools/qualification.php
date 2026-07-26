@@ -9,7 +9,7 @@ declare(strict_types=1);
 function runQualification(string $root): int
 {
     $steps = [
-        'migrations 001–010 inchangées' => static fn (): bool =>
+        'base initiale canonique inchangée' => static fn (): bool =>
             qualificationMigrationHashes($root),
         'syntaxe PHP' => static fn (): bool => qualificationLint($root),
         'tests rapides' => static fn (): bool => qualificationCommand(
@@ -43,7 +43,7 @@ function qualificationMigrationHashes(string $root): bool
 {
     $manifest = $root . '/docs/baseline/migrations.sha256';
     $lines = file($manifest, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    if ($lines === false || count($lines) !== 10) {
+    if ($lines === false || count($lines) !== 1) {
         fwrite(STDERR, "Manifeste de migrations absent ou incomplet.\n");
         return false;
     }

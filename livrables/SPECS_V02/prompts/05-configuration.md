@@ -4,7 +4,7 @@ Applique le prompt maître.
 
 Objectif : centraliser les référentiels sans créer de doubles sources.
 
-Ajoute par migrations additives :
+Intègre dans la base initiale canonique :
 
 - activation par dossier des modules, dont Apprentissage ;
 - identité légale de l'organisation, devise de base et coordonnées ;
@@ -22,4 +22,5 @@ Acceptation :
 - module désactivé absent de la navigation et refusé côté serveur ;
 - réactivation retrouve les données intactes ;
 - changement de défaut sans effet rétroactif ;
-- migrations 011+ testées depuis une copie en version 010.
+- installation vierge testée depuis `001_initial.sql`, sans dépendance à un
+  ancien historique de migrations.

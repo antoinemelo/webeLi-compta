@@ -62,7 +62,7 @@ use Compta\Core\Support\Html;
                 Structure, comptes, fonctionnement et ouvertures.
               </p>
               <a class="btn btn-primary"
-                href="<?= Html::escape($config->url('/compta/plan')) ?>">Plan comptable et ouvertures</a>
+                href="<?= Html::escape($config->url('/app/compta/plan')) ?>">Plan comptable et ouvertures</a>
             </div>
           </article>
         </div>

@@ -17,7 +17,7 @@ src/Modules/<Module>/
   Application/            cas d'usage et DTO simples
   Domain/                 règles/invariants quand ils existent réellement
   Infrastructure/         PDO, fichiers, PDF, parseurs
-database/migrations/      001–010 immuables, nouvelles versions additives
+database/migrations/      001_initial canonique, puis versions additives après gel
 tests/                    unitaires, intégration SQLite, contrats HTTP, E2E
 ```
 
@@ -51,13 +51,13 @@ Le moteur conserve :
 - scopes organisation/dossier/exercice à chaque requête ;
 - snapshots pour tout paramètre daté.
 
-## Vue progressive
+## Vue unifiée
 
 Le shell Vue apporte navigation, onglets compacts, composants de formulaire,
 tables, graphiques accessibles, gestion des erreurs et changements non
-enregistrés. Les routes PHP historiques restent disponibles derrière un
-feature flag jusqu'à parité. Une page est basculée seulement après tests E2E et
-comparaison des résultats avec l'écran historique.
+enregistrés. Lorsqu'un parcours atteint la parité, les routes PHP historiques
+redirigent vers Vue et leurs gabarits sont retirés. Les services PHP demeurent
+la source métier unique derrière l'API.
 
 ## Hébergement mutualisé
 

@@ -165,6 +165,115 @@ export type ConfigurationPayload = {
   };
 };
 
+export type AccountingWorkspace = {
+  exercise: {
+    id: number;
+    label: string;
+    start_date: string;
+    end_date: string;
+  };
+  catalog: {
+    exercises: Array<{
+      id: number;
+      label: string;
+      start_date: string;
+      end_date: string;
+      status: string;
+    }>;
+    journals: Array<{ id: number; code: string; label: string; type: string }>;
+    accounts: Array<{
+      id: number;
+      number: string;
+      label: string;
+      normal_side: 'debit' | 'credit';
+    }>;
+  };
+  chart: {
+    types: Array<{
+      id: number;
+      code: string;
+      label: string;
+      order: number;
+      version: number;
+    }>;
+    credit_prefixes: string[];
+    rubrics: Array<{
+      id: number;
+      code: string;
+      label: string;
+      structure_level: 'classe' | 'groupe_principal' | 'groupe' | 'sous_groupe';
+      type: 'actif' | 'passif' | 'produit' | 'charge' | 'hors_bilan';
+      parent_id: number | null;
+      path: string;
+      order: number;
+      version: number;
+    }>;
+    accounts: Array<{
+      id: number;
+      number: string;
+      label: string;
+      type: string;
+      normal_side: 'debit' | 'credit';
+      sense_mode: 'automatique' | 'debit' | 'credit';
+      rubric_id: number | null;
+      rubric_path: string;
+      active: boolean;
+      order: number;
+      version: number;
+    }>;
+  };
+  opening: {
+    id: number;
+    status: 'absent' | 'brouillon' | 'validee' | 'contre_passee';
+    number: string;
+    version: number;
+    soldes: Record<string, number>;
+    total_debit_centimes: number;
+    total_credit_centimes: number;
+  };
+  journal: {
+    items: Array<{
+      id: number;
+      numero: string;
+      date_comptable: string;
+      libelle: string;
+      reference: string;
+      statut: string;
+      journal: string;
+      comptes_debit: string;
+      comptes_credit: string;
+      debit_centimes: number;
+      credit_centimes: number;
+    }>;
+    total: number;
+    page: number;
+    par_page: number;
+    pages: number;
+  };
+  ledger: null | {
+    items: Array<{
+      ecriture_id: number;
+      numero: string;
+      date_comptable: string;
+      journal: string;
+      reference: string;
+      libelle: string;
+      debit_centimes: number;
+      credit_centimes: number;
+      solde_centimes: number;
+    }>;
+    account: {
+      id: number;
+      numero: string;
+      libelle: string;
+      sens_normal: 'debit' | 'credit';
+    };
+    total_debit_centimes: number;
+    total_credit_centimes: number;
+    solde_centimes: number;
+  };
+};
+
 export type DashboardAging = {
   not_due: number;
   days_1_30: number;

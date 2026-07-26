@@ -15,6 +15,9 @@ use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Security\NativeSessionStore;
 use Compta\Modules\Compta\ChartOfAccountsService;
+use Compta\Modules\Compta\AccountingApiController;
+use Compta\Modules\Compta\AccountingInputValidator;
+use Compta\Modules\Compta\AccountingWorkspaceService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\ReportingService;
 use Compta\Modules\Configuration\Application\ConfigurationService;
@@ -64,6 +67,7 @@ $auth = new AuthService(
 );
 $access = new AccessControl($pdo);
 $reports = new ReportingService($pdo);
+$chart = new ChartOfAccountsService($pdo, $audit);
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
 $apiRoutes = new ApiRouteRegistry(
@@ -91,6 +95,13 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         $configuration,
         new ConfigurationInputValidator()
+    ),
+    new AccountingApiController(
+        $session,
+        $auth,
+        $access,
+        new AccountingWorkspaceService($chart, $entries, $reports),
+        new AccountingInputValidator()
     )
 );
 $shellPage = new ShellPageController(
@@ -112,8 +123,6 @@ return [
         $access,
         $audit,
         $reports,
-        new ChartOfAccountsService($pdo, $audit),
-        $entries,
         new ContactService($pdo, $audit),
         new BillingService($pdo, $audit, $entries),
         new PaymentService($pdo, $audit, $entries),

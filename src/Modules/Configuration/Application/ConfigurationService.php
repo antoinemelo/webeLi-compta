@@ -538,7 +538,7 @@ final class ConfigurationService
                 [$organisationId, $dossierId]
             ),
             'items' => [],
-            'legacy_path' => '/compta/plan',
+            'legacy_path' => '/app/compta/plan',
         ];
         return $result;
     }

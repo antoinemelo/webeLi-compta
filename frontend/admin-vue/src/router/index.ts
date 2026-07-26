@@ -3,6 +3,7 @@ import { runtimeConfig } from '@/config';
 import { canDiscardChanges } from '@/composables/unsavedChanges';
 import DashboardView from '@/views/DashboardView.vue';
 import ConfigurationView from '@/views/ConfigurationView.vue';
+import AccountingView from '@/views/AccountingView.vue';
 import WorkspaceView from '@/views/WorkspaceView.vue';
 
 const workspace = (
@@ -23,7 +24,12 @@ const routes: RouteRecordRaw[] = [
   workspace('/apprentissage/:tab?', 'learning', 'Apprentissage', 'learning', '/pedagogie'),
   workspace('/liquidites/:tab?', 'liquidity', 'Liquidités', 'liquidity', '/'),
   workspace('/facturation/:tab?', 'billing', 'Facturation', 'billing', '/facturation'),
-  workspace('/compta/:tab?', 'accounting', 'Comptabilité', 'accounting', '/compta'),
+  {
+    path: '/compta/:tab?',
+    name: 'accounting',
+    component: AccountingView,
+    meta: { label: 'Comptabilité', section: 'accounting' }
+  },
   workspace('/salaires/:tab?', 'payroll', 'Salaires', 'payroll', '/salaires'),
   {
     path: '/configuration/:tab?',

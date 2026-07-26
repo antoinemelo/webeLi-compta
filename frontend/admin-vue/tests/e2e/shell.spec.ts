@@ -126,3 +126,26 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Plan comptable' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Débiteurs et créanciers' })).toBeVisible();
 });
+
+test('journal, extrait et plan comptable utilisent le parcours Vue unique', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+
+  await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Nouvelle écriture' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Écritures récentes' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Extraits', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Extrait de compte' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Plan comptable' }).click();
+  await expect(page).toHaveURL(/\/e2e\/app\/compta\/plan$/);
+  await expect(page.getByRole('heading', { name: 'Plan comptable' })).toBeVisible();
+  await expect(page.getByLabel('Sections du plan comptable')).toBeVisible();
+
+  const legacy = await page.request.get('/e2e/compta/plan', { maxRedirects: 0 });
+  expect(legacy.status()).toBe(303);
+  expect(legacy.headers().location).toBe('/e2e/app/compta/plan');
+});

@@ -7,6 +7,7 @@ use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Http\Router;
 use Compta\Core\Security\Csrf;
+use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
@@ -19,6 +20,7 @@ final class ApiRouteRegistry
         private readonly DashboardApiController $dashboard,
         private readonly Csrf $csrf,
         private readonly ?ConfigurationApiController $configuration = null,
+        private readonly ?AccountingApiController $accounting = null,
     ) {
     }
 
@@ -62,6 +64,50 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/configuration/payment-defaults',
                 $this->configuration->updatePaymentDefault(...)
+            );
+        }
+        if ($this->accounting !== null) {
+            $this->add(
+                $router,
+                'GET',
+                '/api/v1/accounting',
+                $this->accounting->show(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/entries',
+                $this->accounting->createEntry(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/chart/types',
+                $this->accounting->saveTypes(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/chart/sense-rules',
+                $this->accounting->saveSenseRules(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/chart/rubrics',
+                $this->accounting->mutateRubric(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/chart/accounts',
+                $this->accounting->mutateAccount(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/opening',
+                $this->accounting->saveOpening(...)
             );
         }
     }

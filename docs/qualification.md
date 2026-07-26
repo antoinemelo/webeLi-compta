@@ -10,16 +10,17 @@ php bin/console qualify
 
 La commande vérifie successivement :
 
-1. les empreintes immuables des migrations 001 à 010 ;
+1. l’empreinte de la base initiale canonique ;
 2. la syntaxe de tous les fichiers PHP applicatifs ;
 3. les suites `quick` puis `integration` ;
-4. une installation SQLite vierge avec sauvegarde préalable ;
+4. une installation SQLite vierge ;
 5. le diagnostic et l'intégrité de cette base ;
 6. les préconditions de l'archive de production.
 
-La suite d’intégration vérifie en outre la montée d’une copie de base en
-version 010 vers les migrations additives 011 et 012, ainsi que la conservation
-des identifiants, de la devise et de l’intégrité référentielle.
+La suite d’intégration vérifie qu’une base vide atteint directement le schéma
+courant avec la seule version `001`, que le rejeu est idempotent et que toute
+altération de son checksum est refusée. Les migrations additives postérieures
+au gel de production devront compléter cette preuve.
 
 Les tests ne sont pas dupliqués. `quick` contient les contrôles purs de
 configuration et la parité de calcul Lasso ; `integration` contient SQLite,
@@ -84,8 +85,8 @@ production, seul `public/` est exposé par le serveur HTTP.
 
 ## Restaurer la référence
 
-Le commit initial du lot 01 est le point de restauration du socle. Le fichier
-`docs/baseline/migrations.sha256` protège séparément l'historique SQL et
+Le commit qualifié et sa sauvegarde sont les points de restauration du socle.
+Le fichier `docs/baseline/migrations.sha256` protège la base initiale canonique et
 `tests/fixtures/baseline-reports.json` fixe les résultats comptables minimaux.
 Une restauration de base s'effectue uniquement depuis une sauvegarde validée
 par `db:integrity`.

@@ -9,22 +9,32 @@ ses fonctions métier. Pour les charges salariales, traite
 
 ## Objectif intangible
 
-Faire évoluer COMPTA par petits incréments. Conserver son moteur, ses données,
-ses résultats et ses comportements éprouvés. Adopter Vue et les bons principes
-de Gäld, pas sa pile Laravel/PostgreSQL/Redis.
+Conserver les règles, résultats et comportements éprouvés du moteur COMPTA,
+mais faire converger toute l'application vers une architecture unique :
+services PHP, API JSON interne, Vue et SQLite. Le projet est encore en
+développement : le schéma et les données de développement peuvent être
+reconstruits lorsque cela supprime une dette ou une double source. Adopter les
+bons principes de Gäld, pas sa pile Laravel/PostgreSQL/Redis.
 
 ## Garde-fous
 
 - PHP 8.2+, PDO SQLite et hébergement mutualisé restent obligatoires.
-- Ne modifie jamais les migrations 001 à 010 ni une migration déjà appliquée.
-- Sauvegarde vérifiée avant migration ; intégrité et clés étrangères après.
-- Ne recrée pas la base, ne vide aucune table et ne renumérote aucun identifiant.
+- `001_initial.sql` est la base canonique de développement. Tant que le schéma
+  n'est pas gelé pour la production, préfère une reconstruction propre à une
+  chaîne de migrations héritée artificiellement.
+- Après gel de production, toute évolution devient une migration additive et
+  toute base réelle est sauvegardée et contrôlée avant application.
+- Une reconstruction de développement est explicite, précédée d'une sauvegarde
+  de confort et suivie des contrôles d'intégrité.
 - Tous les montants sont des entiers en unité mineure ; aucun `float`.
 - Toute écriture validée est équilibrée, immuable et corrigée par
   contre-passation.
 - Toute mutation est transactionnelle, scopée et idempotente quand rejouable.
 - Une transaction bancaire ou un document n'est jamais le grand livre.
-- Vue appelle une API JSON interne versionnée ; aucun SQL dans les contrôleurs.
+- Vue est l'interface applicative unique. Elle appelle une API JSON interne
+  versionnée ; aucun SQL ni règle comptable dans les contrôleurs.
+- Les services PHP existants sont l'unique moteur métier : aucun traitement
+  parallèle dans Vue, les contrôleurs ou d'anciens gabarits PHP.
 - Session, RBAC, CSRF et audit existants s'appliquent aux routes JSON.
 - Pas de CDN, worker, Redis, Docker ou service externe obligatoire.
 - Ne copie aucun code Gäld AGPL sans décision explicite.
@@ -34,8 +44,8 @@ de Gäld, pas sa pile Laravel/PostgreSQL/Redis.
 
 1. Établis l'état initial et les fichiers touchés.
 2. Écris les tests qui fixent le comportement à conserver.
-3. Implémente le plus petit changement complet.
-4. Exécute lint, tests ciblés, suite COMPTA, migration sur copie et build Vue.
+3. Implémente un parcours vertical complet et retire les doublons qu'il remplace.
+4. Exécute lint, tests ciblés, suite COMPTA, installation vierge et build Vue.
 5. Rapporte les preuves, limites et procédure de retour arrière.
 
 Si une décision métier manque, n'invente pas une règle légale. Rends-la

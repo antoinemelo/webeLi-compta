@@ -1,7 +1,8 @@
 # Plan comptable configurable
 
-L’écran **Plan comptable et ouvertures** est disponible depuis le tableau de
-bord après sélection d’un dossier. Les modifications exigent la permission
+L’écran Vue **Plan comptable** est disponible sous `/app/compta/plan` après
+sélection d’un dossier. Les anciennes routes PHP redirigent vers cette vue
+unique. Les modifications exigent la permission
 `compta.setup`; la validation d’une ouverture exige aussi `compta.validate`.
 Chaque plan est propre au couple organisation/dossier : types, règles,
 rubriques, comptes et ordre peuvent diverger sans affecter un autre dossier.
@@ -88,10 +89,9 @@ immuable et toute correction passe par une contre-passation.
 
 ## Navigation
 
-Les fonctions sont présentées dans cet ordre : types de comptes, rubriques,
-moins/plus standards, comptes et ouverture. Les niveaux structurels ont leurs
-propres sous-onglets compacts. Les tableaux s’étendent avec leur contenu :
-aucun ascenseur vertical interne ne concurrence celui de la page.
-Chaque panneau possède un unique bouton **Modifier** qui enregistre ensemble
-les lignes et leur ordre. Un changement d’onglet ou de page signale toute
-modification non enregistrée.
+Les fonctions sont présentées dans cet ordre : types de comptes, règles de
+sens, rubriques, comptes et ouverture. Les niveaux structurels ont leurs
+propres contrôles compacts. Les tableaux s’étendent avec leur contenu : aucun
+ascenseur vertical interne ne concurrence celui de la page. Vue ne calcule
+aucune règle comptable ; toutes les mutations appellent l'API et les services
+PHP qui alimentaient déjà le moteur.

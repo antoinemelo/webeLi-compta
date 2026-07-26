@@ -1,0 +1,46 @@
+{
+  "data": {
+    "exercise": {
+      "id": 1,
+      "label": "2026",
+      "start_date": "2026-01-01",
+      "end_date": "2026-12-31"
+    },
+    "catalog": {
+      "exercises": [],
+      "journals": [],
+      "accounts": []
+    },
+    "chart": {
+      "types": [],
+      "credit_prefixes": ["2", "3"],
+      "rubrics": [],
+      "accounts": []
+    },
+    "opening": {
+      "status": "absent",
+      "entry_id": null,
+      "number": null,
+      "soldes": {}
+    },
+    "journal": {
+      "items": [],
+      "pagination": {
+        "page": 1,
+        "par_page": 50,
+        "total": 0,
+        "pages": 0
+      },
+      "totals": {
+        "debit_centimes": 0,
+        "credit_centimes": 0
+      }
+    },
+    "ledger": null
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "4b5d2fa95e374f2896b7eb9c4d8afb62"
+  },
+  "errors": []
+}

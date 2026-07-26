@@ -21,6 +21,9 @@ use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Security\ArraySessionStore;
 use Compta\Core\Security\Csrf;
 use Compta\Modules\Compta\AccountingSetupService;
+use Compta\Modules\Compta\AccountingApiController;
+use Compta\Modules\Compta\AccountingInputValidator;
+use Compta\Modules\Compta\AccountingWorkspaceService;
 use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
@@ -407,10 +410,7 @@ final class Tests
         [$pdo, $runner] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            [
-                '001', '002', '003', '004', '005', '006',
-                '007', '008', '009', '010', '011', '012',
-            ],
+            ['001'],
             $applied,
             'migrations initiales appliquées'
         );
@@ -420,122 +420,27 @@ final class Tests
         $this->same('5000', (string) $pdo->query('PRAGMA busy_timeout')->fetchColumn(), 'busy timeout');
         $this->same('wal', mb_strtolower((string) $pdo->query('PRAGMA journal_mode')->fetchColumn()), 'WAL actif');
 
-        $versionTenDirectory = $this->tempDir() . '/migrations';
-        mkdir($versionTenDirectory, 0770, true);
-        foreach (range(1, 10) as $version) {
-            $prefix = str_pad((string) $version, 3, '0', STR_PAD_LEFT);
-            $source = glob(dirname(__DIR__) . "/database/migrations/{$prefix}_*.sql")[0];
-            copy($source, $versionTenDirectory . '/' . basename($source));
-        }
-        $versionTenPdo = ConnectionFactory::sqlite(
-            $this->tempDir() . '/version-010.sqlite'
-        );
-        $versionTenRunner = new MigrationRunner($versionTenPdo, $versionTenDirectory);
-        $versionTenRunner->apply();
-        $versionTenPdo->exec(
-            "INSERT INTO organisations (id, nom, nature)
-                VALUES (41, 'Organisation reprise', 'reelle');
-             INSERT INTO dossiers (id, organisation_id, nom, slug, type, monnaie)
-                VALUES (73, 41, 'Dossier repris', 'dossier-repris', 'reel', 'CHF');"
-        );
-        foreach ([11, 12] as $version) {
-            $prefix = str_pad((string) $version, 3, '0', STR_PAD_LEFT);
-            $source = glob(dirname(__DIR__) . "/database/migrations/{$prefix}_*.sql")[0];
-            copy($source, $versionTenDirectory . '/' . basename($source));
-        }
         $this->same(
-            ['011', '012'],
-            $versionTenRunner->apply(),
-            'copie en version 010 montée additivement vers 012'
-        );
-        $this->same(
-            '41|73|CHF',
-            (string) $versionTenPdo->query(
-                "SELECT o.id || '|' || d.id || '|' || d.monnaie
-                 FROM organisations o JOIN dossiers d ON d.organisation_id = o.id
-                 WHERE o.id = 41 AND d.id = 73"
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM schema_migrations WHERE version = '001'"
             )->fetchColumn(),
-            'identifiants et devise conservés après reprise 010'
+            'une seule base initiale canonique'
         );
         $this->same(
             5,
-            (int) $versionTenPdo->query(
-                'SELECT COUNT(*) FROM modules_dossier WHERE dossier_id = 73'
-            )->fetchColumn(),
-            'modules initialisés sans recréer le dossier'
+            (int) $pdo->query('SELECT COUNT(*) FROM modules_application')
+                ->fetchColumn(),
+            'référentiel de modules inclus dans la base initiale'
         );
-        $this->true(
-            IntegrityChecker::check($versionTenPdo)['ok'],
-            'intégrité de la copie version 010 après migrations 011–012'
-        );
-
-        $upgradeDirectory = $this->tempDir() . '/migrations';
-        mkdir($upgradeDirectory, 0770, true);
-        foreach (range(1, 5) as $version) {
-            $prefix = str_pad((string) $version, 3, '0', STR_PAD_LEFT);
-            $source = glob(dirname(__DIR__) . "/database/migrations/{$prefix}_*.sql")[0];
-            copy($source, $upgradeDirectory . '/' . basename($source));
-        }
-        $upgradePdo = ConnectionFactory::sqlite(
-            $this->tempDir() . '/upgrade-plan.sqlite'
-        );
-        (new MigrationRunner($upgradePdo, $upgradeDirectory))->apply();
-        $upgradePdo->exec(
-            "INSERT INTO organisations (id, nom, nature)
-                VALUES (1, 'Test reprise', 'pedagogique');
-             INSERT INTO dossiers (id, organisation_id, nom, slug, type)
-                VALUES (1, 1, 'Dossier', 'dossier', 'exercice');
-             INSERT INTO comptes
-                (id, organisation_id, dossier_id, numero, libelle, type,
-                 sens_normal, sens_mode, parent_id, niveau, imputable)
-                VALUES
-                (1, 1, 1, '1', 'ACTIFS', 'actif', 'debit', 'automatique', NULL, 1, 0),
-                (2, 1, 1, '10', 'Actif circulant', 'actif', 'debit', 'automatique', 1, 2, 0),
-                (3, 1, 1, '100', 'Trésorerie', 'actif', 'debit', 'automatique', 2, 3, 0),
-                (4, 1, 1, '1020', 'Avoirs en banque', 'actif', 'debit', 'automatique', 3, 4, 1),
-                (5, 1, 1, '3', 'PRODUITS', 'produit', 'credit', 'automatique', NULL, 1, 0),
-                (6, 1, 1, '3000', 'Ventes', 'produit', 'credit', 'automatique', 5, 4, 1);
-             INSERT INTO rubriques_comptables
-                (id, organisation_id, dossier_id, prefixe, libelle, type, ordre)
-                VALUES
-                (1, 1, 1, '1', 'ACTIFS', 'actif', 1),
-                (2, 1, 1, '10', 'Actif circulant', 'actif', 2),
-                (3, 1, 1, '100', 'Trésorerie', 'actif', 3),
-                (4, 1, 1, '3', 'PRODUITS', 'produit', 4);"
-        );
-        foreach ([6, 7, 8, 9, 10] as $version) {
-            $prefix = str_pad((string) $version, 3, '0', STR_PAD_LEFT);
-            $source = glob(dirname(__DIR__) . "/database/migrations/{$prefix}_*.sql")[0];
-            copy($source, $upgradeDirectory . '/' . basename($source));
-        }
-        (new MigrationRunner($upgradePdo, $upgradeDirectory))->apply();
-        $this->same(
-            '100',
-            (string) $upgradePdo->query(
-                "SELECT r.code
-                 FROM comptes c JOIN rubriques_comptables r ON r.id = c.rubrique_id
-                 WHERE c.numero = '1020'"
-            )->fetchColumn(),
-            'reprise 1020 vers son parent structurel 100'
-        );
-        $this->same(
-            '30|groupe_principal|produit',
-            (string) $upgradePdo->query(
-                "SELECT r.code || '|' || r.niveau_structure || '|' || c.type
-                 FROM comptes c JOIN rubriques_comptables r ON r.id = c.rubrique_id
-                 WHERE c.numero = '3000'"
-            )->fetchColumn(),
-            'parent structurel réel et type hérités lors de la reprise'
-        );
-
         $migrationDirectory = $this->tempDir() . '/migrations';
         mkdir($migrationDirectory, 0770, true);
-        copy(dirname(__DIR__) . '/database/migrations/001_core.sql', $migrationDirectory . '/001_core.sql');
+        copy(dirname(__DIR__) . '/database/migrations/001_initial.sql', $migrationDirectory . '/001_initial.sql');
         $dbPath = $this->tempDir() . '/checksum.sqlite';
         $checksumPdo = ConnectionFactory::sqlite($dbPath);
         $checksumRunner = new MigrationRunner($checksumPdo, $migrationDirectory);
         $checksumRunner->apply();
-        file_put_contents($migrationDirectory . '/001_core.sql', "\n-- mutation interdite\n", FILE_APPEND);
+        file_put_contents($migrationDirectory . '/001_initial.sql', "\n-- mutation interdite\n", FILE_APPEND);
         $statuses = array_column($checksumRunner->plan(), 'status');
         $this->true(in_array('mismatch', $statuses, true), 'checksum modifié détecté');
         $this->throws(fn () => $checksumRunner->apply(), 'migration modifiée bloquée');
@@ -1563,6 +1468,17 @@ final class Tests
                 $httpAccess,
                 $httpConfiguration,
                 new ConfigurationInputValidator()
+            ),
+            new AccountingApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new AccountingWorkspaceService(
+                    new ChartOfAccountsService($pdo, $httpAudit),
+                    $httpEntries,
+                    new ReportingService($pdo)
+                ),
+                new AccountingInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -1579,8 +1495,6 @@ final class Tests
             $httpAccess,
             $httpAudit,
             new ReportingService($pdo),
-            new ChartOfAccountsService($pdo, $httpAudit),
-            $httpEntries,
             new ContactService($pdo, $httpAudit),
             new BillingService($pdo, $httpAudit, $httpEntries),
             new PaymentService($pdo, $httpAudit, $httpEntries),
@@ -2011,6 +1925,7 @@ final class Tests
             'collection.success.json',
             'dashboard.success.json',
             'configuration.success.json',
+            'accounting.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(
@@ -2073,7 +1988,7 @@ final class Tests
         );
         $this->false(str_contains($dashboard->body, 'Organisation B'), 'autre organisation absente du HTML');
         $this->true(
-            str_contains($dashboard->body, '/edu/compta/plan'),
+            str_contains($dashboard->body, '/edu/app/compta/plan'),
             'accès au plan comptable depuis le tableau de bord'
         );
         $this->true(
@@ -2089,104 +2004,115 @@ final class Tests
             'accès à l’enseignement depuis le tableau de bord'
         );
         $accountingHome = $app->handle(new Request('GET', '/compta'));
-        $this->same(200, $accountingHome->status, 'espace de travail comptable accessible');
-        $this->true(
-            str_contains($accountingHome->body, 'Journalisation')
-            && str_contains($accountingHome->body, 'Extrait de compte')
-            && str_contains($accountingHome->body, 'Grand livre')
-            && str_contains($accountingHome->body, 'Soldes initiaux')
-            && str_contains($accountingHome->body, 'Bilan et résultat'),
-            'gestes comptables historiques remis au premier plan'
+        $this->same(303, $accountingHome->status, 'ancien espace comptable redirigé');
+        $this->same(
+            '/edu/app/compta',
+            $accountingHome->headers['Location'] ?? '',
+            'redirection comptable vers Vue'
         );
         $entryScreen = $app->handle(new Request('GET', '/compta/saisie'));
-        $this->same(200, $entryScreen->status, 'écran de saisie comptable accessible');
-        $this->true(
-            str_contains($entryScreen->body, 'data-entry-form')
-            && str_contains($entryScreen->body, 'aria-live="polite"')
-            && str_contains($entryScreen->body, 'Lignes de l’écriture comptable')
-            && str_contains($entryScreen->body, 'data-entry-difference')
-            && str_contains($entryScreen->body, 'name="compte_debit"')
-            && str_contains($entryScreen->body, 'name="compte_credit"')
-            && str_contains($entryScreen->body, 'name="montant"')
-            && str_contains($entryScreen->body, 'Écriture composée')
-            && str_contains($entryScreen->body, '/edu/assets/app.js'),
-            'journalisation simple et saisie composée disponibles'
+        $this->same(
+            '/edu/app/compta',
+            $entryScreen->headers['Location'] ?? '',
+            'ancienne saisie redirigée vers Vue'
         );
-        $entryNoCsrf = $app->handle(new Request('POST', '/compta/saisie', post: [
-            'exercice_id' => (string) $exerciseId,
-        ]));
-        $this->same(419, $entryNoCsrf->status, 'saisie comptable sans CSRF refusée');
         $entryCash = $this->accountId($pdo, $ids['dossier_a'], '1000');
         $entrySales = $this->accountId($pdo, $ids['dossier_a'], '3400');
-        $quickEntry = $app->handle(new Request('POST', '/compta/saisie', post: [
-            '_csrf' => $csrf->token(),
-            'action' => 'quick_validate',
-            'exercice_id' => (string) $exerciseId,
-            'journal_id' => (string) $httpJournal,
-            'date_comptable' => '2026-05-10',
-            'libelle' => 'Journalisation historique',
-            'reference' => 'JOURNAL-HIST',
-            'compte_debit' => (string) $entryCash,
-            'compte_credit' => (string) $entrySales,
-            'montant' => '25,30',
-        ]));
-        $this->same(303, $quickEntry->status, 'journalisation simple validée');
+        $apiAccounting = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting',
+            query: ['exercise_id' => (string) $exerciseId]
+        ));
+        $apiAccountingJson = $this->responseJson($apiAccounting);
+        $this->same(200, $apiAccounting->status, 'espace comptable Vue alimenté par API');
+        $this->true(
+            count($apiAccountingJson['data']['chart']['accounts'] ?? []) > 100
+            && count($apiAccountingJson['data']['chart']['rubrics'] ?? []) > 10,
+            'plan et structure exposés depuis la source métier unique'
+        );
+        $entryNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries',
+            json: ['data' => []]
+        ));
+        $this->same(403, $entryNoCsrf->status, 'saisie API sans CSRF refusée');
+        $quickEntry = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'exercise_id' => $exerciseId,
+                'journal_id' => $httpJournal,
+                'date' => '2026-05-10',
+                'label' => 'Journalisation Vue',
+                'reference' => 'JOURNAL-VUE',
+                'attachment_reference' => '',
+                'validate' => true,
+                'lines' => [
+                    [
+                        'account_id' => $entryCash,
+                        'label' => '',
+                        'debit_cents' => 2530,
+                        'credit_cents' => 0,
+                    ],
+                    [
+                        'account_id' => $entrySales,
+                        'label' => '',
+                        'debit_cents' => 0,
+                        'credit_cents' => 2530,
+                    ],
+                ],
+            ]]
+        ));
+        $this->same(200, $quickEntry->status, 'journalisation Vue validée');
         $this->same(
             2530,
             (int) $pdo->query(
                 "SELECT l.debit_centimes FROM lignes_ecriture l
                  JOIN ecritures e ON e.id = l.ecriture_id
-                 WHERE e.reference = 'JOURNAL-HIST' AND l.debit_centimes > 0"
+                 WHERE e.reference = 'JOURNAL-VUE' AND l.debit_centimes > 0"
             )->fetchColumn(),
-            'montant simple enregistré rigoureusement en centimes'
+            'montant API conservé rigoureusement en centimes'
         );
-        $sameAccountEntry = $app->handle(new Request('POST', '/compta/saisie', post: [
-            '_csrf' => $csrf->token(),
-            'action' => 'quick_validate',
-            'exercice_id' => (string) $exerciseId,
-            'journal_id' => (string) $httpJournal,
-            'date_comptable' => '2026-05-11',
-            'libelle' => 'Même compte interdit',
-            'reference' => 'SAME-ACCOUNT',
-            'compte_debit' => (string) $entryCash,
-            'compte_credit' => (string) $entryCash,
-            'montant' => '10.00',
-        ]));
-        $this->true(
-            $sameAccountEntry->status === 303
-            && str_contains($sameAccountEntry->headers['Location'], 'erreur='),
-            'journalisation simple refuse le même compte des deux côtés'
-        );
+        $sameAccountEntry = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'exercise_id' => $exerciseId,
+                'journal_id' => $httpJournal,
+                'date' => '2026-05-11',
+                'label' => 'Même compte interdit',
+                'reference' => 'SAME-ACCOUNT',
+                'attachment_reference' => '',
+                'validate' => true,
+                'lines' => [
+                    ['account_id' => $entryCash, 'label' => '', 'debit_cents' => 1000, 'credit_cents' => 0],
+                    ['account_id' => $entryCash, 'label' => '', 'debit_cents' => 0, 'credit_cents' => 1000],
+                ],
+            ]]
+        ));
+        $this->same(422, $sameAccountEntry->status, 'API refuse une écriture sur un seul compte');
         $this->same(
             0,
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM ecritures WHERE reference = 'SAME-ACCOUNT'"
             )->fetchColumn(),
-            'saisie simple invalide sans écriture partielle'
+            'refus API sans écriture partielle'
         );
-        $accountList = $app->handle(new Request('GET', '/compta/compte', query: [
-            'compte' => (string) $entryCash,
-            'exercice' => (string) $exerciseId,
-            'vue' => 'liste',
-        ]));
-        $this->same(200, $accountList->status, 'extrait de compte en liste accessible');
+        $apiLedger = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting',
+            query: [
+                'exercise_id' => (string) $exerciseId,
+                'account_id' => (string) $entryCash,
+            ]
+        ));
+        $apiLedgerJson = $this->responseJson($apiLedger);
         $this->true(
-            str_contains($accountList->body, '1000')
-            && str_contains($accountList->body, 'Journalisation historique')
-            && str_contains($accountList->body, '25,30 CHF')
-            && str_contains($accountList->body, 'Nouvelle opération liée à ce compte'),
-            'extrait lié au compte avec mouvements et action contextuelle'
-        );
-        $accountT = $app->handle(new Request('GET', '/compta/compte', query: [
-            'compte' => (string) $entryCash,
-            'exercice' => (string) $exerciseId,
-            'vue' => 't',
-        ]));
-        $this->true(
-            str_contains($accountT->body, 'Compte en T')
-            && str_contains($accountT->body, 'id="t-debit"')
-            && str_contains($accountT->body, 'id="t-credit"'),
-            'présentation historique en compte T disponible'
+            ($apiLedgerJson['data']['ledger']['account']['numero'] ?? '') === '1000'
+            && ($apiLedgerJson['data']['ledger']['total_debit_centimes'] ?? 0) >= 2530,
+            'extrait liste et compte en T alimentés par la même projection'
         );
         $grandLivreGateway = $app->handle(new Request('GET', '/compta/grand-livre'));
         $this->same(200, $grandLivreGateway->status, 'grand livre synthétique accessible sans choisir un compte');
@@ -2195,26 +2121,31 @@ final class Tests
             && str_contains($grandLivreGateway->body, 'Solde final CHF'),
             'grand livre reprend soldes initiaux, mouvements et soldes finaux'
         );
-        $entryPost = $app->handle(new Request('POST', '/compta/saisie', post: [
-            '_csrf' => $csrf->token(),
-            'action' => 'validate',
-            'exercice_id' => (string) $exerciseId,
-            'journal_id' => (string) $httpJournal,
-            'date_comptable' => '2026-06-15',
-            'libelle' => 'Vente saisie au clavier',
-            'reference' => 'UI-08',
-            'compte_1' => (string) $entryCash,
-            'debit_1' => '125.50',
-            'compte_2' => (string) $entrySales,
-            'credit_2' => '125,50',
-        ]));
-        $this->same(303, $entryPost->status, 'écriture équilibrée validée depuis l’interface');
+        $entryPost = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'exercise_id' => $exerciseId,
+                'journal_id' => $httpJournal,
+                'date' => '2026-06-15',
+                'label' => 'Vente saisie dans Vue',
+                'reference' => 'UI-VUE-08',
+                'attachment_reference' => '',
+                'validate' => true,
+                'lines' => [
+                    ['account_id' => $entryCash, 'label' => '', 'debit_cents' => 12550, 'credit_cents' => 0],
+                    ['account_id' => $entrySales, 'label' => '', 'debit_cents' => 0, 'credit_cents' => 12550],
+                ],
+            ]]
+        ));
+        $this->same(200, $entryPost->status, 'écriture équilibrée validée depuis Vue');
         $this->same(
             'validee',
             (string) $pdo->query(
-                "SELECT statut FROM ecritures WHERE reference = 'UI-08'"
+                "SELECT statut FROM ecritures WHERE reference = 'UI-VUE-08'"
             )->fetchColumn(),
-            'contrôle serveur conservé derrière la saisie progressive'
+            'contrôle serveur conservé derrière l’interface Vue'
         );
         $journalScreen = $app->handle(new Request('GET', '/compta/journal', query: [
             'exercice' => (string) $exerciseId,
@@ -2416,123 +2347,57 @@ final class Tests
             $csv->headers['Content-Type'],
             'export CSV HTTP'
         );
-        $plan = $app->handle(new Request('GET', '/compta/plan', query: [
-            'exercice' => (string) $exerciseId,
-        ]));
-        $this->same(200, $plan->status, 'écran du plan comptable accessible');
-        $this->true(
-            str_contains($plan->body, 'Comptes fonctionnant par défaut en --/++')
-            && str_contains($plan->body, '1. Types de comptes')
-            && str_contains($plan->body, 'Rubriques et structure de bouclement')
-            && str_contains($plan->body, '3. Moins / plus standards')
-            && str_contains($plan->body, '4. Comptes')
-            && str_contains($plan->body, '<th>Code</th><th>Libellé</th>')
-            && !str_contains($plan->body, 'Code fonctionnel')
-            && !str_contains($plan->body, '<th>Classes</th>')
-            && str_contains($plan->body, 'Groupes principaux')
-            && str_contains($plan->body, 'Sous-groupes')
-            && str_contains($plan->body, '>⋮</button>')
-            && str_contains($plan->body, '>++/--<')
-            && str_contains($plan->body, 'data-dirty-panel')
-            && str_contains($plan->body, 'data-panel-submit')
-            && substr_count($plan->body, 'data-panel-submit') === 6
-            && str_contains($plan->body, '<th>Fonctionnement</th>')
-            && !str_contains($plan->body, 'value="save">Modifier</button>')
-            && !str_contains($plan->body, 'Automatique selon les préfixes')
-            && str_contains($plan->body, 'data-bs-toggle="tab"')
-            && str_contains($plan->body, '/assets/plan.js'),
-            'ordre des onglets, libellés compacts et niveaux structurels présents'
-        );
-        $accountParentStart = strpos($plan->body, 'id="new-account-rubric"');
-        $accountParentHtml = $accountParentStart === false
-            ? ''
-            : substr(
-                $plan->body,
-                $accountParentStart,
-                (int) strpos($plan->body, '</select>', $accountParentStart) - $accountParentStart
-            );
-        $this->true(
-            strpos($accountParentHtml, '28 Capitaux propres')
-                < strpos($accountParentHtml, '280 Capital social')
-            && strpos($accountParentHtml, '280 Capital social')
-                < strpos($accountParentHtml, '290 Réserves')
-            && strpos($accountParentHtml, '290 Réserves')
-                < strpos($accountParentHtml, '30 Produits bruts'),
-            'parents de comptes triés dans l’ordre numérique spécial'
-        );
-        $groupParentStart = strpos($plan->body, 'id="new-parent-groupe"');
-        $groupParentHtml = $groupParentStart === false
-            ? ''
-            : substr(
-                $plan->body,
-                $groupParentStart,
-                (int) strpos($plan->body, '</select>', $groupParentStart) - $groupParentStart
-            );
-        $groupParentText = preg_replace('/\s+/', ' ', strip_tags($groupParentHtml));
-        $this->true(
-            is_string($groupParentText)
-            && str_contains($groupParentText, 'Actifs circulants')
-            && !str_contains($groupParentText, '10 Actifs circulants'),
-            'parents des groupes affichés sans numéro'
-        );
-        $planScript = file_get_contents(dirname(__DIR__) . '/public/assets/plan.js');
-        $this->true(
-            is_string($planScript)
-            && str_contains(
-                $planScript,
-                'Des modifications de ce panneau ne sont pas encore enregistrées.'
-            )
-            && str_contains($planScript, 'beforeunload'),
-            'modifications et ordres non enregistrés signalés'
-        );
-        $interfaceScript = file_get_contents(dirname(__DIR__) . '/public/assets/app.js');
-        $interfaceCss = file_get_contents(dirname(__DIR__) . '/public/assets/app.css');
-        $this->true(
-            is_string($planScript)
-            && str_contains($planScript, "['ArrowUp', 'ArrowDown']")
-            && str_contains($plan->body, 'aria-keyshortcuts="ArrowUp ArrowDown"'),
-            'ordre du plan modifiable au clavier sans dépendre du glisser-déposer'
+        $plan = $app->handle(new Request('GET', '/compta/plan'));
+        $this->same(303, $plan->status, 'ancien plan comptable redirigé');
+        $this->same(
+            '/edu/app/compta/plan',
+            $plan->headers['Location'] ?? '',
+            'plan comptable servi par Vue'
         );
         $this->true(
-            is_string($interfaceScript)
-            && str_contains($interfaceScript, 'data-entry-debit')
-            && str_contains($interfaceScript, 'beforeunload')
-            && is_string($interfaceCss)
-            && str_contains($interfaceCss, '@media (max-width: 360px)')
-            && str_contains($interfaceCss, '@media print')
-            && str_contains($interfaceCss, ':focus-visible')
-            && str_contains($interfaceCss, 'prefers-reduced-motion'),
-            'contrôles automatisés 360 px, impression, focus et mouvement réduit'
+            !is_file(dirname(__DIR__) . '/templates/compta/plan.php')
+            && is_file(dirname(__DIR__) . '/frontend/admin-vue/src/views/AccountingView.vue'),
+            'ancien template supprimé au profit de la vue unique'
         );
-        $openingPanel = strstr($plan->body, 'id="panel-ouverture"');
-        $this->true(
-            is_string($openingPanel)
-            && str_contains($openingPanel, 'name="solde_')
-            && !str_contains($openingPanel, '>3000<')
-            && !str_contains($openingPanel, '>9200<'),
-            'ouverture limitée aux comptes actifs et passifs'
-        );
-        $planNoCsrf = $app->handle(new Request('POST', '/compta/plan/sens', post: [
-            'prefixes' => '2, 3',
-            'exercice_id' => (string) $exerciseId,
-        ]));
-        $this->same(419, $planNoCsrf->status, 'configuration sans CSRF refusée');
-        $planRules = $app->handle(new Request('POST', '/compta/plan/sens', post: [
-            '_csrf' => $csrf->token(),
-            'prefixes' => '2, 3, 7',
-            'exercice_id' => (string) $exerciseId,
-        ]));
-        $this->same(303, $planRules->status, 'règles de sens modifiables par HTTP');
+        $planNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/sense-rules',
+            json: ['data' => ['prefixes' => ['2', '3']]]
+        ));
+        $this->same(403, $planNoCsrf->status, 'configuration comptable API sans CSRF refusée');
+        $planRules = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/sense-rules',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['prefixes' => ['2', '3', '7']]]
+        ));
+        $this->same(200, $planRules->status, 'règles de sens modifiables par API');
         $this->same(
             3,
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM regles_sens_comptes
                  WHERE dossier_id = {$ids['dossier_a']}"
             )->fetchColumn(),
-            'règles HTTP persistées'
+            'règles API persistées par le service existant'
         );
+        $scopeInjection = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/accounts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'action' => 'save',
+                'id' => 0,
+                'number' => '1998',
+                'label' => 'Injection',
+                'sense_mode' => 'automatique',
+                'rubric_id' => null,
+                'version' => 0,
+                'ordered_ids' => [],
+                'dossier_id' => $ids['dossier_b'],
+            ]]
+        ));
+        $this->same(422, $scopeInjection->status, 'API comptable refuse un scope injecté');
     }
-
     private function accountingTests(): void
     {
         [$pdo, $runner] = $this->database();

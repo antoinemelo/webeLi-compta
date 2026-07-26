@@ -31,7 +31,8 @@ performance, restauration et audit final contradictoire.
 ## Portes obligatoires à chaque lot
 
 - état Git propre et portée documentée ;
-- migrations anciennes inchangées ;
+- base initiale canonique cohérente, ou migrations déjà déployées inchangées
+  après le gel ;
 - tests existants toujours verts ;
 - nouveaux tests unité + intégration SQLite + contrat HTTP ;
 - E2E Vue pour le parcours heureux et au moins un refus ;

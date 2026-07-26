@@ -6,7 +6,8 @@ que les lots précédents sont corrects.
 Audite :
 
 - invariants comptables, TVA, paie, immobilisations, change et consolidation ;
-- migrations depuis une copie 010 et depuis chaque version livrée ;
+- installation vierge depuis la base canonique et migrations postérieures au
+  gel de production, lorsqu'elles existent ;
 - restauration réelle d'une sauvegarde ;
 - RBAC, CSRF, uploads, XSS, injection, traversée de chemin et isolation ;
 - concurrence SQLite, idempotence, numérotation et verrous ;

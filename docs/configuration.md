@@ -49,20 +49,19 @@ la condition résolue et ses paramètres sont copiés dans un snapshot. Une
 facture émise conserve ainsi son échéance et son historique lorsque les
 réglages futurs changent.
 
-## Migrations et retour arrière
+## Base canonique et retour arrière
 
-Les migrations additives sont :
+L'identité, les modules et les conditions de paiement font partie de
+`database/migrations/001_initial.sql`. Une installation de développement est
+donc créée directement dans son état fonctionnel courant, sans rejouer
+l'historique intermédiaire des lots.
 
-- `011_configuration_modules.sql` : identité légale, registre des modules et
-  activation par dossier ;
-- `012_conditions_paiement.sql` : conditions datées, défauts et snapshots de
-  facturation.
-
-Elles ont été testées sur une copie arrêtée à la version 010. Avant application,
-`php bin/console db:migrate --apply --backup` crée une sauvegarde vérifiable.
-Un retour arrière applicatif nécessite la restauration de cette sauvegarde :
-les colonnes ajoutées ne doivent pas être retirées manuellement d’une base en
-service.
+Jusqu'au gel de production, une modification structurelle cohérente met à jour
+cette base initiale et reconstruit la base de développement après une sauvegarde
+de confort. Après le gel, les évolutions seront additives et
+`php bin/console db:migrate --apply --backup` redeviendra obligatoire pour une
+base en service. Un retour arrière s'effectue toujours par restauration d'une
+sauvegarde contrôlée, jamais en retirant manuellement des colonnes.
 
 Les taux de charges sociales restent ceux du module Salaires, issus de la
 correspondance Lasso documentée. Leur import et leur évolution annuelle

@@ -10,7 +10,8 @@ PostgreSQL. La cible est un monolithe modulaire :
 - PHP 8.2+ et SQLite conservés pour l'hébergement mutualisé ;
 - Vue 3, TypeScript et Vite adoptés progressivement selon le modèle du CMS (sous /home/amelo/Documents/DEV/Ecol_WebeLi/web/mod/);
 - API JSON interne, versionnée et petite, sans reproduire Inertia ou Eloquent ;
-- migrations additives à partir de la version 011, avec sauvegarde vérifiée ;
+- base SQLite canonique reconstruisible en développement, puis migrations
+  additives après le gel de production ;
 - modules métier alimentant tous le même grand livre.
 - taux et paramètres de charges salariales repris prioritairement de Lasso,
   puis convertis au format entier et versionné de COMPTA.
@@ -36,8 +37,9 @@ PostgreSQL. La cible est un monolithe modulaire :
    atomique. Ne jamais lancer plusieurs lots qui modifient le schéma en parallèle.
 4. Exiger les critères d'acceptation et les commandes de preuve avant de passer
    au lot suivant.
-5. Une migration appliquée n'est jamais réécrite : toute évolution prend un
-   nouveau numéro.
+5. Jusqu'au gel de production, maintenir une base initiale propre et
+   reconstruire les données de développement. Après le gel, une migration
+   appliquée n'est jamais réécrite.
 
 La consolidation et la multi-devise sont volontairement placées après les
 parcours mono-entité en CHF. Elles sont importantes, mais ne doivent pas
