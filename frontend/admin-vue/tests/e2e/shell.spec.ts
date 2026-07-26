@@ -176,3 +176,43 @@ test('journal, extrait et plan comptable utilisent le parcours Vue unique', asyn
   expect(legacy.status()).toBe(303);
   expect(legacy.headers().location).toBe('/e2e/app/compta/plan');
 });
+
+test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Liquidités', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Utilisation des liquidités' })).toBeVisible();
+  await page.getByRole('button', { name: 'Nouvelle dépense' }).click();
+  await page.getByLabel('Fournisseur', { exact: true }).selectOption({
+    label: 'Fournitures E2E SA'
+  });
+  await page.getByLabel('Numéro fournisseur').fill('E2E-DEP-001');
+  await page.getByLabel('Date du document').fill('2026-07-20');
+  await page.getByLabel('Échéance').fill('2026-08-19');
+  const payable = page.getByLabel('Compte collectif fournisseur');
+  const payableValue = await payable.locator('option').filter({ hasText: '2000' }).getAttribute('value');
+  await payable.selectOption(String(payableValue));
+  await page.getByLabel('Justificatif').setInputFiles({
+    name: 'preuve.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4\\n%%EOF')
+  });
+  await page.getByLabel('Libellé', { exact: true }).fill('Fournitures de bureau');
+  await page.getByLabel('Montant', { exact: true }).fill('100.00');
+  const expenseAccount = page.getByLabel('Compte de charge');
+  const expenseValue = await expenseAccount.locator('option').filter({ hasText: '6500' }).getAttribute('value');
+  await expenseAccount.selectOption(String(expenseValue));
+  await page.getByLabel('Code TVA').selectOption({ label: 'AM81 · Achats 8,1 %' });
+  await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
+  const row = page.getByRole('row').filter({ hasText: 'Fournitures E2E SA' });
+  await expect(row).toContainText('108.10 CHF');
+  await expect(row).toContainText('Brouillon');
+  await row.getByRole('button', { name: 'Soumettre' }).click();
+  await expect(row).toContainText('À approuver');
+  await row.getByRole('button', { name: 'Approuver' }).click();
+  await expect(row).toContainText('Approuvé');
+  await row.getByRole('button', { name: 'Comptabiliser' }).click();
+  await expect(row).toContainText('Comptabilisé');
+});

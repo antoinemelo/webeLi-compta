@@ -12,10 +12,12 @@ use Compta\Core\Diagnostics\Doctor;
 use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Compta\AccountingSetupService;
+use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
+use Compta\Modules\Tresorerie\ExpenseService;
 use Compta\Modules\Tva\Ech0217ExportService;
 use Compta\Modules\Tva\Ech0217Validator;
 use Compta\Modules\Tva\VatStatementService;
@@ -65,6 +67,7 @@ try {
         'tresorerie:import-preview' => previewBankImport($pdo, $options),
         'tresorerie:import-confirm' => confirmBankImport($pdo, $options),
         'tresorerie:etat' => treasuryState($pdo, $options),
+        'depenses:recurrences-generer' => generateRecurringExpenses($pdo, $options),
         'tva:periode-create' => createVatPeriod($pdo, $options),
         'tva:decompte-prepare' => prepareVatStatement($pdo, $options),
         'tva:decompte-control' => controlVatStatement($pdo, $options),
@@ -100,6 +103,7 @@ Compta — commandes du socle
   tresorerie:import-preview --organisation=1 --dossier=1 --tresorerie=1 --fichier=/chemin/releve.xml
   tresorerie:import-confirm --organisation=1 --dossier=1 --import=1
   tresorerie:etat --organisation=1 --dossier=1 --tresorerie=1 [--date=2026-12-31]
+  depenses:recurrences-generer --organisation=1 --dossier=1 [--jusqu-au=2026-12-31]
   tva:periode-create --organisation=1 --dossier=1 --debut=2026-01-01 --fin=2026-03-31
   tva:decompte-prepare --organisation=1 --dossier=1 --periode=1 [--rectifie=1]
   tva:decompte-control --organisation=1 --dossier=1 --decompte=1
@@ -323,6 +327,29 @@ function createTreasuryAccount(PDO $pdo, array $options): int
         'monnaie' => is_string($options['monnaie'] ?? null) ? $options['monnaie'] : 'CHF',
     ]);
     echo "Compte de trésorerie créé : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function generateRecurringExpenses(PDO $pdo, array $options): int
+{
+    $audit = new AuditLogger($pdo);
+    $date = is_string($options['jusqu-au'] ?? null)
+        ? $options['jusqu-au']
+        : date('Y-m-d');
+    $ids = (new ExpenseService(
+        $pdo,
+        $audit,
+        new EntryService($pdo, $audit)
+    ))->generateDue(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        $date
+    );
+    echo json_encode(
+        ['jusqu_au' => $date, 'documents' => $ids, 'nombre' => count($ids)],
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
+    ) . "\n";
     return 0;
 }
 

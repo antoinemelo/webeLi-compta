@@ -274,7 +274,13 @@ CREATE TABLE documents_financiers (
         )
     ),
     statut TEXT NOT NULL DEFAULT 'brouillon'
-        CHECK (statut IN ('brouillon', 'emis', 'comptabilise', 'annule')),
+        CHECK (statut IN (
+            'brouillon', 'a_approuver', 'approuve',
+            'emis', 'comptabilise', 'annule'
+        )),
+    workflow TEXT NOT NULL DEFAULT 'facturation'
+        CHECK (workflow IN ('facturation', 'depense')),
+    cle_generation TEXT NOT NULL DEFAULT '',
     numero TEXT NOT NULL DEFAULT '',
     numero_externe TEXT NOT NULL DEFAULT '',
     date_document TEXT NOT NULL,
@@ -295,8 +301,13 @@ CREATE TABLE documents_financiers (
     pdf_archive BLOB,
     pdf_empreinte_sha256 TEXT NOT NULL DEFAULT '',
     emis_le TEXT,
+    soumis_le TEXT,
+    soumis_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    approuve_le TEXT,
+    approuve_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     comptabilise_le TEXT,
     annule_le TEXT,
+    annule_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     modifie_le TEXT,
@@ -306,8 +317,45 @@ CREATE TABLE documents_financiers (
     CHECK (total_brut_centimes = total_net_centimes + total_tva_centimes),
     CHECK (
         (statut = 'brouillon' AND numero = '')
-        OR (statut <> 'brouillon' AND numero <> '')
+        OR statut = 'annule'
+        OR (statut NOT IN ('brouillon', 'annule') AND numero <> '')
     )
+);
+
+CREATE TABLE modeles_depenses_recurrentes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
+    libelle TEXT NOT NULL,
+    periodicite TEXT NOT NULL
+        CHECK (periodicite IN ('hebdomadaire', 'mensuelle', 'trimestrielle', 'annuelle')),
+    intervalle INTEGER NOT NULL DEFAULT 1 CHECK (intervalle BETWEEN 1 AND 120),
+    prochaine_echeance TEXT NOT NULL,
+    jour_reference INTEGER NOT NULL CHECK (jour_reference BETWEEN 1 AND 31),
+    date_fin TEXT,
+    jours_echeance INTEGER NOT NULL DEFAULT 30 CHECK (jours_echeance BETWEEN 0 AND 365),
+    compte_collectif_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    numero_externe_prefixe TEXT NOT NULL DEFAULT 'REC',
+    lignes_json TEXT NOT NULL CHECK (json_valid(lignes_json)),
+    statut TEXT NOT NULL DEFAULT 'actif'
+        CHECK (statut IN ('actif', 'pause', 'termine')),
+    derniere_generation_le TEXT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE generations_depenses_recurrentes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    modele_id INTEGER NOT NULL
+        REFERENCES modeles_depenses_recurrentes(id) ON DELETE RESTRICT,
+    date_generation TEXT NOT NULL,
+    document_id INTEGER NOT NULL REFERENCES documents_financiers(id) ON DELETE RESTRICT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (modele_id, date_generation),
+    UNIQUE (document_id)
 );
 
 CREATE TABLE dossiers (
@@ -1474,6 +1522,16 @@ CREATE INDEX idx_documents_condition_paiement
 
 CREATE INDEX idx_documents_scope_etat
     ON documents_financiers(dossier_id, type, statut, date_echeance, contact_id);
+
+CREATE UNIQUE INDEX idx_documents_generation_unique
+    ON documents_financiers(dossier_id, cle_generation)
+    WHERE cle_generation <> '';
+
+CREATE INDEX idx_depenses_scope_etat
+    ON documents_financiers(dossier_id, workflow, statut, date_echeance);
+
+CREATE INDEX idx_modeles_depenses_echeance
+    ON modeles_depenses_recurrentes(dossier_id, statut, prochaine_echeance);
 
 CREATE INDEX idx_dossiers_organisation ON dossiers(organisation_id);
 
@@ -2715,6 +2773,10 @@ INSERT INTO "permissions" ("id", "code", "libelle") VALUES (39, 'pedagogie.manag
 INSERT INTO "permissions" ("id", "code", "libelle") VALUES (40, 'pedagogie.correct', 'Valider les étapes et autoriser les corrections');
 INSERT INTO "permissions" ("id", "code", "libelle") VALUES (41, 'pedagogie.reset', 'Réinitialiser une copie d’exercice');
 INSERT INTO "permissions" ("id", "code", "libelle") VALUES (42, 'pedagogie.export', 'Exporter le suivi pédagogique');
+INSERT INTO "permissions" ("id", "code", "libelle") VALUES (43, 'depenses.view', 'Consulter les dépenses');
+INSERT INTO "permissions" ("id", "code", "libelle") VALUES (44, 'depenses.manage', 'Gérer les brouillons et récurrences de dépenses');
+INSERT INTO "permissions" ("id", "code", "libelle") VALUES (45, 'depenses.approve', 'Approuver les dépenses');
+INSERT INTO "permissions" ("id", "code", "libelle") VALUES (46, 'depenses.post', 'Comptabiliser et contre-passer les dépenses');
 
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 1);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 2);
@@ -2848,6 +2910,19 @@ INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (6, 14);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (6, 18);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (6, 24);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (6, 30);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 43);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 44);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 45);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 46);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (2, 43);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (2, 44);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (2, 45);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (2, 46);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 43);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 44);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 45);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 46);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (6, 43);
 
 INSERT INTO "tva_taux_legaux" ("id", "categorie", "libelle", "taux_bp", "date_debut", "date_fin", "source_url", "verifie_le", "cree_le") VALUES (1, 'normal', 'Taux normal', 810, '2024-01-01', NULL, 'https://www.estv.admin.ch/fr/taux-de-la-tva-suisse', '2026-07-25', '2026-07-25 00:00:00');
 INSERT INTO "tva_taux_legaux" ("id", "categorie", "libelle", "taux_bp", "date_debut", "date_fin", "source_url", "verifie_le", "cree_le") VALUES (2, 'reduit', 'Taux réduit', 260, '2024-01-01', NULL, 'https://www.estv.admin.ch/fr/taux-de-la-tva-suisse', '2026-07-25', '2026-07-25 00:00:00');

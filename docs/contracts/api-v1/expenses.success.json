@@ -1,0 +1,50 @@
+{
+  "data": {
+    "expenses": [
+      {
+        "id": 31,
+        "number": "DEP-2026-001",
+        "external_number": "FOU-8891",
+        "status": "a_approuver",
+        "version": 3,
+        "contact_id": 8,
+        "supplier": "Fournisseur SA",
+        "document_date": "2026-07-20",
+        "due_date": "2026-08-19",
+        "currency": "CHF",
+        "net_cents": 10000,
+        "vat_cents": 810,
+        "gross_cents": 10810,
+        "allocated_cents": 0,
+        "open_cents": 10810,
+        "attachment": {
+          "id": 12,
+          "name": "facture.pdf",
+          "type": "application/pdf",
+          "size": 42130
+        },
+        "entry_id": null,
+        "reversal_entry_id": null,
+        "lines": []
+      }
+    ],
+    "recurrences": [],
+    "catalog": {
+      "suppliers": [],
+      "accounts": [],
+      "vat_codes": [],
+      "exercises": [],
+      "journals": []
+    },
+    "capabilities": {
+      "manage": true,
+      "approve": true,
+      "post": true
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-expenses-0001"
+  },
+  "errors": []
+}

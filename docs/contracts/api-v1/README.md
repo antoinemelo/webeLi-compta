@@ -33,6 +33,7 @@ Les exemples versionnés sont :
 - `configuration.success.json` ;
 - `accounting.success.json` ;
 - `managed-references.success.json` ;
+- `expenses.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -68,6 +69,15 @@ Les exemples versionnés sont :
 | POST | `/api/v1/accounting/chart/rubrics` | création, édition, ordre ou retrait d’une rubrique |
 | POST | `/api/v1/accounting/chart/accounts` | création, édition, ordre ou désactivation d’un compte |
 | POST | `/api/v1/accounting/opening` | enregistrement ou validation des soldes d’ouverture |
+| GET | `/api/v1/liquidites` | dépenses, récurrences, pièces et catalogues du dossier |
+| POST | `/api/v1/liquidites/depenses` | création d’une dépense en brouillon |
+| POST | `/api/v1/liquidites/depenses/soumettre` | soumission à approbation |
+| POST | `/api/v1/liquidites/depenses/approuver` | approbation explicite |
+| POST | `/api/v1/liquidites/depenses/comptabiliser` | comptabilisation via `EntryService` |
+| POST | `/api/v1/liquidites/depenses/annuler` | annulation et contre-passation si nécessaire |
+| POST | `/api/v1/liquidites/recurrences` | création d’un modèle récurrent |
+| POST | `/api/v1/liquidites/recurrences/pause` | suspension ou reprise optimiste |
+| POST | `/api/v1/liquidites/recurrences/generer` | génération idempotente des échéances |
 
 Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
@@ -108,6 +118,12 @@ un extrait. Les mutations utilisent uniquement le scope de session et les
 services `EntryService` et `ChartOfAccountsService`. Elles exigent
 respectivement `compta.edit`, `compta.setup` ou `compta.validate`. Tous les
 montants transmis sont des centimes entiers.
+
+Les dépenses utilisent le même document fournisseur, les mêmes contacts, codes
+TVA, comptes, pièces jointes, paiements et allocations que Facturation. Elles
+ajoutent un workflow explicite `brouillon → à approuver → approuvé →
+comptabilisé`. La création et la génération récurrente ne comptabilisent
+jamais. `depenses.approve` et `depenses.post` sont deux permissions distinctes.
 
 ## Erreurs
 

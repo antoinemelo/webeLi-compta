@@ -53,6 +53,9 @@ use Compta\Modules\Tresorerie\ReconciliationService;
 use Compta\Modules\Tresorerie\SuggestionService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
+use Compta\Modules\Tresorerie\ExpenseService;
+use Compta\Modules\Tresorerie\Http\ExpenseApiController;
+use Compta\Modules\Tresorerie\Http\ExpenseInputValidator;
 use Compta\Modules\Tva\Ech0217ExportService;
 use Compta\Modules\Tva\Ech0217Validator;
 use Compta\Modules\Tva\VatCalculator;
@@ -130,6 +133,10 @@ final class Tests
             'débiteurs, créanciers, paiements et QR-facture' => [
                 'integration',
                 fn () => $this->billingTests(),
+            ],
+            'dépenses, approbation et récurrences' => [
+                'integration',
+                fn () => $this->expenseTests(),
             ],
             'projection du tableau de bord' => [
                 'integration',
@@ -1506,6 +1513,14 @@ final class Tests
                     new ReportingService($pdo)
                 ),
                 new AccountingInputValidator()
+            ),
+            new ExpenseApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new ExpenseService($pdo, $httpAudit, $httpEntries),
+                new AttachmentService($pdo, $httpAudit),
+                new ExpenseInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -1701,6 +1716,19 @@ final class Tests
                  ORDER BY id DESC LIMIT 1"
             )->fetchColumn(),
             'corrélation conservée dans l’audit de mutation'
+        );
+        $apiExpenses = $app->handle(new Request('GET', '/api/v1/liquidites'));
+        $apiExpensesJson = $this->responseJson($apiExpenses);
+        $this->same(200, $apiExpenses->status, 'espace dépenses exposé en API');
+        $this->same(
+            ['expenses', 'recurrences', 'catalog', 'capabilities'],
+            array_keys($apiExpensesJson['data'] ?? []),
+            'contrat dépenses complet et stable'
+        );
+        $this->true(
+            ($apiExpensesJson['data']['capabilities']['approve'] ?? false)
+            && ($apiExpensesJson['data']['capabilities']['post'] ?? false),
+            'capacités approbateur et comptabilisateur exposées séparément'
         );
         $apiConfiguration = $app->handle(new Request(
             'GET',
@@ -5019,6 +5047,263 @@ final class Tests
             'test SCOR/QR/PDF exécuté sur PHP 8.2'
         );
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après facturation');
+    }
+
+    private function expenseTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $ids = $this->seedScopes($pdo);
+        $organisationId = $ids['organisation_a'];
+        $dossierId = $ids['dossier_a'];
+        $audit = new AuditLogger($pdo);
+        $scope = new ScopeManager($pdo, $audit);
+        $exercise = $scope->createExercise(
+            $dossierId,
+            'Exercice 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $setup = new AccountingSetupService($pdo, $audit);
+        $setup->createPeriod(
+            $organisationId,
+            $dossierId,
+            $exercise,
+            '2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $journal = $setup->createJournal(
+            $organisationId,
+            $dossierId,
+            'ACH',
+            'Achats'
+        );
+        (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))
+            ->installForDossier(
+                $organisationId,
+                $dossierId,
+                'personne_morale'
+            );
+        $payable = $this->accountId($pdo, $dossierId, '2000');
+        $expenseAccount = $this->accountId($pdo, $dossierId, '6500');
+        $inputVat = $this->accountId($pdo, $dossierId, '1170');
+        $vat = new VatConfigurationService($pdo, $audit);
+        $vat->addRegime([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'statut' => 'assujetti',
+            'numero_tva' => 'CHE-123.456.789 TVA',
+            'methode' => 'effective',
+            'mode_decompte' => 'convenues',
+            'periodicite' => 'trimestrielle',
+            'date_debut' => '2026-01-01',
+            'compte_impot_prealable_materiel_id' => $inputVat,
+            'compte_impot_prealable_investissements_id' =>
+                $this->accountId($pdo, $dossierId, '1171'),
+            'compte_tva_due_id' => $this->accountId($pdo, $dossierId, '2200'),
+            'compte_decompte_tva_id' => $this->accountId($pdo, $dossierId, '2201'),
+            'compte_corrections_id' => $expenseAccount,
+        ]);
+        $rate = (int) $pdo->query(
+            "SELECT id FROM tva_taux_legaux WHERE categorie = 'normal'
+             AND date_debut = '2024-01-01'"
+        )->fetchColumn();
+        $purchaseVat = $vat->addCode([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'code' => 'AM81',
+            'libelle' => 'Achats 8,1 %',
+            'traitement' => 'normal',
+            'nature' => 'prealable',
+            'taux_legal_id' => $rate,
+            'droit_deduction' => true,
+            'deduction_defaut_bp' => 10000,
+            'compte_tva_id' => $inputVat,
+            'date_debut' => '2024-01-01',
+        ]);
+        $supplier = (new ContactService($pdo, $audit))->create(
+            $organisationId,
+            $dossierId,
+            [
+                'type_personne' => 'entreprise',
+                'raison_sociale' => 'Fournisseur Liquidités SA',
+            ],
+            ['fournisseur'],
+            [
+                'ligne1' => 'Rue des Dépenses 6',
+                'code_postal' => '1200',
+                'localite' => 'Genève',
+                'pays' => 'CH',
+            ]
+        );
+        $proofId = (new AttachmentService($pdo, $audit))->store(
+            $organisationId,
+            $dossierId,
+            'justificatif.pdf',
+            "%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF"
+        );
+        $entries = new EntryService($pdo, $audit);
+        $expenses = new ExpenseService($pdo, $audit, $entries);
+        $line = [
+            'libelle' => 'Fournitures',
+            'quantite_milli' => 1000,
+            'prix_unitaire_centimes' => 10000,
+            'mode_saisie' => 'net',
+            'compte_id' => $expenseAccount,
+            'code_tva_id' => $purchaseVat,
+            'date_prestation' => '2026-01-31',
+        ];
+        $expenseId = $expenses->createDraft(
+            $organisationId,
+            $dossierId,
+            $supplier,
+            '2026-01-31',
+            '2026-02-28',
+            'FOU-2026-001',
+            $payable,
+            [$line],
+            $proofId
+        );
+        $created = $expenses->read($organisationId, $dossierId)['expenses'][0];
+        $billing = new BillingService($pdo, $audit, $entries);
+        $this->same(
+            [],
+            $billing->documents($organisationId, $dossierId),
+            'dépense absente de l’ancien parcours Facturation'
+        );
+        $this->same(10000, $created['net_cents'], 'dépense nette exacte au centime');
+        $this->same(810, $created['vat_cents'], 'TVA de dépense exacte au centime');
+        $this->same(10810, $created['gross_cents'], 'dépense brute exacte au centime');
+        $this->same(
+            0,
+            (int) $pdo->query('SELECT COUNT(*) FROM ecritures')->fetchColumn(),
+            'création sans comptabilisation automatique'
+        );
+        $this->same(
+            'application/pdf',
+            (string) $pdo->query(
+                "SELECT type_mime FROM pieces_jointes WHERE id = {$proofId}"
+            )->fetchColumn(),
+            'justificatif validé conservé dans SQLite hors webroot'
+        );
+        $number = $expenses->submit(
+            $organisationId,
+            $dossierId,
+            $expenseId,
+            2
+        );
+        $this->true(str_starts_with($number, 'DEP-2026-'), 'soumission numérotée');
+        $expenses->approve($organisationId, $dossierId, $expenseId, 3);
+        $this->throws(
+            fn () => $billing->post(
+                $organisationId,
+                $dossierId,
+                $expenseId,
+                $exercise,
+                $journal
+            ),
+            'ancien workflow Facturation ne contourne pas l’approbation dépenses'
+        );
+        $entryId = $expenses->post(
+            $organisationId,
+            $dossierId,
+            $expenseId,
+            $exercise,
+            $journal
+        );
+        $totals = $pdo->query(
+            "SELECT SUM(debit_centimes) AS debit, SUM(credit_centimes) AS credit
+             FROM lignes_ecriture WHERE ecriture_id = {$entryId}"
+        )->fetch();
+        $this->same(10810, (int) $totals['debit'], 'débits fournisseur équilibrés');
+        $this->same(10810, (int) $totals['credit'], 'crédits fournisseur équilibrés');
+        $this->same(
+            0,
+            (int) $pdo->query('SELECT COUNT(*) FROM paiements')->fetchColumn(),
+            'paiement non créé par la comptabilisation'
+        );
+        $reversal = $expenses->cancel(
+            $organisationId,
+            $dossierId,
+            $expenseId,
+            5,
+            '2026-02-01'
+        );
+        $this->true(is_int($reversal) && $reversal > 0, 'annulation par contre-passation');
+
+        $recurrenceId = $expenses->createRecurrence(
+            $organisationId,
+            $dossierId,
+            $supplier,
+            'Abonnement mensuel',
+            'mensuelle',
+            1,
+            '2026-01-31',
+            '2026-03-31',
+            30,
+            $payable,
+            'ABO',
+            [$line]
+        );
+        $firstRun = $expenses->generateDue(
+            $organisationId,
+            $dossierId,
+            '2026-01-31'
+        );
+        $secondRun = $expenses->generateDue(
+            $organisationId,
+            $dossierId,
+            '2026-01-31'
+        );
+        $this->same(1, count($firstRun), 'une échéance récurrente générée');
+        $this->same([], $secondRun, 'rejeu de génération sans doublon');
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM generations_depenses_recurrentes
+                 WHERE modele_id = {$recurrenceId}"
+            )->fetchColumn(),
+            'unicité modèle/date persistée'
+        );
+        $this->same(
+            '2026-02-28',
+            (string) $pdo->query(
+                "SELECT prochaine_echeance FROM modeles_depenses_recurrentes
+                 WHERE id = {$recurrenceId}"
+            )->fetchColumn(),
+            'fin de mois calculée sans saut de février'
+        );
+        $generatedId = $firstRun[0];
+        $this->throws(
+            fn () => $expenses->submit(
+                $organisationId,
+                $dossierId,
+                $generatedId,
+                2
+            ),
+            'brouillon récurrent sans justificatif non soumis'
+        );
+        $this->same(
+            [],
+            $expenses->read(
+                $ids['organisation_b'],
+                $ids['dossier_b']
+            )['expenses'],
+            'aucune fuite de dépense inter-dossiers'
+        );
+        $this->same(
+            2,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM permissions
+                 WHERE code IN ('depenses.approve', 'depenses.post')"
+            )->fetchColumn(),
+            'permissions approbation et comptabilisation distinctes'
+        );
+        $this->true(
+            IntegrityChecker::check($pdo)['ok'],
+            'intégrité après dépenses et récurrences'
+        );
     }
 
     private function treasuryTests(): void

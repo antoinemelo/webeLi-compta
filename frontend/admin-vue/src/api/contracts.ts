@@ -270,6 +270,67 @@ export type ManagedReferencesPayload = {
   };
 };
 
+export type ExpenseLine = {
+  id: number;
+  label: string;
+  quantity_milli: number;
+  unit_price_cents: number;
+  input_mode: 'net' | 'brut';
+  account_id: number;
+  vat_code_id: number;
+  net_cents: number;
+  vat_cents: number;
+  gross_cents: number;
+};
+
+export type ExpenseItem = {
+  id: number;
+  number: string;
+  external_number: string;
+  status: 'brouillon' | 'a_approuver' | 'approuve' | 'comptabilise' | 'annule';
+  version: number;
+  contact_id: number;
+  supplier: string;
+  document_date: string;
+  due_date: string;
+  currency: string;
+  net_cents: number;
+  vat_cents: number;
+  gross_cents: number;
+  allocated_cents: number;
+  open_cents: number;
+  attachment: null | { id: number; name: string; type: string; size: number };
+  entry_id: number | null;
+  reversal_entry_id: number | null;
+  lines: ExpenseLine[];
+};
+
+export type RecurringExpense = {
+  id: number;
+  label: string;
+  supplier: string;
+  frequency: 'hebdomadaire' | 'mensuelle' | 'trimestrielle' | 'annuelle';
+  interval: number;
+  next_date: string;
+  end_date: string | null;
+  status: 'actif' | 'pause' | 'termine';
+  generations: number;
+  version: number;
+};
+
+export type ExpensesPayload = {
+  expenses: ExpenseItem[];
+  recurrences: RecurringExpense[];
+  capabilities: { manage: boolean; approve: boolean; post: boolean };
+  catalog: {
+    suppliers: Array<{ id: number; label: string }>;
+    accounts: Array<{ id: number; number: string; label: string }>;
+    vat_codes: Array<{ id: number; code: string; label: string }>;
+    exercises: Array<{ id: number; label: string }>;
+    journals: Array<{ id: number; code: string; label: string }>;
+  };
+};
+
 export type AccountingWorkspace = {
   exercise: {
     id: number;

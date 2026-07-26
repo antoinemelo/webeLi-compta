@@ -25,7 +25,7 @@ Le retrait global de l’interface PHP n’est pas encore sûr :
 | Facturation | navigation et contacts | documents, émission, avoirs, paiements, allocations, rappels, PDF |
 | Salaires | navigation et taux sociaux | employés, calculs, validation, comptabilisation, paiements, fiches, certificats |
 | Apprentissage | navigation | modèles, groupes, assignations, travail, correction et réinitialisation |
-| Liquidités | navigation | import bancaire, rapprochement, lettrage et émission de paiements sans écran Vue complet |
+| Liquidités | dépenses ponctuelles/récurrentes, approbation, pièces et comptabilisation | import bancaire, rapprochement, lettrage et émission de paiements (lot 07) |
 | Comptabilité | journalisation, extraits et plan | certaines vues imprimables et exports de rapports |
 
 Les services PHP métier et SQLite ne sont pas concernés par ce retrait : ils

@@ -10,7 +10,9 @@ use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Dossiers\ScopeManager;
+use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
+use Compta\Modules\Tva\VatConfigurationService;
 
 $root = dirname(__DIR__, 4);
 require $root . '/bootstrap/autoload.php';
@@ -119,6 +121,54 @@ $post('expense', 'Charge administrative', [
     'libelle' => 'Banque principale',
     'type' => 'banque',
     'monnaie' => 'CHF',
+]);
+(new ContactService($pdo, $audit))->create(
+    $organisationA,
+    $dossierA,
+    [
+        'type_personne' => 'entreprise',
+        'raison_sociale' => 'Fournitures E2E SA',
+    ],
+    ['fournisseur'],
+    [
+        'ligne1' => 'Rue du Test 6',
+        'code_postal' => '1200',
+        'localite' => 'Genève',
+        'pays' => 'CH',
+    ]
+);
+$vat = new VatConfigurationService($pdo, $audit);
+$vat->addRegime([
+    'organisation_id' => $organisationA,
+    'dossier_id' => $dossierA,
+    'statut' => 'assujetti',
+    'numero_tva' => 'CHE-123.456.789 TVA',
+    'methode' => 'effective',
+    'mode_decompte' => 'convenues',
+    'periodicite' => 'trimestrielle',
+    'date_debut' => '2026-01-01',
+    'compte_impot_prealable_materiel_id' => $accountId('1170'),
+    'compte_impot_prealable_investissements_id' => $accountId('1171'),
+    'compte_tva_due_id' => $accountId('2200'),
+    'compte_decompte_tva_id' => $accountId('2201'),
+    'compte_corrections_id' => $accountId('6500'),
+]);
+$normalRateId = (int) $pdo->query(
+    "SELECT id FROM tva_taux_legaux
+     WHERE categorie = 'normal' ORDER BY date_debut DESC LIMIT 1"
+)->fetchColumn();
+$vat->addCode([
+    'organisation_id' => $organisationA,
+    'dossier_id' => $dossierA,
+    'code' => 'AM81',
+    'libelle' => 'Achats 8,1 %',
+    'traitement' => 'normal',
+    'nature' => 'prealable',
+    'taux_legal_id' => $normalRateId,
+    'droit_deduction' => true,
+    'deduction_defaut_bp' => 10000,
+    'compte_tva_id' => $accountId('1170'),
+    'date_debut' => '2024-01-01',
 ]);
 
 $organisationB = $scopes->createOrganisation('Entreprise Confidentielle SA', 'reelle');

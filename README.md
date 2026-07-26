@@ -110,6 +110,18 @@ suggestions de comptabilisation à accepter explicitement, l’état comparatif
 banque/comptabilité et les virements internes. Les lignes et soldes bancaires
 confirmés sont immuables.
 
+L’écran Vue `/app/liquidites` gère aussi les dépenses ponctuelles et
+récurrentes. Une dépense reste un document fournisseur unique : brouillon avec
+justificatif, soumission, approbation, comptabilisation explicite, puis
+contre-passation en cas d’annulation. La génération cron est rejouable :
+
+```bash
+php bin/console depenses:recurrences-generer \
+  --organisation=1 --dossier=1 --jusqu-au=2026-12-31
+```
+
+Cette commande ne crée que des brouillons et ne paie ni ne comptabilise rien.
+
 ```bash
 php bin/console tresorerie:compte-create \
   --organisation=1 --dossier=1 --compte=42 --libelle=PostFinance \

@@ -48,6 +48,8 @@ final class BillingService
         ?int $originDocumentId = null,
         ?int $attachmentId = null,
         ?int $actorId = null,
+        string $workflow = 'facturation',
+        string $generationKey = '',
     ): int {
         return $this->transaction(function () use (
             $organisationId,
@@ -61,9 +63,14 @@ final class BillingService
             $externalNumber,
             $originDocumentId,
             $attachmentId,
-            $actorId
+            $actorId,
+            $workflow,
+            $generationKey
         ): int {
             $this->assertType($type);
+            if (!in_array($workflow, ['facturation', 'depense'], true)) {
+                throw new BillingException('Workflow de document invalide.');
+            }
             $this->assertDate($documentDate);
             $paymentTerm = null;
             if (trim($dueDate) === '') {
@@ -105,8 +112,9 @@ final class BillingService
                   date_echeance, adresse_snapshot_json, contact_snapshot_json,
                   compte_collectif_id, numero_externe, document_origine_id,
                   justificatif_id, condition_paiement_id,
-                  condition_paiement_snapshot_json, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                  condition_paiement_snapshot_json, cree_par, workflow,
+                  cle_generation)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $contactId, $type,
@@ -119,9 +127,18 @@ final class BillingService
                     JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
                 ),
                 $actorId,
+                $workflow,
+                trim($generationKey),
             ]);
             $id = (int) $this->pdo->lastInsertId();
-            $this->replaceLines($organisationId, $dossierId, $id, $lines, 1);
+            $this->replaceLines(
+                $organisationId,
+                $dossierId,
+                $id,
+                $lines,
+                1,
+                workflow: $workflow
+            );
             $this->audit->log(
                 'facturation.document_brouillon_cree',
                 $actorId,
@@ -145,6 +162,7 @@ final class BillingService
         array $lines,
         int $expectedVersion,
         ?int $actorId = null,
+        string $workflow = 'facturation',
     ): void {
         $this->transaction(function () use (
             $organisationId,
@@ -152,11 +170,13 @@ final class BillingService
             $documentId,
             $lines,
             $expectedVersion,
-            $actorId
+            $actorId,
+            $workflow
         ): void {
             $document = $this->document($organisationId, $dossierId, $documentId);
             if (
                 $document['statut'] !== 'brouillon'
+                || $document['workflow'] !== $workflow
                 || (int) $document['version'] !== $expectedVersion
                 || $lines === []
             ) {
@@ -266,6 +286,7 @@ final class BillingService
             $document = $this->document($organisationId, $dossierId, $documentId);
             if (
                 $document['statut'] !== 'brouillon'
+                || $document['workflow'] !== 'facturation'
                 || (int) $document['version'] !== $expectedVersion
                 || (int) $document['total_brut_centimes'] === 0
             ) {
@@ -330,6 +351,7 @@ final class BillingService
         int $exerciseId,
         int $journalId,
         ?int $actorId = null,
+        string $workflow = 'facturation',
     ): int {
         return $this->transaction(function () use (
             $organisationId,
@@ -337,14 +359,23 @@ final class BillingService
             $documentId,
             $exerciseId,
             $journalId,
-            $actorId
+            $actorId,
+            $workflow
         ): int {
             $document = $this->document($organisationId, $dossierId, $documentId);
+            if ($document['workflow'] !== $workflow) {
+                throw new BillingException('Workflow de document incompatible.');
+            }
             if ($document['ecriture_id'] !== null) {
                 return (int) $document['ecriture_id'];
             }
-            if ($document['statut'] !== 'emis' || $document['compte_collectif_id'] === null) {
-                throw new BillingException('Le document doit être émis et posséder un compte collectif.');
+            if (
+                !in_array($document['statut'], ['emis', 'approuve'], true)
+                || $document['compte_collectif_id'] === null
+            ) {
+                throw new BillingException(
+                    'Le document doit être émis ou approuvé et posséder un compte collectif.'
+                );
             }
             $lines = $this->lines($documentId);
             $postingLines = [];
@@ -464,7 +495,12 @@ final class BillingService
     ): int {
         $source = $this->document($organisationId, $dossierId, $documentId);
         if (
-            !in_array($source['type'], ['facture_client', 'facture_fournisseur'], true)
+            $source['workflow'] !== 'facturation'
+            || !in_array(
+                $source['type'],
+                ['facture_client', 'facture_fournisseur'],
+                true
+            )
             || !in_array($source['statut'], ['emis', 'comptabilise'], true)
         ) {
             throw new BillingException('Seule une facture émise peut produire un avoir.');
@@ -517,7 +553,9 @@ final class BillingService
         $source = $this->document($organisationId, $dossierId, $documentId);
         $credit = $this->document($organisationId, $dossierId, $creditId);
         if (
-            (int) $credit['document_origine_id'] !== $documentId
+            $source['workflow'] !== 'facturation'
+            || $credit['workflow'] !== 'facturation'
+            || (int) $credit['document_origine_id'] !== $documentId
             || $credit['statut'] !== 'comptabilise'
             || $source['statut'] !== 'comptabilise'
         ) {
@@ -566,6 +604,7 @@ final class BillingService
              FROM documents_financiers d
              JOIN contacts c ON c.id = d.contact_id
              WHERE d.organisation_id = ? AND d.dossier_id = ?
+               AND d.workflow = 'facturation'
              ORDER BY d.date_document DESC, d.id DESC"
         );
         $stmt->execute([$organisationId, $dossierId]);

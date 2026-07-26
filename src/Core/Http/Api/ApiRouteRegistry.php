@@ -11,6 +11,7 @@ use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
+use Compta\Modules\Tresorerie\Http\ExpenseApiController;
 use Throwable;
 
 final class ApiRouteRegistry
@@ -21,6 +22,7 @@ final class ApiRouteRegistry
         private readonly Csrf $csrf,
         private readonly ?ConfigurationApiController $configuration = null,
         private readonly ?AccountingApiController $accounting = null,
+        private readonly ?ExpenseApiController $expenses = null,
     ) {
     }
 
@@ -162,6 +164,57 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/accounting/opening',
                 $this->accounting->saveOpening(...)
+            );
+        }
+        if ($this->expenses !== null) {
+            $this->add($router, 'GET', '/api/v1/liquidites', $this->expenses->show(...));
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/depenses',
+                $this->expenses->create(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/depenses/soumettre',
+                $this->expenses->submit(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/depenses/approuver',
+                $this->expenses->approve(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/depenses/comptabiliser',
+                $this->expenses->post(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/depenses/annuler',
+                $this->expenses->cancel(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/recurrences',
+                $this->expenses->createRecurrence(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/recurrences/pause',
+                $this->expenses->pauseRecurrence(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/recurrences/generer',
+                $this->expenses->generateRecurrences(...)
             );
         }
     }

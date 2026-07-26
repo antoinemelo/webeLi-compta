@@ -46,6 +46,9 @@ use Compta\Modules\Shell\Http\ShellInputValidator;
 use Compta\Modules\Shell\Http\ShellPageController;
 use Compta\Modules\Tva\VatConfigurationService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
+use Compta\Modules\Tresorerie\ExpenseService;
+use Compta\Modules\Tresorerie\Http\ExpenseApiController;
+use Compta\Modules\Tresorerie\Http\ExpenseInputValidator;
 
 require __DIR__ . '/autoload.php';
 
@@ -120,6 +123,14 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         new AccountingWorkspaceService($chart, $entries, $reports),
         new AccountingInputValidator()
+    ),
+    new ExpenseApiController(
+        $session,
+        $auth,
+        $access,
+        new ExpenseService($pdo, $audit, $entries),
+        new AttachmentService($pdo, $audit),
+        new ExpenseInputValidator()
     )
 );
 $shellPage = new ShellPageController(

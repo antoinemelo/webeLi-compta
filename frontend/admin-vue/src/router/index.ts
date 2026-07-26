@@ -4,6 +4,7 @@ import { canDiscardChanges } from '@/composables/unsavedChanges';
 import DashboardView from '@/views/DashboardView.vue';
 import ConfigurationView from '@/views/ConfigurationView.vue';
 import AccountingView from '@/views/AccountingView.vue';
+import LiquidityView from '@/views/LiquidityView.vue';
 import WorkspaceView from '@/views/WorkspaceView.vue';
 
 const workspace = (
@@ -22,7 +23,12 @@ const workspace = (
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'dashboard', component: DashboardView, meta: { label: 'Tableau de bord' } },
   workspace('/apprentissage/:tab?', 'learning', 'Apprentissage', 'learning', '/pedagogie'),
-  workspace('/liquidites/:tab?', 'liquidity', 'Liquidités', 'liquidity', '/'),
+  {
+    path: '/liquidites/:tab?',
+    name: 'liquidity',
+    component: LiquidityView,
+    meta: { label: 'Liquidités', section: 'liquidity' }
+  },
   workspace('/facturation/:tab?', 'billing', 'Facturation', 'billing', '/facturation'),
   {
     path: '/compta/:tab?',
