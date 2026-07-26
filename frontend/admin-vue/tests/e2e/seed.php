@@ -11,6 +11,8 @@ use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Facturation\ContactService;
+use Compta\Modules\Salaires\PayrollConfigurationService;
+use Compta\Modules\Salaires\PayrollService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tva\VatConfigurationService;
 
@@ -182,6 +184,115 @@ $vat->addCode([
     'compte_tva_id' => $accountId('2200'),
     'date_debut' => '2024-01-01',
 ]);
+
+$payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
+$payrollConfiguration->saveEmployer(
+    $organisationA,
+    $dossierA,
+    [
+        'nom' => 'Entreprise Alpha SA',
+        'rue' => 'Rue du Test 1',
+        'npa' => '1200',
+        'localite' => 'Genève',
+        'heures_hebdo_milli' => 40000,
+    ],
+    $administratorId
+);
+$payrollConfiguration->saveRates(
+    $organisationA,
+    $dossierA,
+    2026,
+    [
+        'avs_ppm' => 53000,
+        'ac_ppm' => 11000,
+        'amat_ppm' => 290,
+        'laa_reduit_ppm' => 10600,
+        'laa_plein_ppm' => 21000,
+        'lpp_ppm' => 35000,
+        'emp_avs_ppm' => 53000,
+        'emp_ac_ppm' => 11000,
+        'emp_amat_ppm' => 290,
+        'emp_af_ppm' => 22700,
+        'emp_laa_reduit_ppm' => 10600,
+        'emp_laa_plein_ppm' => 21000,
+        'emp_frais_ppm' => 2000,
+        'emp_cpe_ppm' => 600,
+        'emp_lfp_ppm' => 700,
+        'emp_lpp_ppm' => 35000,
+        'source' => 'OCAS Genève 2026 — fixture E2E',
+        'verifie_le' => '2026-01-01',
+    ],
+    $administratorId
+);
+$payrollConfiguration->saveMapping(
+    $organisationA,
+    $dossierA,
+    [
+        'charge_salaires_id' => $accountId('5000'),
+        'charge_ocas_id' => $accountId('5700'),
+        'charge_laa_id' => $accountId('5700'),
+        'charge_lpp_id' => $accountId('5700'),
+        'dette_net_id' => $accountId('2000'),
+        'dette_ocas_id' => $accountId('2270'),
+        'dette_laa_id' => $accountId('2270'),
+        'dette_lpp_id' => $accountId('2270'),
+        'dette_impot_id' => $accountId('2270'),
+    ],
+    $administratorId
+);
+$payrollEmployee = $payrollConfiguration->createEmployee(
+    $organisationA,
+    $dossierA,
+    [
+        'prenom' => 'Ada',
+        'nom' => 'Martin',
+        'email' => 'ada@example.test',
+        'numero_avs' => '756.1234.5678.90',
+        'date_naissance' => '1990-05-12',
+        'procedure' => 'ordinaire',
+        'supplement_vacances_ppm' => 0,
+        'impot_source_ppm' => 0,
+    ],
+    $administratorId
+);
+$payrollConfiguration->saveContract(
+    $organisationA,
+    $dossierA,
+    [
+        'employe_id' => $payrollEmployee,
+        'type' => 'mensuel',
+        'date_debut' => '2026-01-01',
+        'date_fin' => '',
+        'taux_horaire_centimes' => 0,
+        'salaire_mensuel_centimes' => 500000,
+        'heures_hebdo_milli' => 40000,
+        'taux_activite_ppm' => 1_000_000,
+        'source' => 'Contrat mensuel E2E',
+    ],
+    $administratorId
+);
+(new PayrollService($pdo, $audit, $entries))->createPeriodDraft(
+    $organisationA,
+    $dossierA,
+    $payrollEmployee,
+    2026,
+    7,
+    [
+        [
+            'type' => 'absence',
+            'libelle' => 'Absence non rémunérée',
+            'montant_centimes' => 10000,
+            'note' => 'Correction de période',
+        ],
+        [
+            'type' => 'prime',
+            'libelle' => 'Prime exceptionnelle',
+            'montant_centimes' => 50000,
+            'note' => 'Décision employeur',
+        ],
+    ],
+    $administratorId
+);
 
 $organisationB = $scopes->createOrganisation('Entreprise Confidentielle SA', 'reelle');
 $dossierB = $scopes->createDossier(

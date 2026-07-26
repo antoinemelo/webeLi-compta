@@ -436,8 +436,7 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await expect(page.getByRole('heading', { name: 'Salaires', exact: true })).toBeVisible();
   await expect(page.getByLabel('Navigation des salaires')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Employés et contrats' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Préparation des salaires' })).toBeVisible();
-  await expect(page.getByLabel('Employeur', { exact: true })).toHaveValue('Entreprise Alpha SA');
+  await expect(page.getByText('PII autorisées', { exact: true })).toBeVisible();
 
   await page.getByRole('link', { name: 'Calculs', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Préparer une fiche de salaire' })).toBeVisible();
@@ -448,9 +447,20 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await expect(page.getByRole('heading', { name: 'Brouillons et calculs 2026' })).toBeVisible();
   await expect(page.getByRole('button', {
     name: 'Calculer et créer le brouillon'
-  })).toBeDisabled();
+  })).toBeEnabled();
+  await page.getByRole('button', { name: 'Aperçu', exact: true }).click();
+  const preview = page.getByRole('dialog', { name: 'Fiche de salaire 07/2026' });
+  await expect(preview).toBeVisible();
+  await expect(preview.getByText('BROUILLON — À CONTRÔLER')).toBeVisible();
+  await expect(preview.getByRole('heading', { name: 'Base salariale' })).toBeVisible();
+  await expect(preview.getByText('Prime exceptionnelle')).toBeVisible();
+  await expect(preview.getByText('Salaire net à verser')).toBeVisible();
+  await expect(preview.getByRole('button', { name: 'Valider cette fiche' })).toBeEnabled();
+  await preview.getByRole('button', { name: 'Fermer' }).click();
+
   await page.getByRole('link', { name: 'Fiches', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fiches de salaire' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Voir et valider' })).toBeVisible();
   await page.getByRole('link', { name: 'Annuels', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Récapitulatifs et certificats' })).toBeVisible();
 

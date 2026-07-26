@@ -1170,6 +1170,171 @@ textarea {
   gap: 1rem;
 }
 
+.payroll-preview-dialog {
+  width: min(64rem, calc(100% - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 0;
+  border: 0;
+  border-radius: 0.8rem;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.payroll-preview-dialog::backdrop {
+  background: rgba(18, 20, 42, 0.72);
+}
+
+.payroll-slip {
+  padding: clamp(1rem, 3vw, 2rem);
+  color: #202124;
+  background: white;
+}
+
+.payroll-slip-header,
+.payroll-slip-parties,
+.payroll-slip-calculation,
+.payroll-slip-subtotal,
+.payroll-preview-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.payroll-slip-header {
+  align-items: flex-start;
+  padding-bottom: 1rem;
+  border-bottom: 3px solid var(--primary);
+}
+
+.payroll-slip-header h2,
+.payroll-slip-header p {
+  margin-block: 0.2rem;
+}
+
+.payroll-slip-status {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: end;
+  text-align: right;
+}
+
+.payroll-slip-status strong {
+  padding: 0.45rem 0.7rem;
+  color: white;
+  background: var(--primary);
+  border-radius: 0.35rem;
+}
+
+.payroll-slip-status strong.warning {
+  color: #7c4c00;
+  background: #fff0c2;
+  border: 1px solid #efb44d;
+}
+
+.payroll-draft-warning {
+  margin-block: 1rem;
+}
+
+.payroll-slip-parties {
+  margin-block: 1rem;
+}
+
+.payroll-slip-parties > div {
+  display: grid;
+  width: 50%;
+  gap: 0.25rem;
+  padding: 0.85rem;
+  background: #f4f5f9;
+  border-radius: 0.5rem;
+}
+
+.payroll-slip-parties small,
+.payroll-slip-parties span,
+.payroll-slip-calculation small,
+.payroll-slip-employer small {
+  color: var(--muted);
+}
+
+.payroll-slip-section {
+  margin-top: 1.25rem;
+}
+
+.payroll-slip-section h3,
+.payroll-slip-calculation h3 {
+  margin-bottom: 0.5rem;
+}
+
+.payroll-slip-calculation {
+  margin-top: 1.25rem;
+}
+
+.payroll-slip-calculation > div {
+  width: 50%;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+}
+
+.payroll-slip-calculation dl,
+.payroll-slip-employer dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem 1rem;
+}
+
+.payroll-slip-calculation dt,
+.payroll-slip-calculation dd,
+.payroll-slip-employer dt,
+.payroll-slip-employer dd {
+  margin: 0;
+}
+
+.payroll-slip-calculation dd,
+.payroll-slip-employer dd {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.payroll-slip-subtotal {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 2px solid var(--primary);
+}
+
+.payroll-slip-net {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 1rem 1.25rem;
+  color: white;
+  background: var(--primary);
+  border-radius: 0.55rem;
+}
+
+.payroll-slip-net strong {
+  font-size: 1.55rem;
+}
+
+.payroll-slip-employer {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  background: #f4f5f9;
+  border-radius: 0.55rem;
+}
+
+.payroll-slip-employer summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.payroll-preview-actions {
+  justify-content: flex-end;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
 .t-account > div {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1307,6 +1472,24 @@ textarea {
   .payroll-draft-summary {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .payroll-slip-header,
+  .payroll-slip-parties,
+  .payroll-slip-calculation,
+  .payroll-preview-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .payroll-slip-status {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .payroll-slip-parties > div,
+  .payroll-slip-calculation > div {
+    width: auto;
   }
 
   .t-account section + section {

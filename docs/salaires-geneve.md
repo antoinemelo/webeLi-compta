@@ -42,6 +42,11 @@ avec contrôle de version ou supprimé. Son employé et sa période restent fixe
 un changement de périmètre exige de supprimer le brouillon puis d’en créer un
 nouveau. Après validation, aucune édition ni suppression directe n’est permise.
 
+L’aperçu détaillé relit le snapshot enregistré du brouillon — identité, base,
+variables, gains, retenues, salaire net et charges employeur — sans recalcul ni
+mutation. La validation peut ensuite être déclenchée depuis cette fiche de
+contrôle.
+
 La comptabilisation produit une écriture détaillée et équilibrée. Elle est
 idempotente : rejouer la même action ne crée pas une seconde écriture. Une
 fiche validée ne se modifie pas ; une correction passe par l’annulation et une

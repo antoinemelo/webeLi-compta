@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import PayrollSlipPreview from '@/components/payroll/PayrollSlipPreview.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
@@ -41,6 +42,10 @@ type DraftElementForm = {
 };
 let draftElementKey = 0;
 const draftElements = ref<DraftElementForm[]>([]);
+const payrollPreview = ref<{
+  open: () => Promise<void>;
+  close: () => void;
+} | null>(null);
 const posting = reactive({ exercise_id: 0, journal_id: 0, date: today });
 const payment = reactive({
   beneficiary_type: 'employe', employee_id: 0, date: today,
@@ -327,8 +332,24 @@ async function deleteDraft(row: Record<string, unknown>): Promise<void> {
   }, 'Brouillon supprimé.');
   if (deleted && draft.id === n(row, 'id')) resetDraftEditor();
 }
-async function validatePayroll(row: Record<string, unknown>): Promise<void> {
-  await mutate('/salaires/fiches/valider', { id: n(row, 'id'), version: n(row, 'version') }, 'Fiche validée et figée.');
+async function openPayrollPreview(row: Record<string, unknown>): Promise<void> {
+  await reload(n(row, 'id'));
+  if (store.error || !workspace.value?.selected) return;
+  await nextTick();
+  await payrollPreview.value?.open();
+}
+async function validatePayroll(row: Record<string, unknown>): Promise<boolean> {
+  return mutate('/salaires/fiches/valider', { id: n(row, 'id'), version: n(row, 'version') }, 'Fiche validée et figée.');
+}
+async function validatePreview(): Promise<void> {
+  const selected = workspace.value?.selected;
+  if (!selected) return;
+  if (await validatePayroll(selected)) payrollPreview.value?.close();
+}
+function editPreview(): void {
+  const selected = workspace.value?.selected;
+  if (!selected || s(selected, 'statut') !== 'brouillon') return;
+  editDraft(selected);
 }
 async function postPayroll(row: Record<string, unknown>): Promise<void> {
   await mutate('/salaires/fiches/comptabiliser', {
@@ -669,6 +690,13 @@ onMounted(() => reload());
                 <td><span class="status-chip">{{ s(row,'statut') }}</span></td>
                 <td class="button-row">
                   <button
+                    class="button small"
+                    :disabled="store.loading || store.saving"
+                    @click="openPayrollPreview(row)"
+                  >
+                    Aperçu
+                  </button>
+                  <button
                     v-if="s(row,'statut') === 'brouillon'"
                     class="button small"
                     :disabled="store.saving"
@@ -698,7 +726,35 @@ onMounted(() => reload());
 
     <template v-else-if="tab === 'fiches'">
       <section class="panel"><div class="form-grid three"><label>Exercice<select v-model.number="posting.exercise_id"><option v-for="row in workspace.catalog.exercises" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'libelle') }}</option></select></label><label>Journal<select v-model.number="posting.journal_id"><option v-for="row in workspace.catalog.journals" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'code') }} — {{ s(row,'libelle') }}</option></select></label><label>Date comptable<input v-model="posting.date" type="date"></label></div></section>
-      <section class="panel"><h2>Fiches de salaire</h2><div class="table-scroll"><table><thead><tr><th>Période</th><th>Employé</th><th>Net</th><th>Dette ouverte</th><th>Statut</th><th>Actions</th></tr></thead><tbody><tr v-for="row in workspace.payrolls" :key="n(row,'id')"><td>{{ n(row,'mois') }}/{{ n(row,'annee') }}</td><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td>{{ money(n(row,'solde_dettes_centimes')) }}</td><td>{{ s(row,'statut') }}</td><td class="button-row"><button v-if="s(row,'statut') === 'brouillon'" class="button small" :disabled="!workspace.capabilities.validate || !workspace.configuration.validation_ready || store.saving" @click="validatePayroll(row)">Valider</button><button v-if="s(row,'statut') === 'validee'" class="button small" :disabled="!workspace.capabilities.post || store.saving" @click="postPayroll(row)">Comptabiliser</button><button v-if="['validee','comptabilisee'].includes(s(row,'statut'))" class="button danger small" :disabled="!workspace.capabilities.post || store.saving" @click="cancelPayroll(row)">Contre-passer</button></td></tr></tbody></table></div></section>
+      <section class="panel">
+        <h2>Fiches de salaire</h2>
+        <p>Un brouillon doit être contrôlé dans son aperçu détaillé avant sa validation.</p>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Période</th><th>Employé</th><th>Net</th><th>Dette ouverte</th><th>Statut</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr v-for="row in workspace.payrolls" :key="n(row,'id')">
+                <td>{{ String(n(row,'mois')).padStart(2,'0') }}/{{ n(row,'annee') }}</td>
+                <td>{{ employeeName(n(row,'employe_id')) }}</td>
+                <td>{{ money(n(row,'net_centimes')) }}</td>
+                <td>{{ money(n(row,'solde_dettes_centimes')) }}</td>
+                <td><span class="status-chip">{{ s(row,'statut') }}</span></td>
+                <td class="button-row">
+                  <button
+                    class="button small"
+                    :disabled="store.loading || store.saving"
+                    @click="openPayrollPreview(row)"
+                  >
+                    {{ s(row,'statut') === 'brouillon' ? 'Voir et valider' : 'Voir' }}
+                  </button>
+                  <button v-if="s(row,'statut') === 'validee'" class="button small" :disabled="!workspace.capabilities.post || store.saving" @click="postPayroll(row)">Comptabiliser</button>
+                  <button v-if="['validee','comptabilisee'].includes(s(row,'statut'))" class="button danger small" :disabled="!workspace.capabilities.post || store.saving" @click="cancelPayroll(row)">Contre-passer</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
       <section class="panel"><h2>Paiements et lettrage</h2><form class="form-grid three" @submit.prevent="createPayment"><label>Bénéficiaire<select v-model="payment.beneficiary_type"><option value="employe">Employé</option><option value="organisme">Organisme</option></select></label><label v-if="payment.beneficiary_type === 'employe'">Employé<select v-model.number="payment.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label><label>Date<input v-model="payment.date" type="date"></label><label>Montant<input v-model="payment.amount" required></label><label>Compte de trésorerie<select v-model.number="payment.account_id"><option v-for="row in workspace.catalog.treasury_accounts" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'numero') }} — {{ s(row,'libelle') }}</option></select></label><label>Référence<input v-model="payment.reference"></label><button class="button primary">Saisir</button></form><form class="form-grid three" @submit.prevent="allocatePayment"><label>Paiement<select v-model.number="allocation.payment_id"><option v-for="row in workspace.payments" :key="n(row,'id')" :value="n(row,'id')">#{{ n(row,'id') }} · {{ money(n(row,'non_alloue_centimes')) }}</option></select></label><label>Dette<select v-model.number="allocation.liability_id"><option v-for="row in workspace.liabilities" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'type') }} · {{ employeeName(n(row,'employe_id')) }} · {{ money(n(row,'solde_centimes')) }}</option></select></label><label>Montant<input v-model="allocation.amount"></label><button class="button">Allouer</button></form><div class="table-scroll"><table><thead><tr><th>Date</th><th>Bénéficiaire</th><th>Montant</th><th>Non alloué</th><th></th></tr></thead><tbody><tr v-for="row in workspace.payments" :key="n(row,'id')"><td>{{ s(row,'date_paiement') }}</td><td>{{ s(row,'beneficiaire_type') }}</td><td>{{ money(n(row,'montant_centimes')) }}</td><td>{{ money(n(row,'non_alloue_centimes')) }}</td><td><button v-if="n(row,'non_alloue_centimes') === 0 && !row.ecriture_id" class="button small" @click="postPayment(row)">Comptabiliser</button></td></tr></tbody></table></div></section>
     </template>
 
@@ -710,4 +766,15 @@ onMounted(() => reload());
     </template>
   </template>
   <EmptyState v-else-if="!store.loading" title="Salaires indisponibles" description="Sélectionnez un dossier autorisé." />
+  <PayrollSlipPreview
+    ref="payrollPreview"
+    :payroll="workspace?.selected || null"
+    :can-validate="Boolean(
+      workspace?.capabilities.validate
+      && workspace?.configuration.validation_ready
+    )"
+    :saving="store.saving"
+    @validate="validatePreview"
+    @edit="editPreview"
+  />
 </template>
