@@ -30,10 +30,14 @@ use Compta\Modules\Dashboard\Application\DashboardReadService;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
 use Compta\Modules\Facturation\BillingService;
+use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Facturation\AttachmentService;
 use Compta\Modules\Facturation\InvoicePdfService;
 use Compta\Modules\Facturation\PaymentService;
+use Compta\Modules\Facturation\RecurringBillingService;
+use Compta\Modules\Facturation\Http\BillingApiController;
+use Compta\Modules\Facturation\Http\BillingInputValidator;
 use Compta\Modules\Salaires\PayrollCertificateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
 use Compta\Modules\Salaires\PayrollImportService;
@@ -85,6 +89,8 @@ $reports = new ReportingService($pdo);
 $chart = new ChartOfAccountsService($pdo, $audit);
 $contacts = new ContactService($pdo, $audit);
 $payments = new PaymentService($pdo, $audit, $entries);
+$billing = new BillingService($pdo, $audit, $entries);
+$recurringBilling = new RecurringBillingService($pdo, $audit, $billing);
 $reconciliations = new ReconciliationService($pdo, $audit);
 $payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
 $vatConfiguration = new VatConfigurationService($pdo, $audit);
@@ -160,6 +166,19 @@ $apiRoutes = new ApiRouteRegistry(
             new Pain001Generator()
         ),
         new TreasuryInputValidator()
+    ),
+    new BillingApiController(
+        $session,
+        $auth,
+        $access,
+        new BillingWorkspaceService($pdo, $billing, $payments, $contacts),
+        $billing,
+        $contacts,
+        $payments,
+        $recurringBilling,
+        new InvoicePdfService($pdo, $audit),
+        new AttachmentService($pdo, $audit),
+        new BillingInputValidator()
     )
 );
 $shellPage = new ShellPageController(
@@ -182,7 +201,7 @@ return [
         $audit,
         $reports,
         $contacts,
-        new BillingService($pdo, $audit, $entries),
+        $billing,
         $payments,
         new InvoicePdfService($pdo, $audit),
         new AttachmentService($pdo, $audit),

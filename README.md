@@ -162,8 +162,19 @@ allocations N–N. L’émission numérote par dossier/année, la comptabilisati
 idempotente et les documents émis conservent leurs snapshots d’adresse et de
 TVA.
 
-Les factures clients peuvent être archivées en PDF avec QR-facture suisse et
-référence SCOR. Voir [le guide de facturation](docs/facturation.md).
+L’espace Vue `/app/facturation` sépare ventes, achats, récurrences, contacts
+360° et échéancier. Les tranches 0–30, 31–60, 61–90 et plus de 90 jours sont
+calculées à une date de référence visible ; avoirs, paiements partiels et
+acomptes non alloués restent réconciliables au centime. Les factures clients
+peuvent être archivées en PDF avec QR-facture suisse et référence SCOR. Voir
+[le guide de facturation](docs/facturation.md).
+
+```bash
+php bin/console facturation:recurrences-generer \
+  --organisation=1 --dossier=1 --jusqu-au=2026-12-31
+```
+
+Cette commande rejouable crée uniquement les brouillons arrivés à échéance.
 
 ## Salaires genevois
 

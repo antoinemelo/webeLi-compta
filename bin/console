@@ -18,6 +18,8 @@ use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
 use Compta\Modules\Tresorerie\ExpenseService;
+use Compta\Modules\Facturation\BillingService;
+use Compta\Modules\Facturation\RecurringBillingService;
 use Compta\Modules\Tva\Ech0217ExportService;
 use Compta\Modules\Tva\Ech0217Validator;
 use Compta\Modules\Tva\VatStatementService;
@@ -68,6 +70,7 @@ try {
         'tresorerie:import-confirm' => confirmBankImport($pdo, $options),
         'tresorerie:etat' => treasuryState($pdo, $options),
         'depenses:recurrences-generer' => generateRecurringExpenses($pdo, $options),
+        'facturation:recurrences-generer' => generateRecurringInvoices($pdo, $options),
         'tva:periode-create' => createVatPeriod($pdo, $options),
         'tva:decompte-prepare' => prepareVatStatement($pdo, $options),
         'tva:decompte-control' => controlVatStatement($pdo, $options),
@@ -104,6 +107,7 @@ Compta — commandes du socle
   tresorerie:import-confirm --organisation=1 --dossier=1 --import=1
   tresorerie:etat --organisation=1 --dossier=1 --tresorerie=1 [--date=2026-12-31]
   depenses:recurrences-generer --organisation=1 --dossier=1 [--jusqu-au=2026-12-31]
+  facturation:recurrences-generer --organisation=1 --dossier=1 [--jusqu-au=2026-12-31]
   tva:periode-create --organisation=1 --dossier=1 --debut=2026-01-01 --fin=2026-03-31
   tva:decompte-prepare --organisation=1 --dossier=1 --periode=1 [--rectifie=1]
   tva:decompte-control --organisation=1 --dossier=1 --decompte=1
@@ -341,6 +345,34 @@ function generateRecurringExpenses(PDO $pdo, array $options): int
         $pdo,
         $audit,
         new EntryService($pdo, $audit)
+    ))->generateDue(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier'),
+        $date
+    );
+    echo json_encode(
+        ['jusqu_au' => $date, 'documents' => $ids, 'nombre' => count($ids)],
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
+    ) . "\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function generateRecurringInvoices(PDO $pdo, array $options): int
+{
+    $audit = new AuditLogger($pdo);
+    $date = is_string($options['jusqu-au'] ?? null)
+        ? $options['jusqu-au']
+        : date('Y-m-d');
+    $billing = new BillingService(
+        $pdo,
+        $audit,
+        new EntryService($pdo, $audit)
+    );
+    $ids = (new RecurringBillingService(
+        $pdo,
+        $audit,
+        $billing
     ))->generateDue(
         optionInt($options, 'organisation'),
         optionInt($options, 'dossier'),

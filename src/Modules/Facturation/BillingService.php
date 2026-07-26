@@ -100,6 +100,14 @@ final class BillingService
             ) {
                 throw new BillingException('Le numéro de facture fournisseur est requis.');
             }
+            $this->assertDraftReferences(
+                $organisationId,
+                $dossierId,
+                $type,
+                $contactId,
+                $collectiveAccountId,
+                $lines
+            );
             $contact = $this->contacts->snapshot($organisationId, $dossierId, $contactId);
             $snapshot = json_encode($contact, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
             $address = json_encode(
@@ -284,6 +292,12 @@ final class BillingService
             $actorId
         ): string {
             $document = $this->document($organisationId, $dossierId, $documentId);
+            if (
+                in_array($document['statut'], ['emis', 'comptabilise'], true)
+                && trim((string) $document['numero']) !== ''
+            ) {
+                return (string) $document['numero'];
+            }
             if (
                 $document['statut'] !== 'brouillon'
                 || $document['workflow'] !== 'facturation'
@@ -842,6 +856,49 @@ final class BillingService
             'facture_fournisseur', 'avoir_fournisseur',
         ], true)) {
             throw new BillingException('Type de document invalide.');
+        }
+    }
+
+    /** @param list<array<string,mixed>> $lines */
+    private function assertDraftReferences(
+        int $organisationId,
+        int $dossierId,
+        string $type,
+        int $contactId,
+        ?int $collectiveAccountId,
+        array $lines,
+    ): void {
+        $role = str_contains($type, 'fournisseur') ? 'fournisseur' : 'client';
+        $contact = $this->pdo->prepare(
+            'SELECT 1 FROM contacts c
+             JOIN contact_roles r ON r.contact_id = c.id AND r.role = ?
+             WHERE c.id = ? AND c.organisation_id = ? AND c.dossier_id = ?
+               AND c.actif = 1'
+        );
+        $contact->execute([$role, $contactId, $organisationId, $dossierId]);
+        if ($contact->fetchColumn() === false) {
+            throw new BillingException('Contact absent, inactif ou sans le rôle requis.');
+        }
+        $accountIds = array_values(array_unique(array_filter([
+            $collectiveAccountId,
+            ...array_map(
+                static fn (array $line): int => (int) ($line['compte_id'] ?? 0),
+                $lines
+            ),
+        ], static fn (mixed $id): bool => is_int($id) && $id > 0)));
+        if ($accountIds === []) {
+            return;
+        }
+        $placeholders = implode(',', array_fill(0, count($accountIds), '?'));
+        $accounts = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM comptes
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND imputable = 1
+               AND id IN ({$placeholders})"
+        );
+        $accounts->execute([$organisationId, $dossierId, ...$accountIds]);
+        if ((int) $accounts->fetchColumn() !== count($accountIds)) {
+            throw new BillingException('Compte de document absent ou hors du dossier.');
         }
     }
 

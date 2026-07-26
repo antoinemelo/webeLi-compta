@@ -39,10 +39,14 @@ use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
 use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Facturation\BillingService;
+use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Facturation\AttachmentService;
 use Compta\Modules\Facturation\InvoicePdfService;
 use Compta\Modules\Facturation\PaymentService;
+use Compta\Modules\Facturation\RecurringBillingService;
+use Compta\Modules\Facturation\Http\BillingApiController;
+use Compta\Modules\Facturation\Http\BillingInputValidator;
 use Compta\Modules\Facturation\ScorReference;
 use Compta\Modules\Facturation\SwissQrService;
 use Compta\Modules\Tresorerie\BankImportService;
@@ -1473,6 +1477,8 @@ final class Tests
             $httpModuleAccess
         );
         $httpContacts = new ContactService($pdo, $httpAudit);
+        $httpBilling = new BillingService($pdo, $httpAudit, $httpEntries);
+        $httpPayments = new PaymentService($pdo, $httpAudit, $httpEntries);
         $httpPayrollConfiguration = new PayrollConfigurationService(
             $pdo,
             $httpAudit
@@ -1554,6 +1560,24 @@ final class Tests
                     new Pain001Generator()
                 ),
                 new TreasuryInputValidator()
+            ),
+            new BillingApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new BillingWorkspaceService(
+                    $pdo,
+                    $httpBilling,
+                    $httpPayments,
+                    $httpContacts
+                ),
+                $httpBilling,
+                $httpContacts,
+                $httpPayments,
+                new RecurringBillingService($pdo, $httpAudit, $httpBilling),
+                new InvoicePdfService($pdo, $httpAudit),
+                new AttachmentService($pdo, $httpAudit),
+                new BillingInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -1798,6 +1822,58 @@ final class Tests
             && ($apiTreasuryJson['data']['capabilities']['export_payments'] ?? false)
             && ($apiTreasuryJson['data']['capabilities']['confirm_payments'] ?? false),
             'séparation des capacités de paiements sortants exposée en API'
+        );
+        $apiBilling = $app->handle(new Request(
+            'GET',
+            '/api/v1/facturation',
+            query: ['as_of_date' => '2026-06-30']
+        ));
+        $apiBillingJson = $this->responseJson($apiBilling);
+        $this->same(200, $apiBilling->status, 'facturation et aging exposés en API');
+        $this->same(
+            [
+                'reference_date',
+                'filters',
+                'documents',
+                'aging',
+                'contacts',
+                'contact_360',
+                'payments',
+                'allocations',
+                'recurrences',
+                'reminders',
+                'catalog',
+                'definitions',
+                'capabilities',
+            ],
+            array_keys($apiBillingJson['data'] ?? []),
+            'contrat facturation complet et stable'
+        );
+        $this->same(
+            '2026-06-30',
+            $apiBillingJson['data']['reference_date'] ?? '',
+            'date de référence visible dans le contrat facturation'
+        );
+        $billingExport = $app->handle(new Request(
+            'GET',
+            '/api/v1/facturation/export',
+            query: ['as_of_date' => '2026-06-30', 'direction' => 'sales']
+        ));
+        $this->same(200, $billingExport->status, 'export facturation filtré accessible');
+        $this->true(
+            str_contains($billingExport->body, 'date_reference')
+            && str_contains($billingExport->body, '2026-06-30'),
+            'export facturation conserve la date de référence'
+        );
+        $billingWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/facturation/contacts',
+            json: ['data' => []]
+        ));
+        $this->same(
+            403,
+            $billingWithoutCsrf->status,
+            'mutation de facturation sans CSRF refusée'
         );
         $apiConfiguration = $app->handle(new Request(
             'GET',
@@ -2230,12 +2306,12 @@ final class Tests
         $this->same(
             303,
             $legacyContacts->status,
-            'ancien onglet Contacts redirigé vers Configuration Vue'
+            'ancien écran de facturation redirigé vers Vue'
         );
         $this->same(
-            '/edu/app/configuration/referentiels?section=contacts',
+            '/edu/app/facturation',
             $legacyContacts->headers['Location'] ?? '',
-            'redirection Contacts compatible avec le sous-répertoire'
+            'redirection Facturation compatible avec le sous-répertoire'
         );
         $learningModule = array_values(array_filter(
             $apiConfigurationJson['data']['modules'] ?? [],
@@ -2480,6 +2556,7 @@ final class Tests
             'accounting.success.json',
             'managed-references.success.json',
             'treasury.success.json',
+            'billing.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(
@@ -2712,12 +2789,11 @@ final class Tests
             'journal lisible en comptes et francs comme le programme historique'
         );
         $billingScreen = $app->handle(new Request('GET', '/facturation'));
-        $this->same(200, $billingScreen->status, 'écran débiteurs et créanciers accessible');
-        $this->true(
-            str_contains($billingScreen->body, 'Documents')
-            && str_contains($billingScreen->body, 'Contacts')
-            && str_contains($billingScreen->body, 'Paiements'),
-            'onglets compacts de facturation présents'
+        $this->same(303, $billingScreen->status, 'ancien écran facturation retiré');
+        $this->same(
+            '/edu/app/facturation',
+            $billingScreen->headers['Location'] ?? '',
+            'facturation servie uniquement par Vue'
         );
         $salaryScreen = $app->handle(new Request('GET', '/salaires'));
         $this->same(200, $salaryScreen->status, 'écran des salaires genevois accessible');
@@ -5115,6 +5191,283 @@ final class Tests
         $this->true(
             PHP_VERSION_ID >= 80200 && PHP_VERSION_ID < 80300,
             'test SCOR/QR/PDF exécuté sur PHP 8.2'
+        );
+
+        $boundaryCustomerData = [
+            'type_personne' => 'entreprise',
+            'raison_sociale' => 'Client Aging SA',
+        ];
+        $boundaryAddress = [
+            'ligne1' => 'Rue des Échéances 8',
+            'code_postal' => '1200',
+            'localite' => 'Genève',
+            'pays' => 'CH',
+        ];
+        $boundaryCustomer = $contacts->create(
+            $organisationId,
+            $dossierId,
+            $boundaryCustomerData,
+            ['client'],
+            $boundaryAddress,
+            idempotencyKey: 'test-contact-aging'
+        );
+        $this->same(
+            $boundaryCustomer,
+            $contacts->create(
+                $organisationId,
+                $dossierId,
+                $boundaryCustomerData,
+                ['client'],
+                $boundaryAddress,
+                idempotencyKey: 'test-contact-aging'
+            ),
+            'rejeu idempotent du contact sans doublon'
+        );
+        $boundaryInvoices = [];
+        foreach ([
+            '2026-07-01',
+            '2026-06-01',
+            '2026-05-31',
+            '2026-05-02',
+            '2026-05-01',
+            '2026-04-02',
+            '2026-04-01',
+        ] as $dueDate) {
+            $id = $billing->createDraft(
+                $organisationId,
+                $dossierId,
+                'facture_client',
+                $boundaryCustomer,
+                '2026-01-15',
+                $dueDate,
+                [$line('Borne ' . $dueDate, 100, $revenue, $exempt)],
+                $receivable
+            );
+            $version = (int) $billing->document(
+                $organisationId,
+                $dossierId,
+                $id
+            )['version'];
+            $number = $billing->issue(
+                $organisationId,
+                $dossierId,
+                $id,
+                $version
+            );
+            $this->same(
+                $number,
+                $billing->issue(
+                    $organisationId,
+                    $dossierId,
+                    $id,
+                    $version
+                ),
+                'rejeu d’émission conserve le numéro existant'
+            );
+            $boundaryInvoices[$dueDate] = $id;
+        }
+        $partial = $payments->create(
+            $organisationId,
+            $dossierId,
+            $boundaryCustomer,
+            'encaissement',
+            '2026-06-15',
+            40
+        );
+        $payments->allocatePayment(
+            $organisationId,
+            $dossierId,
+            $partial,
+            $boundaryInvoices['2026-06-01'],
+            40
+        );
+        $boundaryCredit = $billing->createDraft(
+            $organisationId,
+            $dossierId,
+            'avoir_client',
+            $boundaryCustomer,
+            '2026-06-20',
+            '2026-07-01',
+            [$line('Avoir partiel', 50, $revenue, $exempt)],
+            $receivable
+        );
+        $billing->issue(
+            $organisationId,
+            $dossierId,
+            $boundaryCredit,
+            (int) $billing->document(
+                $organisationId,
+                $dossierId,
+                $boundaryCredit
+            )['version']
+        );
+        $payments->allocateCredit(
+            $organisationId,
+            $dossierId,
+            $boundaryCredit,
+            $boundaryInvoices['2026-06-01'],
+            20
+        );
+        $advance = $payments->create(
+            $organisationId,
+            $dossierId,
+            $boundaryCustomer,
+            'encaissement',
+            '2026-06-25',
+            75,
+            'ACOMPTE'
+        );
+        $workspace = new BillingWorkspaceService(
+            $pdo,
+            $billing,
+            $payments,
+            $contacts
+        );
+        $projection = $workspace->read(
+            $organisationId,
+            $dossierId,
+            '2026-07-01',
+            [
+                'direction' => 'sales',
+                'status' => 'all',
+                'search' => '',
+                'contact_id' => $boundaryCustomer,
+            ]
+        );
+        $receivablesAging = $projection['aging']['receivables'];
+        $this->same(
+            110,
+            (int) $receivablesAging['buckets']['days_0_30'],
+            'aging inclut exactement les bornes 0 et 30 jours, paiement et avoir'
+        );
+        $this->same(
+            200,
+            (int) $receivablesAging['buckets']['days_31_60'],
+            'aging inclut exactement les bornes 31 et 60 jours'
+        );
+        $this->same(
+            200,
+            (int) $receivablesAging['buckets']['days_61_90'],
+            'aging inclut exactement les bornes 61 et 90 jours'
+        );
+        $this->same(
+            100,
+            (int) $receivablesAging['buckets']['days_91_plus'],
+            'aging classe 91 jours dans la dernière tranche'
+        );
+        $this->same(
+            75,
+            (int) $receivablesAging['unallocated_payments_cents'],
+            'paiement anticipé visible séparément'
+        );
+        $this->same(
+            535,
+            (int) $receivablesAging['net_open_cents'],
+            'aging, avoir, allocation partielle et acompte concordent au centime'
+        );
+        $this->same(
+            $advance,
+            (int) array_values(array_filter(
+                $projection['payments'],
+                static fn (array $row): bool => $row['reference'] === 'ACOMPTE'
+            ))[0]['id'],
+            'paiement anticipé traçable dans la vue 360'
+        );
+
+        $recurrences = new RecurringBillingService(
+            $pdo,
+            $audit,
+            $billing
+        );
+        $recurrenceId = $recurrences->create(
+            $organisationId,
+            $dossierId,
+            'facture_client',
+            $boundaryCustomer,
+            'Abonnement client',
+            'mensuelle',
+            1,
+            '2026-08-31',
+            null,
+            30,
+            $receivable,
+            '',
+            [$line('Abonnement', 1000, $revenue, $exempt)]
+        );
+        $generated = $recurrences->generateDue(
+            $organisationId,
+            $dossierId,
+            '2026-08-31'
+        );
+        $this->same(1, count($generated), 'récurrence client génère un brouillon');
+        $this->same(
+            [],
+            $recurrences->generateDue(
+                $organisationId,
+                $dossierId,
+                '2026-08-31'
+            ),
+            'rejeu de génération ne duplique aucun brouillon'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM generations_factures_recurrentes
+                 WHERE modele_id = {$recurrenceId}"
+            )->fetchColumn(),
+            'génération de facture récurrente historisée une seule fois'
+        );
+        $this->same(
+            'brouillon',
+            (string) $billing->document(
+                $organisationId,
+                $dossierId,
+                $generated[0]
+            )['statut'],
+            'une récurrence ne fait qu’un brouillon'
+        );
+        $supplierRecurrenceId = $recurrences->create(
+            $organisationId,
+            $dossierId,
+            'facture_fournisseur',
+            $supplier,
+            'Abonnement fournisseur',
+            'trimestrielle',
+            1,
+            '2026-09-01',
+            null,
+            15,
+            $payable,
+            'ABO-FOU',
+            [$line('Service fournisseur', 2000, $expense, $purchase)]
+        );
+        $supplierGenerated = $recurrences->generateDue(
+            $organisationId,
+            $dossierId,
+            '2026-09-01'
+        );
+        $supplierRecurringDocument = $billing->document(
+            $organisationId,
+            $dossierId,
+            $supplierGenerated[0]
+        );
+        $this->same(
+            'facture_fournisseur',
+            $supplierRecurringDocument['type'],
+            'récurrence fournisseur utilise le parcours achat'
+        );
+        $this->same(
+            'ABO-FOU-2026-09-01',
+            $supplierRecurringDocument['numero_externe'],
+            'numéro externe récurrent fournisseur déterministe'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM generations_factures_recurrentes
+                 WHERE modele_id = {$supplierRecurrenceId}"
+            )->fetchColumn(),
+            'récurrence fournisseur historisée sans doublon'
         );
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après facturation');
     }

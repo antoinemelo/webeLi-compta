@@ -19,6 +19,7 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
   billing: [
     { key: 'sales', label: 'Ventes', path: '/facturation' },
     { key: 'purchases', label: 'Achats', path: '/facturation/achats' },
+    { key: 'recurrences', label: 'Récurrences', path: '/facturation/recurrences' },
     { key: 'contacts', label: 'Contacts', path: '/facturation/contacts' },
     { key: 'aging', label: 'Échéancier', path: '/facturation/echeancier' }
   ],

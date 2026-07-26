@@ -264,17 +264,9 @@ final class WebApplication
             $this->router->add(
                 'GET',
                 '/facturation',
-                fn (Request $request): Response => $this->billingScreen($request)
-            );
-            $this->router->add(
-                'POST',
-                '/facturation/action',
-                fn (Request $request): Response => $this->billingMutation($request)
-            );
-            $this->router->add(
-                'GET',
-                '/facturation/pdf',
-                fn (Request $request): Response => $this->billingPdf($request)
+                fn (): Response => Response::redirect(
+                    $this->config->url('/app/facturation')
+                )
             );
         }
         if (

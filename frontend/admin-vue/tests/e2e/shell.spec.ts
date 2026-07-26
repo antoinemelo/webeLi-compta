@@ -177,6 +177,61 @@ test('journal, extrait et plan comptable utilisent le parcours Vue unique', asyn
   expect(legacy.headers().location).toBe('/e2e/app/compta/plan');
 });
 
+test('facturation client, contact 360 et aging utilisent le parcours Vue unique', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Facturation', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Factures clients' })).toBeVisible();
+  await expect(page.getByLabel('Navigation de la facturation')).toContainText('Récurrences');
+  await expect(page.getByLabel('Date de référence')).toBeVisible();
+
+  await page.getByRole('link', { name: 'Contacts', exact: true }).click();
+  await page.getByRole('button', { name: 'Nouveau contact' }).click();
+  await page.getByLabel('Raison sociale').fill('Client E2E SA');
+  await page.getByLabel('Courriel').fill('client-e2e@example.test');
+  await page.getByLabel('Adresse').fill('Rue du Client 1');
+  await page.getByLabel('NPA').fill('1200');
+  await page.getByLabel('Localité').fill('Genève');
+  await page.getByRole('button', { name: 'Ajouter au registre' }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'Client E2E SA' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Ventes', exact: true }).click();
+  await page.getByRole('button', { name: 'Nouveau document' }).click();
+  await page.getByLabel('Client').selectOption({ label: 'Client E2E SA' });
+  await page.getByLabel('Date du document').fill('2026-07-20');
+  await page.getByLabel('Échéance explicite').fill('2026-07-26');
+  const collective = page.getByLabel('Compte collectif');
+  const receivableValue = await collective.locator('option').filter({ hasText: '1100' })
+    .getAttribute('value');
+  await collective.selectOption(String(receivableValue));
+  await page.getByLabel('Libellé', { exact: true }).fill('Prestation E2E');
+  await page.getByLabel('Montant', { exact: true }).fill('100.00');
+  const revenue = page.getByLabel('Compte', { exact: true });
+  const revenueValue = await revenue.locator('option').filter({ hasText: '3400' })
+    .getAttribute('value');
+  await revenue.selectOption(String(revenueValue));
+  await page.getByLabel('Code TVA').selectOption({ label: 'VE81 · Ventes 8,1 %' });
+  await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
+  const invoice = page.getByRole('row').filter({ hasText: 'Client E2E SA' });
+  await expect(invoice).toContainText('108.10 CHF');
+  await invoice.getByRole('button', { name: 'Émettre' }).click();
+  await expect(invoice).toContainText(/F-2026-/);
+  await invoice.getByRole('button', { name: 'Comptabiliser' }).click();
+  await expect(page.getByText('Document comptabilisé dans le grand livre.')).toBeVisible();
+
+  await page.getByRole('link', { name: 'Échéancier', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Échéancier et lettrage' })).toBeVisible();
+  await expect(page.getByText('Créances nettes', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Récurrences', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Factures récurrentes' })).toBeVisible();
+
+  const legacy = await page.request.get('/e2e/facturation', { maxRedirects: 0 });
+  expect(legacy.status()).toBe(303);
+  expect(legacy.headers().location).toBe('/e2e/app/facturation');
+});
+
 test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page }) => {
   await loginAsAdministrator(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({

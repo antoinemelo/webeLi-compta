@@ -28,6 +28,7 @@ final class ContactService
         array $roles,
         ?array $address = null,
         ?int $actorId = null,
+        string $idempotencyKey = '',
     ): int {
         return $this->transaction(function () use (
             $organisationId,
@@ -35,7 +36,8 @@ final class ContactService
             $data,
             $roles,
             $address,
-            $actorId
+            $actorId,
+            $idempotencyKey
         ): int {
             $type = (string) ($data['type_personne'] ?? 'entreprise');
             $company = trim((string) ($data['raison_sociale'] ?? ''));
@@ -49,12 +51,29 @@ final class ContactService
                 throw new BillingException('Identité du contact invalide.');
             }
             $this->assertRoles($roles);
+            $idempotencyKey = trim($idempotencyKey);
+            if ($idempotencyKey !== '') {
+                $existing = $this->pdo->prepare(
+                    'SELECT id FROM contacts
+                     WHERE organisation_id = ? AND dossier_id = ?
+                       AND cle_idempotence = ?'
+                );
+                $existing->execute([
+                    $organisationId,
+                    $dossierId,
+                    $idempotencyKey,
+                ]);
+                $existingId = $existing->fetchColumn();
+                if ($existingId !== false) {
+                    return (int) $existingId;
+                }
+            }
             $stmt = $this->pdo->prepare(
                 'INSERT INTO contacts
                  (organisation_id, dossier_id, type_personne, raison_sociale,
                   prenom, nom, email, telephone, iban_paiement, bic_paiement,
-                  langue, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                  langue, cree_par, cle_idempotence)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $type, $company, $firstName, $lastName,
@@ -64,6 +83,7 @@ final class ContactService
                 strtoupper(str_replace(' ', '', trim((string) ($data['bic_paiement'] ?? '')))),
                 (string) ($data['langue'] ?? 'fr'),
                 $actorId,
+                $idempotencyKey,
             ]);
             $id = (int) $this->pdo->lastInsertId();
             $insertRole = $this->pdo->prepare(

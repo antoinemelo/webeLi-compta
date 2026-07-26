@@ -5,6 +5,7 @@ import DashboardView from '@/views/DashboardView.vue';
 import ConfigurationView from '@/views/ConfigurationView.vue';
 import AccountingView from '@/views/AccountingView.vue';
 import LiquidityView from '@/views/LiquidityView.vue';
+import BillingView from '@/views/BillingView.vue';
 import WorkspaceView from '@/views/WorkspaceView.vue';
 
 const workspace = (
@@ -29,7 +30,12 @@ const routes: RouteRecordRaw[] = [
     component: LiquidityView,
     meta: { label: 'Liquidités', section: 'liquidity' }
   },
-  workspace('/facturation/:tab?', 'billing', 'Facturation', 'billing', '/facturation'),
+  {
+    path: '/facturation/:tab?',
+    name: 'billing',
+    component: BillingView,
+    meta: { label: 'Facturation', section: 'billing' }
+  },
   {
     path: '/compta/:tab?',
     name: 'accounting',

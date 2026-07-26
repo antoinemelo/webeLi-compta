@@ -211,6 +211,7 @@ CREATE TABLE contacts (
     telephone TEXT NOT NULL DEFAULT '',
     iban_paiement TEXT NOT NULL DEFAULT '',
     bic_paiement TEXT NOT NULL DEFAULT '',
+    cle_idempotence TEXT NOT NULL DEFAULT '',
     langue TEXT NOT NULL DEFAULT 'fr' CHECK (langue IN ('fr', 'de', 'it', 'en')),
     actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
@@ -353,6 +354,46 @@ CREATE TABLE generations_depenses_recurrentes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     modele_id INTEGER NOT NULL
         REFERENCES modeles_depenses_recurrentes(id) ON DELETE RESTRICT,
+    date_generation TEXT NOT NULL,
+    document_id INTEGER NOT NULL REFERENCES documents_financiers(id) ON DELETE RESTRICT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (modele_id, date_generation),
+    UNIQUE (document_id)
+);
+
+CREATE TABLE modeles_factures_recurrentes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
+    type TEXT NOT NULL
+        CHECK (type IN ('facture_client', 'facture_fournisseur')),
+    libelle TEXT NOT NULL,
+    periodicite TEXT NOT NULL
+        CHECK (periodicite IN ('hebdomadaire', 'mensuelle', 'trimestrielle', 'annuelle')),
+    intervalle INTEGER NOT NULL DEFAULT 1 CHECK (intervalle BETWEEN 1 AND 120),
+    prochaine_echeance TEXT NOT NULL,
+    jour_reference INTEGER NOT NULL CHECK (jour_reference BETWEEN 1 AND 31),
+    date_fin TEXT,
+    jours_echeance INTEGER NOT NULL DEFAULT 30 CHECK (jours_echeance BETWEEN 0 AND 365),
+    compte_collectif_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    numero_externe_prefixe TEXT NOT NULL DEFAULT '',
+    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (monnaie IN ('CHF', 'EUR')),
+    lignes_json TEXT NOT NULL CHECK (json_valid(lignes_json)),
+    statut TEXT NOT NULL DEFAULT 'actif'
+        CHECK (statut IN ('actif', 'pause', 'termine')),
+    derniere_generation_le TEXT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    CHECK (date_fin IS NULL OR date_fin >= prochaine_echeance)
+);
+
+CREATE TABLE generations_factures_recurrentes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    modele_id INTEGER NOT NULL
+        REFERENCES modeles_factures_recurrentes(id) ON DELETE RESTRICT,
     date_generation TEXT NOT NULL,
     document_id INTEGER NOT NULL REFERENCES documents_financiers(id) ON DELETE RESTRICT,
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1569,6 +1610,10 @@ CREATE INDEX idx_conditions_paiement_scope_date
 CREATE INDEX idx_contacts_scope_nom
     ON contacts(dossier_id, actif, raison_sociale, nom, prenom);
 
+CREATE UNIQUE INDEX idx_contacts_idempotence_unique
+    ON contacts(dossier_id, cle_idempotence)
+    WHERE cle_idempotence <> '';
+
 CREATE INDEX idx_contributions_auteur
     ON contributions_pedagogiques(assignation_id, utilisateur_id, cree_le);
 
@@ -1592,6 +1637,9 @@ CREATE INDEX idx_depenses_scope_etat
 
 CREATE INDEX idx_modeles_depenses_echeance
     ON modeles_depenses_recurrentes(dossier_id, statut, prochaine_echeance);
+
+CREATE INDEX idx_modeles_factures_echeance
+    ON modeles_factures_recurrentes(dossier_id, statut, prochaine_echeance);
 
 CREATE INDEX idx_dossiers_organisation ON dossiers(organisation_id);
 

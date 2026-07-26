@@ -1,38 +1,77 @@
-# Débiteurs et créanciers
+# Facturation, contacts et échéancier
 
-L’écran **Débiteurs et créanciers** est propre au dossier sélectionné. Il
-regroupe les documents, les contacts et les paiements dans trois onglets.
+L’espace Vue `/app/facturation` est propre au dossier sélectionné. Il sépare
+les ventes, achats, récurrences, contacts et échéancier sans créer de registre
+ou de moteur parallèle. L’ancienne route `/facturation` redirige vers Vue.
 
 ## Cycle documentaire
 
 Un brouillon ne possède aucun numéro. L’émission attribue atomiquement un
 numéro par dossier, année et série (`F-AAAA-NNN` pour une facture client), puis
-fige l’identité, l’adresse, les lignes, les prix et les snapshots TVA. La
-comptabilisation produit une écriture équilibrée et idempotente.
+fige l’identité, l’adresse, les lignes, les prix et les snapshots TVA. Le rejeu
+de l’émission rend le même numéro. La comptabilisation produit une écriture
+équilibrée et idempotente.
 
-Une facture comptabilisée n’est jamais supprimée ni réécrite. Son annulation
+Une facture comptabilisée n’est jamais supprimée ni réécrite. Sa correction
 passe par un avoir émis et comptabilisé ; l’original demeure dans l’historique.
-Les factures fournisseurs exigent leur numéro externe, unique par fournisseur,
-et acceptent un justificatif PDF ou image de 10 Mo au maximum. Aucun circuit
-d’approbation fournisseur n’est introduit.
+Les factures fournisseurs exigent leur numéro externe, unique par fournisseur.
 
-## Paiements
+## Récurrences
+
+Un modèle client ou fournisseur conserve la cadence, le contact, le compte
+collectif et les lignes. La génération jusqu’à une date est idempotente par
+modèle et date d’échéance. Elle crée uniquement un brouillon sans numéro :
+l’opérateur doit encore le contrôler, l’émettre et le comptabiliser.
+
+Les mois courts conservent le jour de référence dans la limite du dernier jour
+du mois. Une suspension est réversible ; un modèle terminé ne peut pas être
+réactivé implicitement.
+
+## Paiements et aging
 
 Un paiement existe indépendamment des factures. Les allocations N–N permettent
 de répartir plusieurs paiements sur une facture ou un paiement sur plusieurs
-factures. La somme allouée ne peut dépasser ni le paiement ni le solde de la
-facture, même d’un centime. Les états ouvert, partiellement payé, payé et en
-retard sont dérivés des documents, allocations et échéances.
+factures. La somme allouée ne peut dépasser ni le paiement ni le solde du
+document, même d’un centime.
+
+L’échéancier exige une date de référence visible :
+
+- non échu : échéance postérieure à la date de référence ;
+- 0–30 jours : échéance du jour incluse jusqu’au trentième jour ;
+- 31–60 jours ;
+- 61–90 jours ;
+- plus de 90 jours.
+
+Un avoir non alloué apparaît négativement dans sa tranche. Un paiement non
+alloué réduit le solde net du contact, mais reste affiché séparément comme
+acompte : il n’est pas artificiellement vieilli. L’export CSV reprend les
+filtres et inscrit la date de référence sur chaque ligne.
+
+## Contact 360°
+
+Le registre de contacts est unique et partagé avec Configuration, Liquidités et
+les paiements. La vue 360° rassemble documents, avoirs, paiements, créances,
+dettes et aging du contact. La création depuis l’API exige une clé idempotente ;
+son rejeu retourne le même identifiant sans dupliquer le contact.
 
 ## PDF et QR-facture
 
 L’émission client crée une référence SCOR. Le PDF archivé contient une
 QR-facture suisse avec son payload SPC. L’adresse du créancier se configure
-dans `parametres_organisation` avec les clés `adresse_ligne1`,
-`adresse_ligne2`, `code_postal`, `localite` et `pays`. L’IBAN vient de
-`iban_facturation` ou, à défaut, du premier compte de trésorerie actif possédant
-un IBAN.
+dans l’identité de l’organisation ; l’IBAN vient de `iban_facturation` ou du
+premier compte de trésorerie actif possédant un IBAN.
 
-Les dépendances PDF/QR sont verrouillées pour PHP 8.2. L’archive PDF, son
-empreinte SHA-256, le payload QR et les snapshots de contact restent attachés
-au document.
+L’archive PDF, son empreinte SHA-256, le payload QR et les snapshots de contact
+restent attachés au document.
+
+## Permissions et retour arrière
+
+La consultation exige `facturation.view`. Les brouillons, contacts et modèles
+utilisent `facturation.manage`, l’émission/PDF `facturation.issue`, la
+comptabilisation `facturation.post`, les paiements/allocations
+`facturation.pay` et les rappels `facturation.remind`.
+
+En développement, les tables de récurrence et l’idempotence des contacts font
+partie de `database/migrations/001_initial.sql`. Une reconstruction doit être
+précédée d’une sauvegarde de confort puis suivie de `db:integrity`. Après gel
+de production, cette évolution devra être portée par une migration additive.

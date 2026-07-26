@@ -35,6 +35,7 @@ Les exemples versionnés sont :
 - `managed-references.success.json` ;
 - `expenses.success.json` ;
 - `treasury.success.json` ;
+- `billing.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -92,6 +93,23 @@ Les exemples versionnés sont :
 | POST | `/api/v1/liquidites/paiements/lots` | préparation idempotente d’un lot sortant |
 | POST | `/api/v1/liquidites/paiements/lots/exporter` | génération et téléchargement pain.001, sans transmission |
 | POST | `/api/v1/liquidites/paiements/lots/confirmer` | confirmation, comptabilisation et lettrage depuis le relevé |
+| GET | `/api/v1/facturation` | ventes, achats, contacts 360°, échéancier et récurrences |
+| GET | `/api/v1/facturation/export` | export CSV filtré avec date de référence |
+| POST | `/api/v1/facturation/documents` | création d’un document en brouillon |
+| POST | `/api/v1/facturation/documents/emettre` | émission et numérotation idempotente |
+| POST | `/api/v1/facturation/documents/comptabiliser` | comptabilisation via `EntryService` |
+| POST | `/api/v1/facturation/documents/avoirs` | création d’un brouillon d’avoir |
+| POST | `/api/v1/facturation/documents/pdf` | archive et téléchargement PDF/QR client |
+| POST | `/api/v1/facturation/contacts` | création idempotente dans le registre unique |
+| POST | `/api/v1/facturation/contacts/modifier` | édition optimiste du contact |
+| POST | `/api/v1/facturation/recurrences` | nouveau modèle client ou fournisseur |
+| POST | `/api/v1/facturation/recurrences/pause` | suspension ou reprise optimiste |
+| POST | `/api/v1/facturation/recurrences/generer` | génération idempotente de brouillons |
+| POST | `/api/v1/facturation/rappels` | traçage d’un rappel |
+| POST | `/api/v1/facturation/paiements` | saisie d’un paiement indépendant |
+| POST | `/api/v1/facturation/allocations` | allocation N–N d’un paiement |
+| POST | `/api/v1/facturation/allocations/avoirs` | allocation d’un avoir |
+| POST | `/api/v1/facturation/allocations/annuler` | délettrage audité |
 
 Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
@@ -145,6 +163,13 @@ Le lettrage est N–N et refuse les surallocations. La préparation, l’export 
 la confirmation des paiements sortants utilisent trois permissions distinctes.
 Un export pain.001 reste toujours qualifié de « non transmis » ; la dette
 n’est soldée qu’après présence du débit dans un relevé bancaire confirmé.
+
+La lecture Facturation accepte `as_of_date`, `direction=all|sales|purchases`,
+`status`, `search` et `contact_id`. La date est reprise dans la réponse et dans
+l’export. Les tranches d’aging incluent exactement 0–30, 31–60, 61–90 et plus
+de 90 jours ; les paiements non alloués sont séparés des tranches mais déduits
+du solde net. Les mutations restent scopées par la session et les documents
+émis ne sont jamais réécrits.
 
 ## Erreurs
 

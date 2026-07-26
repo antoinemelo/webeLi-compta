@@ -1,0 +1,65 @@
+{
+  "data": {
+    "reference_date": "2026-07-26",
+    "filters": {
+      "direction": "sales",
+      "status": "all",
+      "search": "",
+      "contact_id": null
+    },
+    "documents": [],
+    "aging": {
+      "receivables": {
+        "buckets": {
+          "not_due": 0,
+          "days_0_30": 0,
+          "days_31_60": 0,
+          "days_61_90": 0,
+          "days_91_plus": 0
+        },
+        "open_documents_cents": 0,
+        "unallocated_payments_cents": 0,
+        "net_open_cents": 0,
+        "item_count": 0
+      },
+      "payables": {
+        "buckets": {
+          "not_due": 0,
+          "days_0_30": 0,
+          "days_31_60": 0,
+          "days_61_90": 0,
+          "days_91_plus": 0
+        },
+        "open_documents_cents": 0,
+        "unallocated_payments_cents": 0,
+        "net_open_cents": 0,
+        "item_count": 0
+      }
+    },
+    "contacts": [],
+    "contact_360": null,
+    "payments": [],
+    "allocations": [],
+    "recurrences": [],
+    "reminders": [],
+    "catalog": {
+      "accounts": [],
+      "vat_codes": [],
+      "exercises": [],
+      "journals": []
+    },
+    "definitions": {},
+    "capabilities": {
+      "manage": true,
+      "issue": true,
+      "post": true,
+      "pay": true,
+      "remind": true
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-billing-0001"
+  },
+  "errors": []
+}

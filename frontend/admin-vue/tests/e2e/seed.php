@@ -170,6 +170,18 @@ $vat->addCode([
     'compte_tva_id' => $accountId('1170'),
     'date_debut' => '2024-01-01',
 ]);
+$vat->addCode([
+    'organisation_id' => $organisationA,
+    'dossier_id' => $dossierA,
+    'code' => 'VE81',
+    'libelle' => 'Ventes 8,1 %',
+    'traitement' => 'normal',
+    'nature' => 'collectee',
+    'taux_legal_id' => $normalRateId,
+    'droit_deduction' => false,
+    'compte_tva_id' => $accountId('2200'),
+    'date_debut' => '2024-01-01',
+]);
 
 $organisationB = $scopes->createOrganisation('Entreprise Confidentielle SA', 'reelle');
 $dossierB = $scopes->createDossier(

@@ -633,3 +633,164 @@ export type DashboardProjection = {
     cache: false;
   };
 };
+
+export type BillingDocument = {
+  id: number;
+  number: string;
+  external_number: string;
+  type: 'facture_client' | 'avoir_client' | 'facture_fournisseur' | 'avoir_fournisseur';
+  direction: 'sales' | 'purchases';
+  status: string;
+  payment_state: string;
+  version: number;
+  contact_id: number;
+  contact: string;
+  document_date: string;
+  due_date: string;
+  currency: string;
+  net_cents: number;
+  vat_cents: number;
+  gross_cents: number;
+  allocated_cents: number;
+  open_cents: number;
+  reminder_count: number;
+  entry_id: number | null;
+  origin_document_id: number | null;
+  scor_reference: string;
+  has_archived_pdf: boolean;
+  lines: Array<{
+    id: number;
+    label: string;
+    quantity_milli: number;
+    unit_price_cents: number;
+    input_mode: 'net' | 'brut';
+    account_id: number;
+    vat_code_id: number;
+    net_cents: number;
+    vat_cents: number;
+    gross_cents: number;
+  }>;
+};
+
+export type BillingAgingSide = {
+  buckets: {
+    not_due: number;
+    days_0_30: number;
+    days_31_60: number;
+    days_61_90: number;
+    days_91_plus: number;
+  };
+  open_documents_cents: number;
+  unallocated_payments_cents: number;
+  net_open_cents: number;
+  item_count: number;
+};
+
+export type BillingContact = {
+  id: number;
+  type: 'entreprise' | 'personne';
+  company: string;
+  first_name: string;
+  last_name: string;
+  label: string;
+  email: string;
+  phone: string;
+  iban: string;
+  bic: string;
+  language: string;
+  roles: string[];
+  version: number;
+  address: {
+    line1: string;
+    line2: string;
+    postal_code: string;
+    city: string;
+    country: string;
+  };
+  balance: {
+    receivable_cents: number;
+    payable_cents: number;
+    net_cents: number;
+  };
+};
+
+export type BillingPayload = {
+  reference_date: string;
+  filters: {
+    direction: string;
+    status: string;
+    search: string;
+    contact_id: number | null;
+  };
+  documents: BillingDocument[];
+  aging: {
+    receivables: BillingAgingSide;
+    payables: BillingAgingSide;
+  };
+  contacts: BillingContact[];
+  contact_360: null | {
+    contact_id: number;
+    reference_date: string;
+    documents: BillingDocument[];
+    payments: BillingPayment[];
+    aging: {
+      receivables: BillingAgingSide;
+      payables: BillingAgingSide;
+    };
+    balance: BillingContact['balance'];
+  };
+  payments: BillingPayment[];
+  allocations: Array<Record<string, string | number | null>>;
+  recurrences: Array<{
+    id: number;
+    type: 'facture_client' | 'facture_fournisseur';
+    label: string;
+    contact_id: number;
+    contact: string;
+    frequency: string;
+    interval: number;
+    next_date: string;
+    end_date: string | null;
+    due_days: number;
+    status: string;
+    generation_count: number;
+    version: number;
+  }>;
+  reminders: Array<{
+    id: number;
+    document_id: number;
+    level: number;
+    channel: string;
+    note: string;
+    reminded_at: string;
+    document_number: string;
+  }>;
+  catalog: {
+    accounts: Array<{ id: number; number: string; label: string }>;
+    vat_codes: Array<{ id: number; code: string; label: string }>;
+    exercises: Array<{ id: number; label: string }>;
+    journals: Array<{ id: number; code: string; label: string }>;
+  };
+  capabilities: {
+    manage: boolean;
+    issue: boolean;
+    post: boolean;
+    pay: boolean;
+    remind: boolean;
+  };
+  definitions: Record<string, string>;
+};
+
+export type BillingPayment = {
+  id: number;
+  contact_id: number;
+  contact: string;
+  direction: 'encaissement' | 'decaissement';
+  payment_date: string;
+  amount_cents: number;
+  allocated_cents: number;
+  unallocated_cents: number;
+  currency: string;
+  reference: string;
+  status: string;
+};

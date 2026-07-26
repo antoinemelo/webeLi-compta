@@ -1266,6 +1266,56 @@ textarea {
   }
 }
 
+.filter-bar {
+  align-items: end;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d9dbe8);
+  border-radius: 0.8rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(3, minmax(10rem, 1fr)) auto;
+  padding: 1rem;
+}
+
+.reference-note {
+  color: var(--muted, #5c6074);
+  margin: 0;
+}
+
+.kpi-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.kpi-card {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d9dbe8);
+  border-radius: 0.8rem;
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+}
+
+.kpi-card strong {
+  color: var(--primary, #20214e);
+  font-size: 1.35rem;
+}
+
+.split-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 800px) {
+  .filter-bar,
+  .kpi-grid,
+  .split-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media print {
   .topbar,
   .sidebar,

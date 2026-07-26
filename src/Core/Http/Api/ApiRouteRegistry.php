@@ -10,6 +10,7 @@ use Compta\Core\Security\Csrf;
 use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
+use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
 use Compta\Modules\Tresorerie\Http\TreasuryApiController;
@@ -25,6 +26,7 @@ final class ApiRouteRegistry
         private readonly ?AccountingApiController $accounting = null,
         private readonly ?ExpenseApiController $expenses = null,
         private readonly ?TreasuryApiController $treasury = null,
+        private readonly ?BillingApiController $billing = null,
     ) {
     }
 
@@ -233,6 +235,25 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/liquidites/paiements/lots', $this->treasury->prepareBatch(...));
             $this->add($router, 'POST', '/api/v1/liquidites/paiements/lots/exporter', $this->treasury->exportBatch(...));
             $this->add($router, 'POST', '/api/v1/liquidites/paiements/lots/confirmer', $this->treasury->confirmBatch(...));
+        }
+        if ($this->billing !== null) {
+            $this->add($router, 'GET', '/api/v1/facturation', $this->billing->show(...));
+            $this->add($router, 'GET', '/api/v1/facturation/export', $this->billing->export(...));
+            $this->add($router, 'POST', '/api/v1/facturation/documents', $this->billing->createDocument(...));
+            $this->add($router, 'POST', '/api/v1/facturation/documents/emettre', $this->billing->issueDocument(...));
+            $this->add($router, 'POST', '/api/v1/facturation/documents/comptabiliser', $this->billing->postDocument(...));
+            $this->add($router, 'POST', '/api/v1/facturation/documents/avoirs', $this->billing->createCredit(...));
+            $this->add($router, 'POST', '/api/v1/facturation/documents/pdf', $this->billing->archivePdf(...));
+            $this->add($router, 'POST', '/api/v1/facturation/contacts', $this->billing->createContact(...));
+            $this->add($router, 'POST', '/api/v1/facturation/contacts/modifier', $this->billing->updateContact(...));
+            $this->add($router, 'POST', '/api/v1/facturation/recurrences', $this->billing->createRecurrence(...));
+            $this->add($router, 'POST', '/api/v1/facturation/recurrences/pause', $this->billing->pauseRecurrence(...));
+            $this->add($router, 'POST', '/api/v1/facturation/recurrences/generer', $this->billing->generateRecurrences(...));
+            $this->add($router, 'POST', '/api/v1/facturation/rappels', $this->billing->createReminder(...));
+            $this->add($router, 'POST', '/api/v1/facturation/paiements', $this->billing->createPayment(...));
+            $this->add($router, 'POST', '/api/v1/facturation/allocations', $this->billing->allocatePayment(...));
+            $this->add($router, 'POST', '/api/v1/facturation/allocations/avoirs', $this->billing->allocateCredit(...));
+            $this->add($router, 'POST', '/api/v1/facturation/allocations/annuler', $this->billing->unallocate(...));
         }
     }
 
