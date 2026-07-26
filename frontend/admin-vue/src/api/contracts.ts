@@ -160,12 +160,78 @@ export type DossierInitializationSummary = {
   period_id: number;
   journal_id: number;
   vat_code_count: number;
+  copied_access_count: number;
 };
 
 export type DossierRegistryDetail = DossierRegistryItem & {
   summary: DossierInitializationSummary;
   deletion_dependencies: Record<string, number>;
   historical_data: boolean;
+};
+
+export type StructureRole = {
+  id: number;
+  code: string;
+  label: string;
+  permissions: string[];
+};
+
+export type StructureRoleSource = {
+  id: number;
+  code: string;
+  label: string;
+};
+
+export type StructureAccessUser = {
+  id: number;
+  email: string;
+  name: string;
+  active: boolean;
+  installation_roles: StructureRoleSource[];
+  organisation_roles: StructureRoleSource[];
+  dossier_roles: StructureRoleSource[];
+  direct_role_ids: number[];
+  effective_permissions: string[];
+};
+
+export type StructureAccessMatrix = {
+  scope: 'installation' | 'organisation' | 'dossier';
+  organisation_id: number | null;
+  dossier_id: number | null;
+  version: string;
+  roles: StructureRole[];
+  users: StructureAccessUser[];
+};
+
+export type StructureAccessPreview = {
+  user_id: number;
+  before: number[];
+  after: number[];
+  before_permissions: string[];
+  after_permissions: string[];
+  added_permissions: string[];
+  removed_permissions: string[];
+  confirmation_token: string;
+  transfer: {
+    user_id: number;
+    role_ids: number[];
+    role_code: string;
+  } | [];
+};
+
+export type DossierAccessCopyPreview = {
+  organisation_id: number;
+  source_dossier_id: number;
+  assignments: Array<{
+    user_id: number;
+    user_email: string;
+    user_name: string;
+    role_id: number;
+    role_code: string;
+    role_label: string;
+  }>;
+  assignment_count: number;
+  preview_hash: string;
 };
 
 export type ConfigurationModule = {
@@ -370,17 +436,6 @@ export type ManagedReferencesPayload = {
       version: number;
     };
     accounts: Array<{ id: number; number: string; label: string }>;
-  };
-  access: {
-    roles: Array<{ id: number; code: string; label: string }>;
-    users: Array<{
-      id: number;
-      email: string;
-      name: string;
-      active: boolean;
-      dossier_role_ids: number[];
-      inherited_roles: string[];
-    }>;
   };
   capabilities: {
     contacts: boolean;

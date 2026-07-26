@@ -21,6 +21,11 @@ seule ; leurs changements passent par ce registre afin d’exiger une date et un
 source. Le cycle de vie et les règles de suppression sont détaillés dans
 [`organisations-dossiers.md`](organisations-dossiers.md).
 
+La même arborescence contient la gouvernance des accès d’installation,
+d’organisation et de dossier. L’ancien enregistrement direct depuis l’onglet
+**Accès** est retiré : cet onglet renvoie désormais vers le parcours
+prévisualisé, versionné et audité du registre des structures.
+
 ## Sources de vérité
 
 | Réglage | Source unique |

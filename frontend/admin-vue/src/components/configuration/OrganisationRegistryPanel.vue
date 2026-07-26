@@ -18,6 +18,14 @@ const canManageDossiers = computed(() =>
 );
 const creating = ref(false);
 const creatingDossier = ref(false);
+const accessOpen = ref(false);
+const accessScope = ref<'installation' | 'organisation' | 'dossier'>('organisation');
+const accessUserId = ref(0);
+const accessRoleIds = ref<number[]>([]);
+const successorUserId = ref(0);
+const copyAccess = ref(false);
+const copySourceDossierId = ref(0);
+const copyConfirmed = ref(false);
 const deleteDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const deleteDossierDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const today = new Date().toISOString().slice(0, 10);
@@ -73,6 +81,9 @@ const dossierEdit = reactive({
 const dependencies = computed(() => Object.entries(
   store.selected?.deletion_dependencies ?? {}
 ));
+const accessUser = computed(() => store.accessMatrix?.users.find(
+  (user) => user.id === accessUserId.value
+) ?? null);
 
 watch(
   () => store.selected,
@@ -92,6 +103,17 @@ watch(
   },
   { immediate: true }
 );
+
+watch(copySourceDossierId, () => {
+  store.copyPreview = null;
+  copyConfirmed.value = false;
+});
+
+watch(accessUserId, () => {
+  accessRoleIds.value = [...(accessUser.value?.direct_role_ids ?? [])];
+  successorUserId.value = 0;
+  store.accessPreview = null;
+});
 
 watch(
   () => store.selectedDossier,
@@ -235,7 +257,13 @@ async function createDossier(): Promise<void> {
       journal: {
         code: dossierDraft.journal_code,
         label: dossierDraft.journal_label
-      }
+      },
+      access_copy: copyAccess.value && store.copyPreview && copyConfirmed.value
+        ? {
+          source_dossier_id: store.copyPreview.source_dossier_id,
+          preview_hash: store.copyPreview.preview_hash
+        }
+        : null
     });
     creatingDossier.value = false;
     await context.load();
@@ -243,6 +271,37 @@ async function createDossier(): Promise<void> {
   } catch {
     // Le résumé d’erreur du registre reste visible.
   }
+}
+
+async function openAccess(
+  scope: 'installation' | 'organisation' | 'dossier'
+): Promise<void> {
+  accessScope.value = scope;
+  accessOpen.value = true;
+  accessUserId.value = 0;
+  accessRoleIds.value = [];
+  await store.loadAccess(scope);
+}
+
+async function previewAccess(): Promise<void> {
+  if (!accessUserId.value) return;
+  await store.previewAccess(
+    accessUserId.value,
+    [...accessRoleIds.value],
+    successorUserId.value || undefined
+  );
+}
+
+async function applyAccess(): Promise<void> {
+  await store.applyAccess(successorUserId.value || undefined);
+  await context.load();
+  notifications.push('Matrice d’accès mise à jour et auditée.', 'success');
+}
+
+async function previewCopy(): Promise<void> {
+  if (!copySourceDossierId.value) return;
+  copyConfirmed.value = false;
+  await store.previewAccessCopy(copySourceDossierId.value);
 }
 
 async function updateDossier(): Promise<void> {
@@ -563,6 +622,50 @@ async function removeDossier(): Promise<void> {
               <label><input v-model="dossierDraft.projects" type="checkbox" :disabled="!dossierDraft.association"> Comptes de projets</label>
               <label><input v-model="dossierDraft.restricted_funds" type="checkbox" :disabled="!dossierDraft.association"> Fonds affectés</label>
             </fieldset>
+            <fieldset class="choice-field access-copy-field">
+              <legend>Accès initiaux</legend>
+              <label>
+                <input v-model="copyAccess" type="checkbox">
+                Copier explicitement la matrice d’un dossier frère
+              </label>
+              <template v-if="copyAccess">
+                <select v-model.number="copySourceDossierId" aria-label="Dossier source des accès">
+                  <option :value="0">Choisir le dossier source…</option>
+                  <option
+                    v-for="dossier in store.dossiers.filter((item) => item.active)"
+                    :key="dossier.id"
+                    :value="dossier.id"
+                  >
+                    {{ dossier.nom }}
+                  </option>
+                </select>
+                <button
+                  type="button"
+                  class="button secondary compact"
+                  :disabled="!copySourceDossierId || store.saving"
+                  @click="previewCopy"
+                >
+                  Prévisualiser la copie
+                </button>
+                <div v-if="store.copyPreview" class="copy-preview" role="status">
+                  <strong>{{ store.copyPreview.assignment_count }} attribution(s) directe(s)</strong>
+                  <ul>
+                    <li
+                      v-for="assignment in store.copyPreview.assignments"
+                      :key="`${assignment.user_id}-${assignment.role_id}`"
+                    >
+                      {{ assignment.user_name || assignment.user_email }}
+                      · {{ assignment.role_label }}
+                    </li>
+                  </ul>
+                  <label>
+                    <input v-model="copyConfirmed" type="checkbox">
+                    Je confirme exactement cette matrice
+                  </label>
+                </div>
+              </template>
+              <small>Aucun droit n’est copié sans aperçu et confirmation.</small>
+            </fieldset>
             <FormField id="dossier-exercise-label" label="Premier exercice">
               <template #default="{ describedBy }"><input id="dossier-exercise-label" v-model="dossierDraft.exercise_label" required :aria-describedby="describedBy"></template>
             </FormField>
@@ -580,7 +683,13 @@ async function removeDossier(): Promise<void> {
             </FormField>
           </div>
           <p class="help-text">Le dossier, le plan, l’exercice, la période, le journal et les références sont créés dans une seule transaction.</p>
-          <button type="submit" class="button" :disabled="store.saving">Créer et initialiser</button>
+          <button
+            type="submit"
+            class="button"
+            :disabled="store.saving || (copyAccess && (!store.copyPreview || !copyConfirmed))"
+          >
+            Créer et initialiser
+          </button>
         </form>
 
         <div v-if="store.creationSummary" class="initialization-summary" role="status">
@@ -637,6 +746,147 @@ async function removeDossier(): Promise<void> {
             </button>
           </div>
         </article>
+
+        <section class="structure-access" aria-labelledby="structure-access-title">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Gouvernance</p>
+              <h3 id="structure-access-title">Accès aux structures</h3>
+            </div>
+            <button
+              v-if="accessOpen"
+              type="button"
+              class="button secondary compact"
+              @click="accessOpen = false"
+            >
+              Fermer
+            </button>
+          </div>
+          <p>
+            Consultez séparément les rôles d’installation, hérités de
+            l’organisation et directs du dossier.
+          </p>
+          <div class="registry-actions access-scope-actions">
+            <button type="button" class="button secondary" @click="openAccess('organisation')">
+              Accès de l’organisation
+            </button>
+            <button
+              type="button"
+              class="button secondary"
+              :disabled="!store.selectedDossier"
+              @click="openAccess('dossier')"
+            >
+              Accès du dossier sélectionné
+            </button>
+            <button
+              v-if="canAdminister"
+              type="button"
+              class="button secondary"
+              @click="openAccess('installation')"
+            >
+              Rôles d’installation
+            </button>
+          </div>
+
+          <div v-if="accessOpen && store.accessMatrix" class="access-workspace">
+            <div class="access-version">
+              <strong>
+                Périmètre :
+                {{ accessScope === 'installation' ? 'installation' : accessScope === 'organisation' ? 'organisation' : 'dossier' }}
+              </strong>
+              <small>Version {{ store.accessMatrix.version.slice(0, 12) }}</small>
+            </div>
+            <div class="table-scroll" tabindex="0">
+              <table class="data-table access-table">
+                <thead>
+                  <tr>
+                    <th>Utilisateur</th>
+                    <th>Installation</th>
+                    <th>Organisation (hérité)</th>
+                    <th>Dossier (direct)</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="user in store.accessMatrix.users" :key="user.id">
+                    <td><strong>{{ user.name || user.email }}</strong><small>{{ user.email }}</small></td>
+                    <td>{{ user.installation_roles.map((role) => role.label).join(', ') || '—' }}</td>
+                    <td>{{ user.organisation_roles.map((role) => role.label).join(', ') || '—' }}</td>
+                    <td>{{ user.dossier_roles.map((role) => role.label).join(', ') || '—' }}</td>
+                    <td>
+                      <button
+                        type="button"
+                        class="button secondary compact"
+                        :disabled="!user.active"
+                        @click="accessUserId = user.id"
+                      >
+                        Modifier
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <form
+              v-if="accessUser"
+              class="access-editor"
+              @submit.prevent="previewAccess"
+            >
+              <div>
+                <p class="eyebrow">Modification contrôlée</p>
+                <h4>{{ accessUser.name || accessUser.email }}</h4>
+              </div>
+              <fieldset class="choice-field">
+                <legend>Rôles directs sur ce périmètre</legend>
+                <label v-for="role in store.accessMatrix.roles" :key="role.id">
+                  <input v-model="accessRoleIds" type="checkbox" :value="role.id">
+                  {{ role.label }}
+                </label>
+              </fieldset>
+              <FormField id="access-successor" label="Successeur (si dernier administrateur)">
+                <template #default="{ describedBy }">
+                  <select id="access-successor" v-model.number="successorUserId" :aria-describedby="describedBy">
+                    <option :value="0">Aucun transfert</option>
+                    <option
+                      v-for="user in store.accessMatrix.users.filter((item) => item.id !== accessUserId && item.active)"
+                      :key="user.id"
+                      :value="user.id"
+                    >
+                      {{ user.name || user.email }}
+                    </option>
+                  </select>
+                </template>
+              </FormField>
+              <button type="submit" class="button secondary" :disabled="store.saving">
+                Prévisualiser les permissions
+              </button>
+            </form>
+
+            <div v-if="store.accessPreview" class="permission-preview">
+              <div>
+                <strong>Avant</strong>
+                <p>{{ store.accessPreview.before_permissions.join(', ') || 'Aucune permission' }}</p>
+              </div>
+              <div>
+                <strong>Après</strong>
+                <p>{{ store.accessPreview.after_permissions.join(', ') || 'Aucune permission' }}</p>
+              </div>
+              <p v-if="store.accessPreview.added_permissions.length">
+                Ajoutées : {{ store.accessPreview.added_permissions.join(', ') }}
+              </p>
+              <p v-if="store.accessPreview.removed_permissions.length">
+                Retirées : {{ store.accessPreview.removed_permissions.join(', ') }}
+              </p>
+              <p v-if="!Array.isArray(store.accessPreview.transfer)">
+                Transfert explicite à l’utilisateur #{{ store.accessPreview.transfer.user_id }}.
+              </p>
+              <button type="button" class="button" :disabled="store.saving" @click="applyAccess">
+                Confirmer cette matrice
+              </button>
+            </div>
+          </div>
+        </section>
       </section>
 
       <form class="registry-form" @submit.prevent="saveLegalIdentity">
@@ -732,6 +982,20 @@ async function removeDossier(): Promise<void> {
 .dependency-note { padding: .75rem; border-left: .25rem solid var(--color-warning, #9b6a00); background: var(--color-surface-muted); }
 .help-text { color: var(--color-text-muted); }
 .dossier-tree, .dossier-detail { display: grid; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.structure-access, .access-workspace, .access-editor, .permission-preview {
+  display: grid; gap: 1rem;
+}
+.structure-access { padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.access-version { display: flex; justify-content: space-between; gap: 1rem; }
+.access-table td:first-child { min-width: 13rem; }
+.access-table td:first-child small { display: block; }
+.permission-preview, .copy-preview {
+  padding: .75rem; border: 1px solid var(--color-border);
+  border-radius: .5rem; background: var(--color-surface-muted);
+}
+.permission-preview > div { display: grid; gap: .25rem; }
+.permission-preview p, .copy-preview ul { margin: 0; }
+.access-copy-field { align-content: start; }
 .dossier-list { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
 .dossier-node { width: 100%; display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; background: var(--color-surface); color: inherit; text-align: left; }
 .dossier-node[aria-current="true"] { border-color: var(--color-primary); }

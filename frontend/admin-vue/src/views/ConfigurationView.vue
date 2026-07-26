@@ -30,7 +30,6 @@ const canManage = computed(() => context.can('dossier.manage'));
 const canManageRegistry = computed(() => (
   context.can('installation.admin') || context.can('organisation.manage')
 ));
-const currentUserId = computed(() => context.context?.user.id ?? 0);
 const today = new Date().toISOString().slice(0, 10);
 type ReferenceSection =
   | 'treasury'
@@ -215,7 +214,6 @@ const periodDraft = reactive({
   end_date: today,
   status: 'ouverte' as 'ouverte' | 'fermee'
 });
-const accessSelections = reactive<Record<number, number[]>>({});
 const vatTreatmentsWithRate = ['normal', 'reduit', 'special', 'acquisition', 'import'];
 const paymentRows = computed<Array<Record<string, unknown>>>(() =>
   (configuration.value?.payment_terms ?? []).map((item) => ({
@@ -279,12 +277,6 @@ watch(
   managedReferences,
   (value) => {
     if (!value) return;
-    Object.keys(accessSelections).forEach((key) => {
-      delete accessSelections[Number(key)];
-    });
-    value.access.users.forEach((user) => {
-      accessSelections[user.id] = [...user.dossier_role_ids];
-    });
     if (!periodDraft.exercise_id && value.accounting_setup.exercises.length) {
       periodDraft.exercise_id = value.accounting_setup.exercises[0].id;
     }
@@ -641,15 +633,6 @@ async function togglePeriod(
     status: period.status === 'ouverte' ? 'fermee' : 'ouverte'
   });
   notifications.push('Statut de la période mis à jour.', 'success');
-}
-
-async function saveAccess(userId: number): Promise<void> {
-  await store.saveDossierAccess({
-    user_id: userId,
-    role_ids: [...(accessSelections[userId] || [])]
-  });
-  await context.load();
-  notifications.push('Rôles du dossier enregistrés.', 'success');
 }
 
 async function saveIdentity(): Promise<void> {
@@ -1899,53 +1882,14 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
       <section v-else-if="activeTab === 'acces' && managedReferences" class="configuration-stack">
         <article class="panel">
           <div class="panel-heading">
-            <div><p class="eyebrow">Accès directs</p><h2>Rôles du dossier</h2></div>
-            <strong>{{ managedReferences.access.users.length }}</strong>
+            <div><p class="eyebrow">Gouvernance centralisée</p><h2>Accès aux structures</h2></div>
           </div>
           <p>
-            Les rôles hérités de l’installation ou de l’organisation restent visibles,
-            mais seuls les rôles directs de ce dossier sont modifiés ici.
+            La gestion des rôles se fait désormais dans l’arborescence
+            « Organisations et dossiers » ci-dessus. Elle impose une
+            prévisualisation, un contrôle de version et protège le dernier
+            administrateur.
           </p>
-          <div class="access-list">
-            <form
-              v-for="user in managedReferences.access.users"
-              :key="user.id"
-              class="access-card"
-              @submit.prevent="saveAccess(user.id)"
-            >
-              <div>
-                <h3>{{ user.name || user.email }}</h3>
-                <p>{{ user.email }}</p>
-                <small v-if="user.inherited_roles.length">
-                  Hérité : {{ user.inherited_roles.join(' · ') }}
-                </small>
-              </div>
-              <fieldset class="checkbox-group">
-                <legend>Rôles directs</legend>
-                <label v-for="role in managedReferences.access.roles" :key="role.id">
-                  <input
-                    v-model="accessSelections[user.id]"
-                    type="checkbox"
-                    :value="role.id"
-                    :disabled="user.id === currentUserId"
-                  >
-                  {{ role.label }}
-                </label>
-              </fieldset>
-              <button
-                class="button secondary compact"
-                type="submit"
-                :disabled="store.saving || user.id === currentUserId"
-              >
-                Enregistrer les rôles
-              </button>
-            </form>
-          </div>
-          <EmptyState
-            v-if="!managedReferences.access.users.length"
-            title="Aucun utilisateur administrable"
-            description="Les comptes sont créés au niveau de l’installation, puis affectés ici."
-          />
         </article>
       </section>
 

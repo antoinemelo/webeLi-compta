@@ -672,33 +672,6 @@ final class ConfigurationInputValidator
         ];
     }
 
-    /** @return array{user_id:int,role_ids:list<int>} */
-    public function dossierAccess(Request $request): array
-    {
-        $data = $this->only($request, ['user_id', 'role_ids']);
-        $errors = [];
-        if (!is_int($data['user_id'] ?? null) || $data['user_id'] < 1) {
-            $errors['user_id'][] = 'Utilisateur requis.';
-        }
-        $roleIds = $data['role_ids'] ?? null;
-        if (!is_array($roleIds)) {
-            $errors['role_ids'][] = 'Liste de rôles requise.';
-            $roleIds = [];
-        } else {
-            foreach ($roleIds as $roleId) {
-                if (!is_int($roleId) || $roleId < 1) {
-                    $errors['role_ids'][] = 'Identifiant de rôle invalide.';
-                    break;
-                }
-            }
-        }
-        $this->fail($errors);
-        return [
-            'user_id' => (int) $data['user_id'],
-            'role_ids' => array_values(array_unique($roleIds)),
-        ];
-    }
-
     /** @param list<string> $allowed @return array<string,mixed> */
     private function only(Request $request, array $allowed): array
     {

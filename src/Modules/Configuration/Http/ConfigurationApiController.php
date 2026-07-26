@@ -424,25 +424,6 @@ final class ConfigurationApiController
         });
     }
 
-    public function saveDossierAccess(Request $request): Response
-    {
-        [$userId, $organisationId, $dossierId] = $this->scope();
-        return $this->referenceMutation($request, function () use (
-            $request,
-            $userId,
-            $organisationId,
-            $dossierId
-        ): array {
-            $id = $this->managedReferences->saveDossierAccess(
-                $organisationId,
-                $dossierId,
-                $this->validator->dossierAccess($request),
-                $userId
-            );
-            return ['id' => $id];
-        });
-    }
-
     /** @return array{int,int,int} */
     private function scope(?string $permission = null): array
     {

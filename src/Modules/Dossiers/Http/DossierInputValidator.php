@@ -33,14 +33,16 @@ final class DossierInputValidator
     {
         $data = $this->only($request, [
             'organisation_id', 'name', 'slug', 'type', 'currency', 'modules',
-            'plan_variant', 'association', 'exercise', 'journal',
+            'plan_variant', 'association', 'exercise', 'journal', 'access_copy',
         ]);
         $modules = $data['modules'] ?? null;
         $association = $data['association'] ?? [];
         $exercise = $data['exercise'] ?? null;
         $journal = $data['journal'] ?? null;
+        $accessCopy = $data['access_copy'] ?? null;
         if (!is_array($modules) || !is_array($association)
-            || !is_array($exercise) || !is_array($journal)) {
+            || !is_array($exercise) || !is_array($journal)
+            || ($accessCopy !== null && !is_array($accessCopy))) {
             throw ApiException::validation([
                 'request' => ['Modules, association, exercice et journal doivent être structurés.'],
             ]);
@@ -48,6 +50,12 @@ final class DossierInputValidator
         $this->unknown(array_keys($association), ['enabled', 'projects', 'restricted_funds']);
         $this->unknown(array_keys($exercise), ['label', 'start', 'end']);
         $this->unknown(array_keys($journal), ['code', 'label']);
+        if (is_array($accessCopy)) {
+            $this->unknown(
+                array_keys($accessCopy),
+                ['source_dossier_id', 'preview_hash']
+            );
+        }
         $cleanModules = [];
         foreach ($modules as $module) {
             if (!is_string($module)) {
@@ -83,6 +91,16 @@ final class DossierInputValidator
             'journal' => [
                 'code' => $this->text($journal, 'code'),
                 'label' => $this->text($journal, 'label'),
+            ],
+            'access_copy' => $accessCopy === null ? null : [
+                'source_dossier_id' => $this->positiveInt(
+                    $accessCopy['source_dossier_id'] ?? null,
+                    'access_copy.source_dossier_id'
+                ),
+                'preview_hash' => $this->sha256(
+                    $accessCopy['preview_hash'] ?? null,
+                    'access_copy.preview_hash'
+                ),
             ],
         ];
     }
@@ -154,5 +172,16 @@ final class DossierInputValidator
         if ($date === false || $date->format('Y-m-d') !== $value) {
             throw ApiException::validation([$key => ['Date ISO invalide.']]);
         }
+    }
+
+    private function sha256(mixed $value, string $key): string
+    {
+        if (
+            !is_string($value)
+            || preg_match('/^[a-f0-9]{64}$/', $value) !== 1
+        ) {
+            throw ApiException::validation([$key => ['Empreinte invalide.']]);
+        }
+        return $value;
     }
 }

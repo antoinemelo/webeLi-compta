@@ -73,7 +73,8 @@ final class DossierApiController
                 $data['exercise']['end'],
                 $data['journal']['code'],
                 $data['journal']['label'],
-                $userId
+                $userId,
+                $data['access_copy']
             ), 201);
     }
 
@@ -209,6 +210,10 @@ final class DossierApiController
                 || $exception->errorCode === 'DOSSIER_HISTORICAL_FIELDS_LOCKED'
                 || $exception->errorCode === 'DOSSIER_ORGANISATION_INACTIVE'
                 || $exception->errorCode === 'DOSSIER_ARCHIVED'
+                || str_starts_with(
+                    $exception->errorCode,
+                    'STRUCTURE_ACCESS_'
+                )
             ) {
                 throw new ApiException(
                     409,

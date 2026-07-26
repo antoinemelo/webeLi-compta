@@ -290,7 +290,7 @@ test('configuration des modules et référentiels', async ({ page }) => {
   )).toBeVisible();
 
   await page.getByRole('link', { name: 'Accès', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Rôles du dossier' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Accès aux structures' })).toBeVisible();
 });
 
 test('registre des organisations : création, historique et cycle de vie', async ({ page }) => {
@@ -424,6 +424,78 @@ test('deux dossiers réels sont créés, sélectionnés et archivés depuis Vue'
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: 'Supprimer', exact: true }).click();
   await expect(page.getByRole('button', { name: /Comptabilité A E2E/ })).toHaveCount(0);
+});
+
+test('gouvernance des accès et révocation multi-session', async ({ browser }) => {
+  const adminContext = await browser.newContext();
+  const readerContext = await browser.newContext();
+  const adminPage = await adminContext.newPage();
+  const readerPage = await readerContext.newPage();
+  try {
+    await login(readerPage);
+    await readerPage.getByLabel('Dossier', { exact: true }).selectOption({
+      label: 'Comptabilité principale'
+    });
+    await expect(readerPage.getByLabel('Dossier', { exact: true })).toHaveValue(/\d+/);
+
+    await loginAsAdministrator(adminPage);
+    await adminPage.goto('/e2e/app/configuration/structures');
+    const organisationRow = adminPage.getByRole('row').filter({
+      hasText: 'Entreprise Alpha SA'
+    });
+    await organisationRow.getByRole('button', { name: 'Gérer' }).click();
+    await adminPage.getByRole('button', { name: /Comptabilité principale/ }).click();
+    await adminPage.getByRole('button', {
+      name: 'Accès du dossier sélectionné'
+    }).click();
+    await expect(adminPage.getByRole('heading', {
+      name: 'Accès aux structures'
+    })).toBeVisible();
+
+    const readerRow = adminPage.getByRole('row').filter({
+      hasText: 'lecteur@example.test'
+    });
+    await expect(readerRow).toContainText('Lecteur / auditeur');
+    await readerRow.getByRole('button', { name: 'Modifier' }).click();
+    await adminPage.getByLabel('Lecteur / auditeur').uncheck();
+    await adminPage.getByRole('button', {
+      name: 'Prévisualiser les permissions'
+    }).click();
+    await expect(adminPage.getByText(/Retirées :/)).toContainText('dossier.view');
+    await adminPage.getByRole('button', {
+      name: 'Confirmer cette matrice'
+    }).click();
+    await expect(adminPage.getByText(
+      'Matrice d’accès mise à jour et auditée.'
+    )).toBeVisible();
+
+    await readerPage.reload();
+    await expect(readerPage.getByRole('heading', {
+      name: 'Sélectionnez un dossier'
+    })).toBeVisible();
+    await expect(readerPage.getByLabel('Dossier', { exact: true })).not.toContainText(
+      'Comptabilité principale'
+    );
+
+    const refreshedReaderRow = adminPage.getByRole('row').filter({
+      hasText: 'lecteur@example.test'
+    });
+    await refreshedReaderRow.getByRole('button', { name: 'Modifier' }).click();
+    await adminPage.getByLabel('Lecteur / auditeur').check();
+    await adminPage.getByRole('button', {
+      name: 'Prévisualiser les permissions'
+    }).click();
+    await adminPage.getByRole('button', {
+      name: 'Confirmer cette matrice'
+    }).click();
+    await readerPage.reload();
+    await expect(readerPage.getByLabel('Dossier', { exact: true })).toContainText(
+      'Comptabilité principale'
+    );
+  } finally {
+    await adminContext.close();
+    await readerContext.close();
+  }
 });
 
 test('journal, extrait et plan comptable de Configuration utilisent le parcours Vue unique', async ({
@@ -567,6 +639,7 @@ test('balance consolidée drillable et refus de mutation sans droit sur chaque m
 
   await page.getByRole('button', { name: 'Déconnexion' }).click();
   await page.getByRole('button', { name: 'Se déconnecter' }).click();
+  await expect(page).toHaveURL(/\/e2e\/login$/);
   await login(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({
     label: 'Comptabilité principale'

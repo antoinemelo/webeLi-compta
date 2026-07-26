@@ -40,6 +40,7 @@ Les exemples versionnés sont :
 - `pedagogy.success.json` ;
 - `organisations.success.json` ;
 - `dossiers.success.json` ;
+- `structure-access.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -70,6 +71,10 @@ Les exemples versionnés sont :
 | POST | `/api/v1/structures/dossiers/archive` | archivage sans suppression de l’historique |
 | POST | `/api/v1/structures/dossiers/reactivate` | réactivation si l’organisation est active |
 | POST | `/api/v1/structures/dossiers/delete` | suppression d’un dossier sans donnée métier |
+| GET | `/api/v1/structures/access` | matrice versionnée et rôles effectifs par source |
+| POST | `/api/v1/structures/access/preview` | aperçu signé des permissions avant/après |
+| POST | `/api/v1/structures/access/apply` | confirmation optimiste et auditée de l’aperçu |
+| POST | `/api/v1/structures/access/copy-preview` | aperçu des rôles directs à recopier depuis un dossier frère |
 | POST | `/api/v1/configuration/identity` | identité légale et devise de base |
 | POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
 | POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
@@ -84,7 +89,6 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/references/journals` | création ou édition optimiste d’un journal |
 | POST | `/api/v1/configuration/references/exercises` | création ou changement de statut d’un exercice |
 | POST | `/api/v1/configuration/references/periods` | création ou changement de statut d’une période |
-| POST | `/api/v1/configuration/access` | rôles directs d’un utilisateur sur le dossier |
 | GET | `/api/v1/salaires` | employés, contrats, fiches, dettes, paiements et récapitulatifs annuels |
 | POST | `/api/v1/salaires/employes` | création ou modification optimiste d’un employé genevois |
 | POST | `/api/v1/salaires/employes/supprimer` | suppression d’un employé sans historique salarial |
@@ -210,6 +214,16 @@ déjà attribué, jamais la création d’un frère. L’assistant répond uniqu
 après l’installation transactionnelle du plan, de l’exercice, de la période,
 du journal et des références. L’archivage du dossier courant efface sa
 sélection de session ; `/api/v1/dossiers` reflète aussitôt le nouvel état.
+
+Les routes `/api/v1/structures/access` sont indépendantes du contexte courant.
+Elles sont limitées à `installation.admin` ou à `organisation.manage` sur
+l’organisation demandée. La lecture distingue les rôles d’installation,
+d’organisation et de dossier. Une mutation exige la version SHA-256 de la
+matrice, puis le `confirmation_token` rendu par l’aperçu. Le retrait du dernier
+administrateur d’une structure active renvoie
+`409 STRUCTURE_ACCESS_LAST_ADMIN`, sauf transfert explicite à un successeur.
+La copie lors de la création d’un dossier porte uniquement sur les lignes
+directes de `utilisateur_roles_dossier` et exige le `preview_hash` courant.
 
 ## Listes
 

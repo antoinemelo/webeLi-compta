@@ -82,10 +82,6 @@ final class ManagedReferencesService
                 $organisationId,
                 $dossierId
             ) + ['accounts' => $this->accounts($organisationId, $dossierId)],
-            'access' => [
-                'users' => $this->users($organisationId, $dossierId),
-                'roles' => $this->roles(),
-            ],
         ];
     }
 
@@ -415,80 +411,6 @@ final class ManagedReferencesService
         );
     }
 
-    /** @param array{user_id:int,role_ids:list<int>} $data */
-    public function saveDossierAccess(
-        int $organisationId,
-        int $dossierId,
-        array $data,
-        int $actorId,
-    ): int {
-        if ($data['user_id'] === $actorId) {
-            throw new ConfigurationException(
-                'Votre propre accès ne peut pas être modifié depuis ce dossier.'
-            );
-        }
-        $user = $this->pdo->prepare(
-            'SELECT 1 FROM utilisateurs u
-             WHERE u.id = ? AND u.actif = 1
-               AND (
-                   EXISTS (
-                       SELECT 1 FROM utilisateur_roles_organisation uro
-                       WHERE uro.utilisateur_id = u.id
-                         AND uro.organisation_id = ?
-                   )
-                   OR EXISTS (
-                       SELECT 1 FROM utilisateur_roles_dossier urd
-                       WHERE urd.utilisateur_id = u.id
-                         AND urd.dossier_id = ?
-                   )
-               )'
-        );
-        $user->execute([$data['user_id'], $organisationId, $dossierId]);
-        if ($user->fetchColumn() === false) {
-            throw new ConfigurationException(
-                'Utilisateur absent du périmètre administrable.'
-            );
-        }
-        if ($data['role_ids'] !== []) {
-            $placeholders = implode(',', array_fill(0, count($data['role_ids']), '?'));
-            $roles = $this->pdo->prepare(
-                "SELECT COUNT(*) FROM roles WHERE id IN ({$placeholders})"
-            );
-            $roles->execute($data['role_ids']);
-            if ((int) $roles->fetchColumn() !== count($data['role_ids'])) {
-                throw new ConfigurationException('Un rôle sélectionné est invalide.');
-            }
-        }
-        $this->transaction(function () use (
-            $organisationId,
-            $dossierId,
-            $data,
-            $actorId
-        ): void {
-            $this->pdo->prepare(
-                'DELETE FROM utilisateur_roles_dossier
-                 WHERE utilisateur_id = ? AND dossier_id = ?'
-            )->execute([$data['user_id'], $dossierId]);
-            $insert = $this->pdo->prepare(
-                'INSERT INTO utilisateur_roles_dossier
-                 (utilisateur_id, dossier_id, role_id) VALUES (?, ?, ?)'
-            );
-            foreach ($data['role_ids'] as $roleId) {
-                $insert->execute([$data['user_id'], $dossierId, $roleId]);
-            }
-            $this->audit->log(
-                'configuration.acces_dossier_modifie',
-                $actorId,
-                $organisationId,
-                $dossierId,
-                'utilisateur',
-                (string) $data['user_id'],
-                ['role_ids' => $data['role_ids']]
-            );
-        });
-        return $data['user_id'];
-    }
-
     /** @return list<array<string,mixed>> */
     private function vatCodes(int $organisationId, int $dossierId): array
     {
@@ -781,76 +703,6 @@ final class ManagedReferencesService
             'end_date' => (string) $row['date_fin'],
             'status' => (string) $row['statut'],
             'version' => (int) $row['version'],
-        ], $stmt->fetchAll());
-    }
-
-    /** @return list<array{id:int,code:string,label:string}> */
-    private function roles(): array
-    {
-        return array_map(static fn (array $row): array => [
-            'id' => (int) $row['id'],
-            'code' => (string) $row['code'],
-            'label' => (string) $row['libelle'],
-        ], $this->pdo->query(
-            'SELECT id, code, libelle FROM roles ORDER BY id'
-        )->fetchAll());
-    }
-
-    /** @return list<array<string,mixed>> */
-    private function users(int $organisationId, int $dossierId): array
-    {
-        $stmt = $this->pdo->prepare(
-            "SELECT u.id, u.email, u.prenom, u.nom, u.actif,
-                    (
-                        SELECT GROUP_CONCAT(urd.role_id)
-                        FROM utilisateur_roles_dossier urd
-                        WHERE urd.utilisateur_id = u.id
-                          AND urd.dossier_id = :dossier
-                    ) AS dossier_role_ids,
-                    (
-                        SELECT GROUP_CONCAT(r.libelle, ', ')
-                        FROM utilisateur_roles_organisation uro
-                        JOIN roles r ON r.id = uro.role_id
-                        WHERE uro.utilisateur_id = u.id
-                          AND uro.organisation_id = :organisation
-                    ) AS organisation_roles,
-                    (
-                        SELECT GROUP_CONCAT(r.libelle, ', ')
-                        FROM utilisateur_roles_installation uri
-                        JOIN roles r ON r.id = uri.role_id
-                        WHERE uri.utilisateur_id = u.id
-                    ) AS installation_roles
-             FROM utilisateurs u
-             WHERE EXISTS (
-                 SELECT 1 FROM utilisateur_roles_organisation uro
-                 WHERE uro.utilisateur_id = u.id
-                   AND uro.organisation_id = :organisation
-             )
-                OR EXISTS (
-                 SELECT 1 FROM utilisateur_roles_dossier urd
-                 WHERE urd.utilisateur_id = u.id
-                   AND urd.dossier_id = :dossier
-             )
-             ORDER BY u.actif DESC, u.email"
-        );
-        $stmt->execute([
-            'organisation' => $organisationId,
-            'dossier' => $dossierId,
-        ]);
-        return array_map(static fn (array $row): array => [
-            'id' => (int) $row['id'],
-            'email' => (string) $row['email'],
-            'name' => trim(
-                (string) $row['prenom'] . ' ' . (string) $row['nom']
-            ),
-            'active' => (int) $row['actif'] === 1,
-            'dossier_role_ids' => $row['dossier_role_ids'] === null
-                ? []
-                : array_map('intval', explode(',', (string) $row['dossier_role_ids'])),
-            'inherited_roles' => array_values(array_filter([
-                (string) ($row['installation_roles'] ?? ''),
-                (string) ($row['organisation_roles'] ?? ''),
-            ])),
         ], $stmt->fetchAll());
     }
 

@@ -39,9 +39,12 @@ use Compta\Modules\Dossiers\Http\OrganisationApiController;
 use Compta\Modules\Dossiers\Http\OrganisationInputValidator;
 use Compta\Modules\Dossiers\Http\DossierApiController;
 use Compta\Modules\Dossiers\Http\DossierInputValidator;
+use Compta\Modules\Dossiers\Http\StructureAccessApiController;
+use Compta\Modules\Dossiers\Http\StructureAccessInputValidator;
 use Compta\Modules\Dossiers\DossierRegistryService;
 use Compta\Modules\Dossiers\OrganisationRegistryService;
 use Compta\Modules\Dossiers\ScopeManager;
+use Compta\Modules\Dossiers\StructureAccessService;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
@@ -150,6 +153,7 @@ $closingAndTax = new ClosingAndTaxService(
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
 $organisationRegistry = new OrganisationRegistryService($pdo, $audit);
+$structureAccess = new StructureAccessService($pdo, $audit);
 $dossierRegistry = new DossierRegistryService(
     $pdo,
     $audit,
@@ -306,6 +310,12 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         $dossierRegistry,
         new DossierInputValidator()
+    ),
+    new StructureAccessApiController(
+        $auth,
+        $access,
+        $structureAccess,
+        new StructureAccessInputValidator()
     )
 );
 $shellPage = new ShellPageController(

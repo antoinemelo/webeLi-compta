@@ -13,6 +13,7 @@ use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dossiers\Http\OrganisationApiController;
 use Compta\Modules\Dossiers\Http\DossierApiController;
+use Compta\Modules\Dossiers\Http\StructureAccessApiController;
 use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Immobilisations\AssetApiController;
 use Compta\Modules\Pedagogie\PedagogyApiController;
@@ -39,6 +40,7 @@ final class ApiRouteRegistry
         private readonly ?ConsolidationApiController $consolidation = null,
         private readonly ?OrganisationApiController $organisations = null,
         private readonly ?DossierApiController $dossiers = null,
+        private readonly ?StructureAccessApiController $structureAccess = null,
     ) {
     }
 
@@ -94,6 +96,12 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/structures/dossiers/archive', $this->dossiers->archive(...));
             $this->add($router, 'POST', '/api/v1/structures/dossiers/reactivate', $this->dossiers->reactivate(...));
             $this->add($router, 'POST', '/api/v1/structures/dossiers/delete', $this->dossiers->delete(...));
+        }
+        if ($this->structureAccess !== null) {
+            $this->add($router, 'GET', '/api/v1/structures/access', $this->structureAccess->matrix(...));
+            $this->add($router, 'POST', '/api/v1/structures/access/preview', $this->structureAccess->preview(...));
+            $this->add($router, 'POST', '/api/v1/structures/access/apply', $this->structureAccess->apply(...));
+            $this->add($router, 'POST', '/api/v1/structures/access/copy-preview', $this->structureAccess->copyPreview(...));
         }
         if ($this->configuration !== null) {
             $this->add(
@@ -209,12 +217,6 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/configuration/references/periods',
                 $this->configuration->savePeriod(...)
-            );
-            $this->add(
-                $router,
-                'POST',
-                '/api/v1/configuration/access',
-                $this->configuration->saveDossierAccess(...)
             );
         }
         if ($this->accounting !== null) {

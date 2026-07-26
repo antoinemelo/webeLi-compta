@@ -1,0 +1,36 @@
+{
+  "data": {
+    "scope": "dossier",
+    "organisation_id": 1,
+    "dossier_id": 1,
+    "version": "d17d6651f841426191895ee1fffa5beba4633f73ee9c96f8e28f958f263cad25",
+    "roles": [
+      {
+        "id": 6,
+        "code": "lecteur",
+        "label": "Lecteur / auditeur",
+        "permissions": ["dossier.view", "compta.view"]
+      }
+    ],
+    "users": [
+      {
+        "id": 2,
+        "email": "lecteur@example.test",
+        "name": "Léa Lectrice",
+        "active": true,
+        "installation_roles": [],
+        "organisation_roles": [],
+        "dossier_roles": [
+          {"id": 6, "code": "lecteur", "label": "Lecteur / auditeur"}
+        ],
+        "direct_role_ids": [6],
+        "effective_permissions": ["compta.view", "dossier.view"]
+      }
+    ]
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "4b5d2fa95e374f2896b7eb9c4d8afb62"
+  },
+  "errors": []
+}

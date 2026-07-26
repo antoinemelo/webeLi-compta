@@ -68,9 +68,6 @@ export const useConfigurationStore = defineStore('configuration', {
     async savePeriod(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/periods', data);
     },
-    async saveDossierAccess(data: Record<string, unknown>): Promise<void> {
-      await this.mutateReference('/configuration/access', data);
-    },
     async load(): Promise<void> {
       this.loading = true;
       this.error = '';

@@ -273,6 +273,7 @@ final class ShellApiController
                     ['key' => 'configuration', 'method' => 'GET', 'path' => '/configuration'],
                     ['key' => 'organisations', 'method' => 'GET', 'path' => '/structures/organisations'],
                     ['key' => 'structure_dossiers', 'method' => 'GET', 'path' => '/structures/dossiers'],
+                    ['key' => 'structure_access', 'method' => 'GET', 'path' => '/structures/access'],
                     ['key' => 'liquidities', 'method' => 'GET', 'path' => '/liquidites'],
                     ['key' => 'assets', 'method' => 'GET', 'path' => '/accounting/assets'],
                     ['key' => 'consolidation', 'method' => 'GET', 'path' => '/consolidation'],

@@ -109,6 +109,7 @@ final class DossierRegistryService
     /**
      * @param list<string> $moduleCodes
      * @param array{projets?:bool,fonds_affectes?:bool} $associationOptions
+     * @param null|array{source_dossier_id:int,preview_hash:string} $accessCopy
      * @return array<string,mixed>
      */
     public function createInitialized(
@@ -127,6 +128,7 @@ final class DossierRegistryService
         string $journalCode,
         string $journalLabel,
         int $actorId,
+        ?array $accessCopy = null,
     ): array {
         $currency = mb_strtoupper(trim($currency));
         $this->assertDates($exerciseStart, $exerciseEnd);
@@ -139,7 +141,8 @@ final class DossierRegistryService
         return $this->transaction(function () use (
             $organisationId, $name, $slug, $type, $currency, $moduleCodes,
             $planVariant, $withAssociation, $associationOptions, $exerciseLabel,
-            $exerciseStart, $exerciseEnd, $journalCode, $journalLabel, $actorId
+            $exerciseStart, $exerciseEnd, $journalCode, $journalLabel, $actorId,
+            $accessCopy
         ): array {
             try {
                 $dossierId = $this->scopes->createDossier(
@@ -198,11 +201,32 @@ final class DossierRegistryService
                 ? $this->vat->install($organisationId, $dossierId, $actorId)
                 : 0;
             $this->mark('references');
+            $copiedAccessCount = 0;
+            if ($accessCopy !== null) {
+                try {
+                    $copiedAccessCount = (new StructureAccessService(
+                        $this->pdo,
+                        $this->audit
+                    ))->copyDossierMatrix(
+                        $organisationId,
+                        (int) $accessCopy['source_dossier_id'],
+                        $dossierId,
+                        (string) $accessCopy['preview_hash'],
+                        $actorId
+                    );
+                } catch (StructureAccessException $exception) {
+                    throw new DossierRegistryException(
+                        $exception->getMessage(),
+                        $exception->errorCode
+                    );
+                }
+            }
             $summary = $this->summary($organisationId, $dossierId);
             $summary['exercise_id'] = $exerciseId;
             $summary['period_id'] = $periodId;
             $summary['journal_id'] = $journalId;
             $summary['vat_code_count'] = $vatCount;
+            $summary['copied_access_count'] = $copiedAccessCount;
             $this->audit->log(
                 'dossier.initialise',
                 $actorId,

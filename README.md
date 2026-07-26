@@ -69,6 +69,10 @@ période, journal et références) dans une seule transaction, puis rafraîchit 
 sélecteur sans reconnexion. L’archivage, la réactivation et la suppression
 protégée des seules structures vides y sont également disponibles. Voir
 [le guide Organisations et dossiers](docs/organisations-dossiers.md).
+La section **Accès** distingue les rôles d’installation, hérités et directs,
+prévisualise toute modification, protège le dernier administrateur et permet
+de recopier explicitement la matrice directe d’un dossier frère lors de sa
+création.
 
 ## Initialiser la comptabilité
 

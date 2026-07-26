@@ -47,10 +47,13 @@ use Compta\Modules\Dossiers\DossierRegistryException;
 use Compta\Modules\Dossiers\DossierRegistryService;
 use Compta\Modules\Dossiers\OrganisationRegistryException;
 use Compta\Modules\Dossiers\OrganisationRegistryService;
+use Compta\Modules\Dossiers\StructureAccessService;
 use Compta\Modules\Dossiers\Http\OrganisationApiController;
 use Compta\Modules\Dossiers\Http\OrganisationInputValidator;
 use Compta\Modules\Dossiers\Http\DossierApiController;
 use Compta\Modules\Dossiers\Http\DossierInputValidator;
+use Compta\Modules\Dossiers\Http\StructureAccessApiController;
+use Compta\Modules\Dossiers\Http\StructureAccessInputValidator;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
@@ -163,6 +166,10 @@ final class Tests
             'dossiers multiples et initialisation atomique' => [
                 'integration',
                 fn () => $this->dossierRegistryTests(),
+            ],
+            'gouvernance des accès aux structures' => [
+                'integration',
+                fn () => $this->structureAccessTests(),
             ],
             'comptabilité générale et rapports' => [
                 'integration',
@@ -1086,6 +1093,15 @@ final class Tests
             )->fetchColumn(),
             'création sans attribution implicite de droits'
         );
+        $readerRoleId = (int) $pdo->query(
+            "SELECT id FROM roles WHERE code = 'lecteur'"
+        )->fetchColumn();
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_dossier
+             (utilisateur_id, dossier_id, role_id) VALUES (?, ?, ?)'
+        )->execute([$actorId, $firstId, $readerRoleId]);
+        $copyPreview = (new StructureAccessService($pdo, $audit))
+            ->previewDossierCopy($organisationId, $firstId);
 
         $second = $registry->createInitialized(
             $organisationId,
@@ -1102,9 +1118,28 @@ final class Tests
             '2026-12-31',
             'GEN',
             'Journal général',
-            $actorId
+            $actorId,
+            [
+                'source_dossier_id' => $firstId,
+                'preview_hash' => $copyPreview['preview_hash'],
+            ]
         );
         $secondId = (int) $second['id'];
+        $this->same(
+            1,
+            $second['summary']['copied_access_count'],
+            'copie explicite intégrée à la transaction de création'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM utilisateur_roles_dossier
+                 WHERE utilisateur_id = {$actorId}
+                   AND dossier_id = {$secondId}
+                   AND role_id = {$readerRoleId}"
+            )->fetchColumn(),
+            'matrice prévisualisée copiée exactement dans le nouveau dossier'
+        );
         $this->same(2, count($registry->listForOrganisation($organisationId)), 'deux dossiers réels dans une organisation');
         $this->same('EUR', $registry->detail($secondId)['monnaie'], 'devise propre au second dossier');
         $this->same(
@@ -1255,6 +1290,307 @@ final class Tests
              (organisation_id, dossier_id, type_personne, raison_sociale, cree_par)
              VALUES (?, ?, 'entreprise', 'Client historique', ?)"
         )->execute([$organisationId, $dossierId, $actorId]);
+    }
+
+    private function structureAccessTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $audit = new AuditLogger($pdo);
+        $users = new UserRepository($pdo);
+        $adminId = $users->create('access-admin@example.test', 'mot-de-passe-access');
+        $managerId = $users->create('access-manager@example.test', 'mot-de-passe-access');
+        $accountantId = $users->create('access-accountant@example.test', 'mot-de-passe-access');
+        $outsiderId = $users->create('access-outsider@example.test', 'mot-de-passe-access');
+        $adminRoleId = (int) $pdo->query(
+            "SELECT id FROM roles WHERE code = 'administrateur'"
+        )->fetchColumn();
+        $accountantRoleId = (int) $pdo->query(
+            "SELECT id FROM roles WHERE code = 'comptable'"
+        )->fetchColumn();
+        $readerRoleId = (int) $pdo->query(
+            "SELECT id FROM roles WHERE code = 'lecteur'"
+        )->fetchColumn();
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_installation
+             (utilisateur_id, role_id) VALUES (?, ?)'
+        )->execute([$adminId, $adminRoleId]);
+        $scopes = new ScopeManager($pdo, $audit);
+        $organisationA = $scopes->createOrganisation('Accès A', 'reelle', $adminId);
+        $organisationB = $scopes->createOrganisation('Accès B', 'reelle', $adminId);
+        $dossierA1 = $scopes->createDossier(
+            $organisationA,
+            'Dossier A1',
+            'access-a1',
+            'reel',
+            $adminId
+        );
+        $dossierA2 = $scopes->createDossier(
+            $organisationA,
+            'Dossier A2',
+            'access-a2',
+            'reel',
+            $adminId
+        );
+        $dossierA3 = $scopes->createDossier(
+            $organisationA,
+            'Dossier A3',
+            'access-a3',
+            'reel',
+            $adminId
+        );
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_organisation
+             (utilisateur_id, organisation_id, role_id) VALUES (?, ?, ?)'
+        )->execute([$managerId, $organisationA, $adminRoleId]);
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_organisation
+             (utilisateur_id, organisation_id, role_id) VALUES (?, ?, ?)'
+        )->execute([$outsiderId, $organisationB, $readerRoleId]);
+
+        $service = new StructureAccessService($pdo, $audit);
+        $matrixA1 = $service->matrix(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            true
+        );
+        $previewA1 = $service->preview(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            $accountantId,
+            [$accountantRoleId],
+            $matrixA1['version'],
+            true
+        );
+        $this->true(
+            in_array('dossier.view', $previewA1['added_permissions'], true),
+            'aperçu expose les permissions effectives ajoutées'
+        );
+        $firstApply = $service->apply(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            $accountantId,
+            [$accountantRoleId],
+            $matrixA1['version'],
+            $previewA1['confirmation_token'],
+            true
+        );
+        $this->true($firstApply['changed'], 'première attribution directe appliquée');
+        $duplicate = $service->apply(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            $accountantId,
+            [$accountantRoleId],
+            $matrixA1['version'],
+            $previewA1['confirmation_token'],
+            true
+        );
+        $this->false($duplicate['changed'], 'rejeu idempotent sans doublon');
+
+        $matrixA2 = $service->matrix(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA2,
+            true
+        );
+        $previewA2 = $service->preview(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA2,
+            $accountantId,
+            [$accountantRoleId],
+            $matrixA2['version'],
+            true
+        );
+        $service->apply(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA2,
+            $accountantId,
+            [$accountantRoleId],
+            $matrixA2['version'],
+            $previewA2['confirmation_token'],
+            true
+        );
+        $removeMatrix = $service->matrix(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            true
+        );
+        $removePreview = $service->preview(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            $accountantId,
+            [],
+            $removeMatrix['version'],
+            true
+        );
+        $service->apply(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            $accountantId,
+            [],
+            $removeMatrix['version'],
+            $removePreview['confirmation_token'],
+            true
+        );
+        $access = new AccessControl($pdo);
+        $this->false(
+            $access->canViewDossier($accountantId, $organisationA, $dossierA1),
+            'retrait effectif sur le premier dossier'
+        );
+        $this->true(
+            $access->canViewDossier($accountantId, $organisationA, $dossierA2),
+            'accès au dossier frère conservé'
+        );
+        $conflictMatrix = $service->matrix(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            true
+        );
+        $conflictPreview = $service->preview(
+            $adminId,
+            'dossier',
+            $organisationA,
+            $dossierA1,
+            $accountantId,
+            [$readerRoleId],
+            $conflictMatrix['version'],
+            true
+        );
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_dossier
+             (utilisateur_id, dossier_id, role_id) VALUES (?, ?, ?)'
+        )->execute([$managerId, $dossierA1, $readerRoleId]);
+        $this->throws(
+            fn () => $service->apply(
+                $adminId,
+                'dossier',
+                $organisationA,
+                $dossierA1,
+                $accountantId,
+                [$readerRoleId],
+                $conflictMatrix['version'],
+                $conflictPreview['confirmation_token'],
+                true
+            ),
+            'conflit optimiste protège une matrice modifiée en parallèle'
+        );
+        $pdo->prepare(
+            'DELETE FROM utilisateur_roles_dossier
+             WHERE utilisateur_id = ? AND dossier_id = ?'
+        )->execute([$managerId, $dossierA1]);
+
+        $copy = $service->previewDossierCopy($organisationA, $dossierA2);
+        $copiedCount = $service->copyDossierMatrix(
+            $organisationA,
+            $dossierA2,
+            $dossierA3,
+            $copy['preview_hash'],
+            $adminId
+        );
+        $this->same(
+            $copy['assignment_count'],
+            $copiedCount,
+            'copie confirmée produit exactement la matrice prévisualisée'
+        );
+        $this->same(
+            $service->previewDossierCopy($organisationA, $dossierA2)['assignments'],
+            $service->previewDossierCopy($organisationA, $dossierA3)['assignments'],
+            'aucun rôle hérité matérialisé pendant la copie'
+        );
+
+        $managerMatrix = $service->matrix(
+            $managerId,
+            'organisation',
+            $organisationA,
+            null,
+            false
+        );
+        $managerVisibleIds = array_column($managerMatrix['users'], 'id');
+        $this->false(
+            in_array($outsiderId, $managerVisibleIds, true),
+            'gestionnaire ne découvre aucun utilisateur d’une autre organisation'
+        );
+        $managerRow = current(array_filter(
+            $managerMatrix['users'],
+            static fn (array $user): bool => $user['id'] === $managerId
+        ));
+        $this->same(
+            'administrateur',
+            $managerRow['organisation_roles'][0]['code'] ?? '',
+            'rôle organisation distingué de la source installation'
+        );
+
+        $installationMatrix = $service->matrix(
+            $adminId,
+            'installation',
+            null,
+            null,
+            true
+        );
+        $this->throws(
+            fn () => $service->preview(
+                $adminId,
+                'installation',
+                null,
+                null,
+                $adminId,
+                [],
+                $installationMatrix['version'],
+                true
+            ),
+            'dernier administrateur protégé sans successeur'
+        );
+        $transferPreview = $service->preview(
+            $adminId,
+            'installation',
+            null,
+            null,
+            $adminId,
+            [],
+            $installationMatrix['version'],
+            true,
+            $managerId
+        );
+        $this->same(
+            $managerId,
+            $transferPreview['transfer']['user_id'] ?? 0,
+            'transfert explicite du dernier administrateur prévisualisé'
+        );
+        $this->true(
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE action IN (
+                    'structure.acces_modifie',
+                    'structure.acces_dossier_copies'
+                 )"
+            )->fetchColumn() >= 4,
+            'mutations et copie auditées'
+        );
+        $this->true(
+            IntegrityChecker::check($pdo)['ok'],
+            'intégrité après gouvernance des accès'
+        );
     }
 
     private function dashboardTests(): void
@@ -2065,12 +2401,6 @@ final class Tests
             $ids['organisation_a'],
             $administratorRoleId,
         ]);
-        (new ScopeManager($pdo, new AuditLogger($pdo)))->grantRole(
-            $accessUserId,
-            'lecteur',
-            'organisation',
-            $ids['organisation_a']
-        );
         $exerciseId = (new ScopeManager($pdo, new AuditLogger($pdo)))->createExercise(
             $ids['dossier_a'],
             'Exercice HTTP 2026',
@@ -2336,6 +2666,12 @@ final class Tests
                     $httpModuleAccess
                 ),
                 new DossierInputValidator()
+            ),
+            new StructureAccessApiController(
+                $httpAuth,
+                $httpAccess,
+                new StructureAccessService($pdo, $httpAudit),
+                new StructureAccessInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -2733,10 +3069,9 @@ final class Tests
         $this->true(
             isset(
                 $managedReferencesJson['data']['treasury'],
-                $managedReferencesJson['data']['accounting_setup'],
-                $managedReferencesJson['data']['access']
+                $managedReferencesJson['data']['accounting_setup']
             ),
-            'tous les référentiels de Configuration partagent le contrat natif'
+            'référentiels métier de Configuration servis par leur contrat natif'
         );
         $currencyFromConfiguration = $app->handle(new Request(
             'POST',
@@ -2985,10 +3320,82 @@ final class Tests
             ]]
         ));
         $this->same(
-            200,
+            404,
             $accessFromConfiguration->status,
-            'rôle direct du dossier géré depuis Configuration Vue'
+            'ancienne mutation non prévisualisée retirée'
         );
+        $dossierManagerAccess = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/access',
+            query: [
+                'scope' => 'dossier',
+                'organisation_id' => (string) $ids['organisation_a'],
+                'dossier_id' => (string) $ids['dossier_a'],
+            ]
+        ));
+        $this->same(
+            404,
+            $dossierManagerAccess->status,
+            'dossier.manage ne permet aucune auto-attribution'
+        );
+        $session->set('user_id', $registryAdminId);
+        $accessMatrixResponse = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/access',
+            query: [
+                'scope' => 'dossier',
+                'organisation_id' => (string) $ids['organisation_a'],
+                'dossier_id' => (string) $ids['dossier_a'],
+            ]
+        ));
+        $this->same(
+            200,
+            $accessMatrixResponse->status,
+            'matrice d’accès structure exposée à l’administrateur'
+        );
+        $accessMatrixJson = $this->responseJson($accessMatrixResponse);
+        $accessVersion = (string) (
+            $accessMatrixJson['data']['version'] ?? ''
+        );
+        $accessPreviewPayload = [
+            'scope' => 'dossier',
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'user_id' => $accessUserId,
+            'role_ids' => [$readerRoleId],
+            'expected_version' => $accessVersion,
+        ];
+        $accessWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/access/preview',
+            json: ['data' => $accessPreviewPayload]
+        ));
+        $this->same(
+            403,
+            $accessWithoutCsrf->status,
+            'prévisualisation de mutation protégée par CSRF'
+        );
+        $accessPreviewResponse = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/access/preview',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $accessPreviewPayload]
+        ));
+        $this->same(200, $accessPreviewResponse->status, 'aperçu RBAC exposé');
+        $accessPreviewJson = $this->responseJson($accessPreviewResponse);
+        $applyPayload = [
+            ...$accessPreviewPayload,
+            'confirmation_token' => (
+                $accessPreviewJson['data']['confirmation_token'] ?? ''
+            ),
+        ];
+        $accessApplyResponse = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/access/apply',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $applyPayload]
+        ));
+        $this->same(200, $accessApplyResponse->status, 'attribution RBAC confirmée');
         $this->same(
             1,
             (int) $pdo->query(
@@ -2997,8 +3404,82 @@ final class Tests
                    AND dossier_id = {$ids['dossier_a']}
                    AND role_id = {$readerRoleId}"
             )->fetchColumn(),
-            'affectation de rôle persistée sans registre parallèle'
+            'affectation persistée uniquement dans la table RBAC canonique'
         );
+        $session->set('user_id', $accessUserId);
+        $session->set('organisation_id', $ids['organisation_a']);
+        $session->set('dossier_id', $ids['dossier_a']);
+        $accessUserContext = $app->handle(new Request(
+            'GET',
+            '/api/v1/context'
+        ));
+        $this->same(
+            $ids['dossier_a'],
+            $this->responseJson($accessUserContext)['data']['selection']['dossier']['id']
+                ?? 0,
+            'seconde session voit le dossier attribué'
+        );
+        $session->set('user_id', $registryAdminId);
+        $updatedMatrixResponse = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/access',
+            query: [
+                'scope' => 'dossier',
+                'organisation_id' => (string) $ids['organisation_a'],
+                'dossier_id' => (string) $ids['dossier_a'],
+            ]
+        ));
+        $updatedVersion = (string) (
+            $this->responseJson($updatedMatrixResponse)['data']['version'] ?? ''
+        );
+        $removePayload = [
+            ...$accessPreviewPayload,
+            'role_ids' => [],
+            'expected_version' => $updatedVersion,
+        ];
+        $removePreviewResponse = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/access/preview',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $removePayload]
+        ));
+        $removePayload['confirmation_token'] = (
+            $this->responseJson($removePreviewResponse)['data']['confirmation_token']
+            ?? ''
+        );
+        $removeResponse = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/access/apply',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $removePayload]
+        ));
+        $this->same(200, $removeResponse->status, 'révocation directe confirmée');
+        $session->set('user_id', $accessUserId);
+        $revokedContext = $app->handle(new Request('GET', '/api/v1/context'));
+        $this->same(
+            null,
+            $this->responseJson($revokedContext)['data']['selection'] ?? null,
+            'contexte révoqué dès la requête suivante de l’autre session'
+        );
+        $revokedSelector = $app->handle(new Request('GET', '/api/v1/dossiers'));
+        $this->same(
+            [],
+            $this->responseJson($revokedSelector)['data'] ?? null,
+            'sélecteur mis à jour immédiatement après révocation'
+        );
+        $session->set('user_id', $registryManagerId);
+        $foreignAccess = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/access',
+            query: [
+                'scope' => 'organisation',
+                'organisation_id' => (string) $ids['organisation_b'],
+            ]
+        ));
+        $this->same(404, $foreignAccess->status, 'IDOR organisation masquée');
+        $session->set('user_id', $userId);
+        $session->set('organisation_id', $ids['organisation_a']);
+        $session->set('dossier_id', $ids['dossier_a']);
         $contactFromConfiguration = $app->handle(new Request(
             'POST',
             '/api/v1/configuration/references/contacts',
@@ -3469,6 +3950,7 @@ final class Tests
             'pedagogy.success.json',
             'organisations.success.json',
             'dossiers.success.json',
+            'structure-access.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(

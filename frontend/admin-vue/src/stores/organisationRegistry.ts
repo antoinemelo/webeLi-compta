@@ -4,8 +4,11 @@ import type {
   DossierInitializationSummary,
   DossierRegistryDetail,
   DossierRegistryItem,
+  DossierAccessCopyPreview,
   OrganisationRegistryDetail,
-  OrganisationRegistryPayload
+  OrganisationRegistryPayload,
+  StructureAccessMatrix,
+  StructureAccessPreview
 } from '@/api/contracts';
 
 export const useOrganisationRegistryStore = defineStore('organisationRegistry', {
@@ -15,6 +18,9 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
     dossiers: [] as DossierRegistryItem[],
     selectedDossier: null as DossierRegistryDetail | null,
     creationSummary: null as DossierInitializationSummary | null,
+    accessMatrix: null as StructureAccessMatrix | null,
+    accessPreview: null as StructureAccessPreview | null,
+    copyPreview: null as DossierAccessCopyPreview | null,
     loading: false,
     saving: false,
     error: '',
@@ -51,6 +57,9 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
           '/structures/organisations/detail',
           { id }
         )).data;
+        this.accessMatrix = null;
+        this.accessPreview = null;
+        this.copyPreview = null;
         await this.loadDossiers();
       } catch (error) {
         this.error = errorMessage(error);
@@ -77,6 +86,7 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
           '/structures/dossiers/detail',
           { id }
         )).data;
+        this.accessPreview = null;
       } catch (error) {
         this.error = errorMessage(error);
       } finally {
@@ -97,6 +107,98 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
         if (this.selected) await this.select(this.selected.id);
         await this.selectDossier(response.data.id);
       } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    },
+    async loadAccess(scope: 'installation' | 'organisation' | 'dossier'): Promise<void> {
+      if (!this.selected) return;
+      this.loading = true;
+      this.error = '';
+      this.accessPreview = null;
+      try {
+        this.accessMatrix = (await api.get<StructureAccessMatrix>(
+          '/structures/access',
+          {
+            scope,
+            organisation_id: scope === 'installation' ? undefined : this.selected.id,
+            dossier_id: scope === 'dossier' ? this.selectedDossier?.id : undefined
+          }
+        )).data;
+      } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.loading = false;
+      }
+    },
+    async previewAccess(
+      userId: number,
+      roleIds: number[],
+      successorUserId?: number
+    ): Promise<void> {
+      if (!this.accessMatrix) return;
+      this.saving = true;
+      this.error = '';
+      try {
+        this.accessPreview = (await api.post<StructureAccessPreview>(
+          '/structures/access/preview',
+          {
+            scope: this.accessMatrix.scope,
+            organisation_id: this.accessMatrix.organisation_id,
+            dossier_id: this.accessMatrix.dossier_id,
+            user_id: userId,
+            role_ids: roleIds,
+            expected_version: this.accessMatrix.version,
+            successor_user_id: successorUserId
+          }
+        )).data;
+      } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    },
+    async applyAccess(successorUserId?: number): Promise<void> {
+      if (!this.accessMatrix || !this.accessPreview) return;
+      this.saving = true;
+      this.error = '';
+      try {
+        await api.post('/structures/access/apply', {
+          scope: this.accessMatrix.scope,
+          organisation_id: this.accessMatrix.organisation_id,
+          dossier_id: this.accessMatrix.dossier_id,
+          user_id: this.accessPreview.user_id,
+          role_ids: this.accessPreview.after,
+          expected_version: this.accessMatrix.version,
+          confirmation_token: this.accessPreview.confirmation_token,
+          successor_user_id: successorUserId
+        });
+        await this.loadAccess(this.accessMatrix.scope);
+      } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    },
+    async previewAccessCopy(sourceDossierId: number): Promise<void> {
+      if (!this.selected) return;
+      this.saving = true;
+      this.error = '';
+      try {
+        this.copyPreview = (await api.post<DossierAccessCopyPreview>(
+          '/structures/access/copy-preview',
+          {
+            organisation_id: this.selected.id,
+            source_dossier_id: sourceDossierId
+          }
+        )).data;
+      } catch (error) {
+        this.copyPreview = null;
         this.error = errorMessage(error);
         throw error;
       } finally {

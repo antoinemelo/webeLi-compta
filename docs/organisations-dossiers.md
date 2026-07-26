@@ -19,11 +19,44 @@ plusieurs dossiers réellement exploitables dans la même organisation.
 Les mutations exigent le jeton CSRF. Le nom usuel, le statut et l’identité
 juridique utilisent la version optimiste de l’organisation.
 
+## Gouvernance des accès
+
+La section **Accès aux structures** de l’arborescence présente, pour chaque
+utilisateur administrable, trois sources distinctes : rôle d’installation,
+rôle hérité de l’organisation et rôle direct du dossier. Les permissions
+effectives sont recalculées par le serveur ; un rôle d’organisation n’est
+jamais recopié dans les dossiers.
+
+Toute modification suit deux appels : prévisualisation des permissions
+avant/après, puis confirmation avec l’empreinte de cette prévisualisation et
+la version de la matrice. Un changement concurrent produit un conflit 409.
+Le rejeu d’un état déjà appliqué est sans effet et ne crée aucun doublon.
+L’audit conserve les rôles et permissions avant/après.
+
+Un gestionnaire d’organisation ne voit que les utilisateurs déjà rattachés à
+son organisation ou à l’un de ses dossiers. Seul l’administrateur
+d’installation peut amorcer l’accès d’un compte encore étranger à ce
+périmètre ou modifier les rôles d’installation. `dossier.manage` n’autorise
+aucune auto-attribution. Une structure active conserve toujours au moins un
+administrateur effectif ; le retrait du dernier exige de désigner un
+successeur, auquel le rôle administrateur est transféré dans la même
+transaction.
+
+Après une révocation, `/api/v1/context` invalide le dossier courant et
+`/api/v1/dossiers` le retire du sélecteur dès la requête suivante, y compris
+dans une autre session déjà ouverte.
+
 ## Assistant de création d’un dossier
 
 L’assistant demande le nom, le slug unique dans l’organisation, le type, la
 devise de base, les modules, la variante du plan VEB, les options association,
 le premier exercice, sa première période et le journal général.
+
+Une option non cochée par défaut permet de choisir un dossier frère actif,
+prévisualiser ses seules attributions directes puis confirmer exactement cette
+matrice. Son empreinte est revérifiée dans la transaction de création. Une
+modification de la source oblige à refaire l’aperçu ; les rôles hérités et les
+groupes de consolidation ne sont jamais copiés.
 
 Une seule transaction crée le dossier et initialise les modules, le plan
 comptable, l’exercice, sa période, le journal général et les codes TVA lorsque
@@ -97,4 +130,9 @@ IDOR. Le cas « dossiers multiples et initialisation atomique » couvre deux
 dossiers réels, leur isolation, le rollback simulé, les conflits de version,
 les champs historiques et les suppressions sûre/refusée. Playwright crée deux
 dossiers à 360 px, vérifie leur présence immédiate dans le sélecteur puis
-archive et supprime le dossier vide.
+archive et supprime le dossier vide. Le cas « gouvernance des accès aux
+structures » couvre l’héritage, les rôles directs sur deux dossiers frères,
+le rejeu idempotent, la copie exacte, l’isolation des utilisateurs, le dernier
+administrateur et l’audit. Les preuves HTTP ajoutent CSRF, IDOR et révocation
+du contexte/sélecteur ; Playwright exerce la révocation et la restauration
+entre deux sessions navigateur.
