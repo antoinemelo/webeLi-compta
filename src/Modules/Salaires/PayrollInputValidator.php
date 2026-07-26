@@ -28,6 +28,8 @@ final class PayrollInputValidator
         $d = $request->input();
         $this->rejectScope($d);
         return [
+            'id' => $this->int($d['id'] ?? 0, 'id', 0, PHP_INT_MAX),
+            'version' => $this->int($d['version'] ?? 0, 'version', 0, PHP_INT_MAX),
             'prenom' => $this->text($d['first_name'] ?? '', 'first_name'),
             'nom' => $this->text($d['last_name'] ?? '', 'last_name'),
             'email' => trim((string) ($d['email'] ?? '')),
@@ -43,6 +45,7 @@ final class PayrollInputValidator
             'impot_source_ppm' => $this->int(
                 $d['source_tax_ppm'] ?? 0, 'source_tax_ppm', 0, 1_000_000
             ),
+            'actif' => ($d['active'] ?? true) ? 1 : 0,
         ];
     }
 

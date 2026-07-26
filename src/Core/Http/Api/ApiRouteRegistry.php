@@ -242,7 +242,9 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/salaires/employeur', $this->payroll->saveEmployer(...));
             $this->add($router, 'POST', '/api/v1/salaires/mapping', $this->payroll->saveMapping(...));
             $this->add($router, 'POST', '/api/v1/salaires/employes', $this->payroll->createEmployee(...));
+            $this->add($router, 'POST', '/api/v1/salaires/employes/supprimer', $this->payroll->deleteEmployee(...));
             $this->add($router, 'POST', '/api/v1/salaires/contrats', $this->payroll->saveContract(...));
+            $this->add($router, 'POST', '/api/v1/salaires/contrats/supprimer', $this->payroll->deleteContract(...));
             $this->add($router, 'POST', '/api/v1/salaires/fiches', $this->payroll->createDraft(...));
             $this->add($router, 'POST', '/api/v1/salaires/fiches/brouillon/supprimer', $this->payroll->deleteDraft(...));
             $this->add($router, 'POST', '/api/v1/salaires/fiches/valider', $this->payroll->validate(...));

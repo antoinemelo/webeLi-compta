@@ -60,11 +60,36 @@ final class PayrollApiController
     {
         [$userId, $organisationId, $dossierId] = $this->scope('salaires.manage');
         $data = $this->validator->employee($request);
+        if ($data['id'] > 0) {
+            $this->requirePii($userId, $organisationId, $dossierId);
+        }
         return $this->execute($request, fn (): array => [
-            'id' => $this->configuration->createEmployee(
+            'id' => $this->configuration->saveEmployee(
                 $organisationId, $dossierId, $data, $userId
             ),
         ]);
+    }
+
+    public function deleteEmployee(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('salaires.manage');
+        $this->requirePii($userId, $organisationId, $dossierId);
+        $data = $this->validator->identity($request);
+        return $this->execute($request, function () use (
+            $organisationId,
+            $dossierId,
+            $data,
+            $userId
+        ): array {
+            $this->configuration->deleteEmployee(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $userId
+            );
+            return ['deleted' => true, 'id' => $data['id']];
+        });
     }
 
     public function saveEmployer(Request $request): Response
@@ -101,6 +126,27 @@ final class PayrollApiController
                 $organisationId, $dossierId, $data, $userId
             ),
         ]);
+    }
+
+    public function deleteContract(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('salaires.manage');
+        $data = $this->validator->identity($request);
+        return $this->execute($request, function () use (
+            $organisationId,
+            $dossierId,
+            $data,
+            $userId
+        ): array {
+            $this->configuration->deleteContract(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $userId
+            );
+            return ['deleted' => true, 'id' => $data['id']];
+        });
     }
 
     public function createDraft(Request $request): Response
@@ -311,7 +357,7 @@ final class PayrollApiController
     private function requirePii(int $userId, int $organisationId, int $dossierId): void
     {
         if (!$this->has($userId, $organisationId, $dossierId, 'salaires.pii')) {
-            throw ApiException::forbidden('Export nominatif non autorisé.');
+            throw ApiException::forbidden('Données personnelles salariales non autorisées.');
         }
     }
 

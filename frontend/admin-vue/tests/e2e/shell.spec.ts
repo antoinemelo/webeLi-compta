@@ -435,8 +435,46 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await page.getByRole('link', { name: 'Salaires', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Salaires', exact: true })).toBeVisible();
   await expect(page.getByLabel('Navigation des salaires')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Employés et contrats' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Employés', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Historique des contrats' })).toBeVisible();
   await expect(page.getByText('PII autorisées', { exact: true })).toBeVisible();
+
+  const employeesPanel = page.locator('section.panel').filter({
+    has: page.getByRole('heading', { name: 'Employés', exact: true })
+  });
+  const adaEmployee = employeesPanel.getByRole('row').filter({ hasText: 'Ada Martin' });
+  await adaEmployee.getByRole('button', { name: 'Modifier' }).click();
+  await expect(page.getByRole('heading', { name: 'Modifier l’employé' })).toBeVisible();
+  await page.getByLabel('E-mail', { exact: true }).fill('ada.modifiee@example.test');
+  await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
+  await expect(page.getByText('Données de l’employé mises à jour.')).toBeVisible();
+  await expect(employeesPanel.getByText('ada.modifiee@example.test')).toBeVisible();
+
+  const contractsPanel = page.locator('section.panel').filter({
+    has: page.getByRole('heading', { name: 'Historique des contrats' })
+  });
+  const adaContract = contractsPanel.getByRole('row').filter({ hasText: 'Ada Martin' });
+  await adaContract.getByRole('button', { name: 'Modifier' }).click();
+  await expect(page.getByRole('heading', { name: 'Modifier le contrat' })).toBeVisible();
+  await page.getByLabel('Source', { exact: true }).fill('Contrat mensuel E2E corrigé');
+  await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
+  await expect(page.getByText('Contrat mis à jour.')).toBeVisible();
+
+  const temporaryContract = contractsPanel.getByRole('row').filter({
+    hasText: 'Jean Temporaire'
+  });
+  page.once('dialog', (dialog) => dialog.accept());
+  await temporaryContract.getByRole('button', { name: 'Supprimer' }).click();
+  await expect(page.getByText('Contrat non utilisé supprimé.')).toBeVisible();
+  await expect(temporaryContract).toHaveCount(0);
+
+  const temporaryEmployee = employeesPanel.getByRole('row').filter({
+    hasText: 'Jean Temporaire'
+  });
+  page.once('dialog', (dialog) => dialog.accept());
+  await temporaryEmployee.getByRole('button', { name: 'Supprimer' }).click();
+  await expect(page.getByText('Employé et contrats non utilisés supprimés.')).toBeVisible();
+  await expect(temporaryEmployee).toHaveCount(0);
 
   await page.getByRole('link', { name: 'Calculs', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Préparer une fiche de salaire' })).toBeVisible();

@@ -237,7 +237,25 @@ final class PayrollConfigurationService
         ?int $actorId = null,
     ): int {
         $employeeId = (int) ($data['employe_id'] ?? 0);
-        $this->employee($organisationId, $dossierId, $employeeId);
+        $id = (int) ($data['id'] ?? 0);
+        if ($id > 0) {
+            $owner = $this->pdo->prepare(
+                'SELECT employe_id FROM contrats_salariaux
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+            );
+            $owner->execute([$id, $organisationId, $dossierId]);
+            $storedEmployeeId = $owner->fetchColumn();
+            if ($storedEmployeeId === false) {
+                throw new PayrollException('Contrat absent du dossier.');
+            }
+            if ((int) $storedEmployeeId !== $employeeId) {
+                throw new PayrollException(
+                    'L’employé d’un contrat existant ne peut pas être remplacé.'
+                );
+            }
+        } else {
+            $this->employee($organisationId, $dossierId, $employeeId);
+        }
         $type = (string) ($data['type'] ?? '');
         $start = trim((string) ($data['date_debut'] ?? ''));
         $end = trim((string) ($data['date_fin'] ?? ''));
@@ -253,7 +271,6 @@ final class PayrollConfigurationService
         ) {
             throw new PayrollException('Contrat salarial invalide.');
         }
-        $id = (int) ($data['id'] ?? 0);
         if ($id > 0) {
             $stmt = $this->pdo->prepare(
                 'UPDATE contrats_salariaux SET type = ?, date_debut = ?,
@@ -274,6 +291,7 @@ final class PayrollConfigurationService
             if ($stmt->rowCount() !== 1) {
                 throw new PayrollException('Contrat modifié simultanément.');
             }
+            $action = 'salaires.contrat_modifie';
         } else {
             $stmt = $this->pdo->prepare(
                 'INSERT INTO contrats_salariaux
@@ -290,9 +308,10 @@ final class PayrollConfigurationService
                 trim((string) ($data['source'] ?? '')), $actorId,
             ]);
             $id = (int) $this->pdo->lastInsertId();
+            $action = 'salaires.contrat_cree';
         }
         $this->audit->log(
-            'salaires.contrat_enregistre',
+            $action,
             $actorId,
             $organisationId,
             $dossierId,
@@ -301,6 +320,78 @@ final class PayrollConfigurationService
             ['employe_id' => $employeeId, 'type' => $type, 'date_debut' => $start]
         );
         return $id;
+    }
+
+    public function deleteContract(
+        int $organisationId,
+        int $dossierId,
+        int $contractId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $contractId,
+            $expectedVersion,
+            $actorId
+        ): void {
+            $stmt = $this->pdo->prepare(
+                'SELECT employe_id, type, date_debut, version
+                 FROM contrats_salariaux
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+            );
+            $stmt->execute([$contractId, $organisationId, $dossierId]);
+            $contract = $stmt->fetch();
+            if ($contract === false) {
+                throw new PayrollException('Contrat absent du dossier.');
+            }
+            if ((int) $contract['version'] !== $expectedVersion) {
+                throw new PayrollException('Contrat modifié simultanément.');
+            }
+            $used = $this->pdo->prepare(
+                "SELECT 1 FROM fiches_salaires
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND CAST(json_extract(
+                     contrat_snapshot_json, '$.id'
+                   ) AS INTEGER) = ?
+                 LIMIT 1"
+            );
+            $used->execute([$organisationId, $dossierId, $contractId]);
+            if ($used->fetchColumn() !== false) {
+                throw new PayrollException(
+                    'Ce contrat a déjà servi à calculer une fiche. Désactivez-le '
+                    . 'pour préserver la traçabilité.'
+                );
+            }
+            $delete = $this->pdo->prepare(
+                'DELETE FROM contrats_salariaux
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND version = ?'
+            );
+            $delete->execute([
+                $contractId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($delete->rowCount() !== 1) {
+                throw new PayrollException('Contrat modifié simultanément.');
+            }
+            $this->audit->log(
+                'salaires.contrat_supprime',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'contrat_salarial',
+                (string) $contractId,
+                [
+                    'employe_id' => (int) $contract['employe_id'],
+                    'type' => (string) $contract['type'],
+                    'date_debut' => (string) $contract['date_debut'],
+                ]
+            );
+        });
     }
 
     /** @return array<string,mixed> */
@@ -334,6 +425,22 @@ final class PayrollConfigurationService
         array $data,
         ?int $actorId = null,
     ): int {
+        $data['id'] = 0;
+        return $this->saveEmployee(
+            $organisationId,
+            $dossierId,
+            $data,
+            $actorId
+        );
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveEmployee(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        ?int $actorId = null,
+    ): int {
         $firstName = trim((string) ($data['prenom'] ?? ''));
         $lastName = trim((string) ($data['nom'] ?? ''));
         $avs = $this->normalizeAvs((string) ($data['numero_avs'] ?? ''));
@@ -347,16 +454,9 @@ final class PayrollConfigurationService
         ) {
             throw new PayrollException('Identité ou procédure de l’employé invalide.');
         }
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO employes
-             (organisation_id, dossier_id, prenom, nom, email, rue, npa,
-              localite, numero_avs, numero_avs_normalise, date_naissance,
-              canton, procedure, supplement_vacances_ppm, impot_source_ppm,
-              cree_par)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'GE\', ?, ?, ?, ?)'
-        );
-        $stmt->execute([
-            $organisationId, $dossierId, $firstName, $lastName,
+        $values = [
+            $firstName,
+            $lastName,
             trim((string) ($data['email'] ?? '')),
             trim((string) ($data['rue'] ?? '')),
             trim((string) ($data['npa'] ?? '')),
@@ -366,11 +466,51 @@ final class PayrollConfigurationService
             $procedure,
             (int) ($data['supplement_vacances_ppm'] ?? 83300),
             (int) ($data['impot_source_ppm'] ?? 0),
-            $actorId,
-        ]);
-        $id = (int) $this->pdo->lastInsertId();
+            (int) ($data['actif'] ?? 1),
+        ];
+        $id = (int) ($data['id'] ?? 0);
+        if ($id > 0) {
+            $stmt = $this->pdo->prepare(
+                "UPDATE employes SET prenom = ?, nom = ?, email = ?, rue = ?,
+                    npa = ?, localite = ?, numero_avs = ?,
+                    numero_avs_normalise = ?, date_naissance = ?,
+                    procedure = ?, supplement_vacances_ppm = ?,
+                    impot_source_ppm = ?, actif = ?,
+                    modifie_le = datetime('now'), version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND version = ?"
+            );
+            $stmt->execute([
+                ...$values,
+                $id,
+                $organisationId,
+                $dossierId,
+                (int) ($data['version'] ?? 0),
+            ]);
+            if ($stmt->rowCount() !== 1) {
+                throw new PayrollException('Employé modifié simultanément.');
+            }
+            $action = 'salaires.employe_modifie';
+        } else {
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO employes
+                 (organisation_id, dossier_id, prenom, nom, email, rue, npa,
+                  localite, numero_avs, numero_avs_normalise, date_naissance,
+                  canton, procedure, supplement_vacances_ppm, impot_source_ppm,
+                  actif, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'GE\', ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([
+                $organisationId,
+                $dossierId,
+                ...$values,
+                $actorId,
+            ]);
+            $id = (int) $this->pdo->lastInsertId();
+            $action = 'salaires.employe_cree';
+        }
         $this->audit->log(
-            'salaires.employe_cree',
+            $action,
             $actorId,
             $organisationId,
             $dossierId,
@@ -378,6 +518,74 @@ final class PayrollConfigurationService
             (string) $id
         );
         return $id;
+    }
+
+    public function deleteEmployee(
+        int $organisationId,
+        int $dossierId,
+        int $employeeId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $employeeId,
+            $expectedVersion,
+            $actorId
+        ): void {
+            $stmt = $this->pdo->prepare(
+                'SELECT prenom, nom, version FROM employes
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+            );
+            $stmt->execute([$employeeId, $organisationId, $dossierId]);
+            $employee = $stmt->fetch();
+            if ($employee === false) {
+                throw new PayrollException('Employé absent du dossier.');
+            }
+            if ((int) $employee['version'] !== $expectedVersion) {
+                throw new PayrollException('Employé modifié simultanément.');
+            }
+            $used = $this->pdo->prepare(
+                'SELECT 1 FROM fiches_salaires
+                 WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?
+                 LIMIT 1'
+            );
+            $used->execute([$organisationId, $dossierId, $employeeId]);
+            if ($used->fetchColumn() !== false) {
+                throw new PayrollException(
+                    'Cet employé possède des fiches de salaire. Désactivez-le '
+                    . 'pour préserver son historique.'
+                );
+            }
+            $this->pdo->prepare(
+                'DELETE FROM contrats_salariaux
+                 WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?'
+            )->execute([$organisationId, $dossierId, $employeeId]);
+            $delete = $this->pdo->prepare(
+                'DELETE FROM employes
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND version = ?'
+            );
+            $delete->execute([
+                $employeeId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($delete->rowCount() !== 1) {
+                throw new PayrollException('Employé modifié simultanément.');
+            }
+            $this->audit->log(
+                'salaires.employe_supprime',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'employe',
+                (string) $employeeId,
+                ['nom' => trim($employee['prenom'] . ' ' . $employee['nom'])]
+            );
+        });
     }
 
     /** @return list<array<string,mixed>> */
@@ -628,5 +836,25 @@ final class PayrollConfigurationService
         return strlen($digits) === 13
             ? '756.****.****.' . substr($digits, -2)
             : '***';
+    }
+
+    private function transaction(callable $callback): mixed
+    {
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) {
+            $this->pdo->beginTransaction();
+        }
+        try {
+            $result = $callback();
+            if ($ownsTransaction) {
+                $this->pdo->commit();
+            }
+            return $result;
+        } catch (Throwable $exception) {
+            if ($ownsTransaction && $this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $exception;
+        }
     }
 }

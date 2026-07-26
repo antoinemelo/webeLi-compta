@@ -20,12 +20,16 @@ const year = ref(currentYear);
 const tab = computed(() => String(route.params.tab || 'employees'));
 const workspace = computed(() => store.workspace);
 const employee = reactive({
+  id: 0, version: 0,
   first_name: '', last_name: '', avs: '', email: '', birth_date: '',
-  procedure: 'ordinaire', vacation: '8.33', sourceTax: '0'
+  address: '', postal_code: '', city: '',
+  procedure: 'ordinaire', vacation: '8.33', sourceTax: '0', active: true
 });
 const contract = reactive({
+  id: 0, version: 0,
   employee_id: 0, type: 'horaire', valid_from: `${currentYear}-01-01`,
-  valid_until: '', amount: '', weekly_hours: '40', activity: '100', source: 'Contrat signé'
+  valid_until: '', amount: '', weekly_hours: '40', activity: '100',
+  source: 'Contrat signé', active: true
 });
 const draft = reactive({
   id: 0, version: 0, employee_id: 0,
@@ -69,6 +73,9 @@ const mappingFields: Array<[string, string]> = [
   ['dette_laa_id', 'Dette LAA'], ['dette_lpp_id', 'Dette LPP'],
   ['dette_impot_id', 'Dette impôt source']
 ];
+const activeEmployees = computed(() => (
+  workspace.value?.employees.filter((row) => n(row, 'actif') === 1) || []
+));
 const periodPayrolls = computed(() => (
   workspace.value?.payrolls.filter((row) => n(row, 'annee') === year.value) || []
 ));
@@ -149,6 +156,9 @@ function employeeName(id: number): string {
 function decimal(centsValue: number): string {
   return (centsValue / 100).toFixed(2);
 }
+function percentage(ppmValue: number): string {
+  return (ppmValue / 10000).toFixed(4).replace(/\.?0+$/, '');
+}
 function defaultElement(type: DraftElementType): DraftElementForm {
   return {
     key: ++draftElementKey,
@@ -182,7 +192,7 @@ function resetDraftEditor(): void {
   draft.version = 0;
   draft.year = year.value;
   if (!draft.employee_id) {
-    draft.employee_id = n(workspace.value?.employees[0] || {}, 'id');
+    draft.employee_id = n(activeEmployees.value[0] || {}, 'id');
   }
   resetDraftElements();
 }
@@ -233,7 +243,7 @@ async function reload(payrollId?: number): Promise<void> {
   if (!posting.exercise_id) posting.exercise_id = n(workspace.value.catalog.exercises[0] || {}, 'id');
   if (!posting.journal_id) posting.journal_id = n(workspace.value.catalog.journals[0] || {}, 'id');
   if (!payment.account_id) payment.account_id = n(workspace.value.catalog.treasury_accounts[0] || {}, 'id');
-  if (!draft.employee_id) draft.employee_id = n(workspace.value.employees[0] || {}, 'id');
+  if (!draft.employee_id) draft.employee_id = n(activeEmployees.value[0] || {}, 'id');
   if (!contract.employee_id) contract.employee_id = draft.employee_id;
   if (!payment.employee_id) payment.employee_id = draft.employee_id;
   const employerSource = workspace.value.employer || workspace.value.employer_suggestion;
@@ -263,23 +273,167 @@ async function mutate(
     return false;
   }
 }
-async function createEmployee(): Promise<void> {
-  await mutate('/salaires/employes', {
-    first_name: employee.first_name, last_name: employee.last_name, avs: employee.avs,
-    email: employee.email, birth_date: employee.birth_date,
-    procedure: employee.procedure, vacation_ppm: ppm(employee.vacation),
-    source_tax_ppm: ppm(employee.sourceTax)
-  }, 'Employé créé.');
+function resetEmployeeEditor(): void {
+  Object.assign(employee, {
+    id: 0, version: 0,
+    first_name: '', last_name: '', avs: '', email: '', birth_date: '',
+    address: '', postal_code: '', city: '',
+    procedure: 'ordinaire', vacation: '8.33', sourceTax: '0', active: true
+  });
+}
+function editEmployee(row: Record<string, unknown>): void {
+  Object.assign(employee, {
+    id: n(row, 'id'),
+    version: n(row, 'version'),
+    first_name: s(row, 'prenom'),
+    last_name: s(row, 'nom'),
+    avs: s(row, 'numero_avs'),
+    email: s(row, 'email'),
+    birth_date: s(row, 'date_naissance'),
+    address: s(row, 'rue'),
+    postal_code: s(row, 'npa'),
+    city: s(row, 'localite'),
+    procedure: s(row, 'procedure'),
+    vacation: percentage(n(row, 'supplement_vacances_ppm')),
+    sourceTax: percentage(n(row, 'impot_source_ppm')),
+    active: n(row, 'actif') === 1
+  });
+  document.getElementById('payroll-employee-editor')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start'
+  });
+}
+async function saveEmployee(): Promise<void> {
+  let vacationPpm: number;
+  let sourceTaxPpm: number;
+  try {
+    vacationPpm = ppm(employee.vacation);
+    sourceTaxPpm = ppm(employee.sourceTax);
+  } catch (error) {
+    store.error = error instanceof Error ? error.message : 'Pourcentage invalide.';
+    return;
+  }
+  const editing = employee.id > 0;
+  const saved = await mutate('/salaires/employes', {
+    id: employee.id,
+    version: employee.version,
+    first_name: employee.first_name,
+    last_name: employee.last_name,
+    avs: employee.avs,
+    email: employee.email,
+    birth_date: employee.birth_date,
+    address: employee.address,
+    postal_code: employee.postal_code,
+    city: employee.city,
+    procedure: employee.procedure,
+    vacation_ppm: vacationPpm,
+    source_tax_ppm: sourceTaxPpm,
+    active: employee.active
+  }, editing ? 'Données de l’employé mises à jour.' : 'Employé créé.');
+  if (saved) {
+    if (!employee.active && draft.employee_id === employee.id) {
+      draft.employee_id = n(activeEmployees.value[0] || {}, 'id');
+    }
+    resetEmployeeEditor();
+  }
+}
+async function deleteEmployee(row: Record<string, unknown>): Promise<void> {
+  if (!window.confirm(
+    `Supprimer l’employé ${employeeName(n(row, 'id'))} et ses contrats non utilisés ?`
+  )) return;
+  const deleted = await mutate('/salaires/employes/supprimer', {
+    id: n(row, 'id'),
+    version: n(row, 'version')
+  }, 'Employé et contrats non utilisés supprimés.');
+  if (deleted) {
+    if (employee.id === n(row, 'id')) resetEmployeeEditor();
+    if (contract.employee_id === n(row, 'id')) resetContractEditor();
+    if (draft.employee_id === n(row, 'id')) {
+      draft.employee_id = n(activeEmployees.value[0] || {}, 'id');
+    }
+    if (payment.employee_id === n(row, 'id')) {
+      payment.employee_id = n(workspace.value?.employees[0] || {}, 'id');
+    }
+  }
+}
+function resetContractEditor(): void {
+  Object.assign(contract, {
+    id: 0,
+    version: 0,
+    employee_id: n(activeEmployees.value[0] || {}, 'id'),
+    type: 'horaire',
+    valid_from: `${year.value}-01-01`,
+    valid_until: '',
+    amount: '',
+    weekly_hours: '40',
+    activity: '100',
+    source: 'Contrat signé',
+    active: true
+  });
+}
+function editContract(row: Record<string, unknown>): void {
+  Object.assign(contract, {
+    id: n(row, 'id'),
+    version: n(row, 'version'),
+    employee_id: n(row, 'employe_id'),
+    type: s(row, 'type'),
+    valid_from: s(row, 'date_debut'),
+    valid_until: s(row, 'date_fin'),
+    amount: decimal(n(
+      row,
+      s(row, 'type') === 'mensuel'
+        ? 'salaire_mensuel_centimes'
+        : 'taux_horaire_centimes'
+    )),
+    weekly_hours: String(n(row, 'heures_hebdo_milli') / 1000),
+    activity: percentage(n(row, 'taux_activite_ppm')),
+    source: s(row, 'source'),
+    active: n(row, 'actif') === 1
+  });
+  document.getElementById('payroll-contract-editor')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start'
+  });
 }
 async function saveContract(): Promise<void> {
-  await mutate('/salaires/contrats', {
-    employee_id: contract.employee_id, type: contract.type,
-    valid_from: contract.valid_from, valid_until: contract.valid_until,
-    hourly_cents: contract.type === 'horaire' ? cents(contract.amount) : 0,
-    monthly_cents: contract.type === 'mensuel' ? cents(contract.amount) : 0,
-    weekly_hours_milli: milli(contract.weekly_hours),
-    activity_ppm: ppm(contract.activity), source: contract.source, active: true
-  }, 'Contrat daté enregistré.');
+  let amountCents: number;
+  let weeklyHoursMilli: number;
+  let activityPpm: number;
+  try {
+    amountCents = cents(contract.amount);
+    weeklyHoursMilli = milli(contract.weekly_hours);
+    activityPpm = ppm(contract.activity);
+  } catch (error) {
+    store.error = error instanceof Error ? error.message : 'Contrat invalide.';
+    return;
+  }
+  const editing = contract.id > 0;
+  const saved = await mutate('/salaires/contrats', {
+    id: contract.id,
+    version: contract.version,
+    employee_id: contract.employee_id,
+    type: contract.type,
+    valid_from: contract.valid_from,
+    valid_until: contract.valid_until,
+    hourly_cents: contract.type === 'horaire' ? amountCents : 0,
+    monthly_cents: contract.type === 'mensuel' ? amountCents : 0,
+    weekly_hours_milli: weeklyHoursMilli,
+    activity_ppm: activityPpm,
+    source: contract.source,
+    active: contract.active
+  }, editing ? 'Contrat mis à jour.' : 'Contrat daté enregistré.');
+  if (saved) resetContractEditor();
+}
+async function deleteContract(row: Record<string, unknown>): Promise<void> {
+  if (!window.confirm(
+    `Supprimer le contrat de ${employeeName(n(row, 'employe_id'))} `
+    + `débutant le ${s(row, 'date_debut')} ?`
+  )) return;
+  const deleted = await mutate('/salaires/contrats/supprimer', {
+    id: n(row, 'id'),
+    version: n(row, 'version')
+  }, 'Contrat non utilisé supprimé.');
+  if (deleted && contract.id === n(row, 'id')) resetContractEditor();
 }
 async function createDraft(): Promise<void> {
   let elements: Array<Record<string, unknown>>;
@@ -485,24 +639,59 @@ onMounted(() => reload());
     </p>
 
     <template v-if="tab === 'employees'">
-      <section class="panel">
-        <h2>Nouvel employé</h2>
-        <form class="form-grid three" @submit.prevent="createEmployee">
+      <section id="payroll-employee-editor" class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">{{ employee.id ? 'Modification contrôlée' : 'Nouvelle personne' }}</p>
+            <h2>{{ employee.id ? 'Modifier l’employé' : 'Nouvel employé' }}</h2>
+          </div>
+          <span v-if="employee.id" class="status-chip">Employé #{{ employee.id }}</span>
+        </div>
+        <form class="form-grid three" @submit.prevent="saveEmployee">
           <label>Prénom<input v-model="employee.first_name" required></label>
           <label>Nom<input v-model="employee.last_name" required></label>
           <label>AVS<input v-model="employee.avs" placeholder="756.1234.5678.90" required></label>
           <label>E-mail<input v-model="employee.email" type="email"></label>
           <label>Date de naissance<input v-model="employee.birth_date" type="date"></label>
+          <label>Adresse<input v-model="employee.address"></label>
+          <label>NPA<input v-model="employee.postal_code"></label>
+          <label>Localité<input v-model="employee.city"></label>
           <label>Procédure<select v-model="employee.procedure"><option value="ordinaire">Ordinaire</option><option value="simplifiee">Simplifiée</option><option value="ordinaire_impot_source">Impôt à la source</option></select></label>
           <label>Vacances (%)<input v-model="employee.vacation" inputmode="decimal"></label>
           <label>Impôt source (%)<input v-model="employee.sourceTax" inputmode="decimal"></label>
-          <button class="button primary" :disabled="!workspace.capabilities.manage">Créer</button>
+          <label class="checkbox-field">
+            <input v-model="employee.active" type="checkbox">
+            Employé actif
+          </label>
+          <div class="button-row">
+            <button
+              v-if="employee.id"
+              type="button"
+              class="button secondary"
+              :disabled="store.saving"
+              @click="resetEmployeeEditor"
+            >
+              Annuler
+            </button>
+            <button
+              class="button primary"
+              :disabled="!workspace.capabilities.manage || (employee.id > 0 && !workspace.capabilities.pii)"
+            >
+              {{ employee.id ? 'Enregistrer les modifications' : 'Créer l’employé' }}
+            </button>
+          </div>
         </form>
       </section>
-      <section class="panel">
-        <h2>Contrat daté</h2>
+      <section id="payroll-contract-editor" class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">{{ contract.id ? 'Modification contrôlée' : 'Nouveau contrat' }}</p>
+            <h2>{{ contract.id ? 'Modifier le contrat' : 'Contrat daté' }}</h2>
+          </div>
+          <span v-if="contract.id" class="status-chip">Contrat #{{ contract.id }}</span>
+        </div>
         <form class="form-grid three" @submit.prevent="saveContract">
-          <label>Employé<select v-model.number="contract.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label>
+          <label>Employé<select v-model.number="contract.employee_id" :disabled="contract.id > 0"><option v-for="row in (contract.id ? workspace.employees : activeEmployees)" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label>
           <label>Type<select v-model="contract.type"><option value="horaire">Horaire</option><option value="mensuel">Mensuel</option></select></label>
           <label>{{ contract.type === 'horaire' ? 'Taux horaire' : 'Salaire mensuel' }}<input v-model="contract.amount" required></label>
           <label>Début<input v-model="contract.valid_from" type="date" required></label>
@@ -510,10 +699,72 @@ onMounted(() => reload());
           <label>Heures hebdomadaires<input v-model="contract.weekly_hours"></label>
           <label>Taux d’activité (%)<input v-model="contract.activity"></label>
           <label>Source<input v-model="contract.source" required></label>
-          <button class="button primary" :disabled="!workspace.capabilities.manage">Enregistrer</button>
+          <label class="checkbox-field">
+            <input v-model="contract.active" type="checkbox">
+            Contrat actif
+          </label>
+          <div class="button-row">
+            <button
+              v-if="contract.id"
+              type="button"
+              class="button secondary"
+              :disabled="store.saving"
+              @click="resetContractEditor"
+            >
+              Annuler
+            </button>
+            <button class="button primary" :disabled="!workspace.capabilities.manage">
+              {{ contract.id ? 'Enregistrer les modifications' : 'Enregistrer le contrat' }}
+            </button>
+          </div>
         </form>
       </section>
-      <section class="panel"><h2>Employés et contrats</h2><div class="table-scroll"><table><thead><tr><th>Employé</th><th>AVS</th><th>Contrat</th><th>Effet</th><th>Valeur</th></tr></thead><tbody><tr v-for="row in workspace.employees" :key="n(row,'id')"><td>{{ employeeName(n(row,'id')) }}</td><td>{{ s(row,'numero_avs') }}</td><td>{{ s(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {},'type') || 'À définir' }}</td><td>{{ s(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {},'date_debut') }}</td><td>{{ money(n(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {}, s(workspace.catalog.contracts.find(c => n(c,'employe_id') === n(row,'id')) || {},'type') === 'mensuel' ? 'salaire_mensuel_centimes' : 'taux_horaire_centimes')) }}</td></tr></tbody></table></div></section>
+      <section class="panel">
+        <h2>Employés</h2>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Employé</th><th>AVS</th><th>E-mail</th><th>Procédure</th><th>État</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr v-for="row in workspace.employees" :key="n(row,'id')">
+                <td>{{ employeeName(n(row,'id')) }}</td>
+                <td>{{ s(row,'numero_avs') }}</td>
+                <td>{{ s(row,'email') || '—' }}</td>
+                <td>{{ s(row,'procedure') }}</td>
+                <td><span :class="['status-chip', n(row,'actif') === 1 ? 'ok' : 'warning']">{{ n(row,'actif') === 1 ? 'Actif' : 'Inactif' }}</span></td>
+                <td class="button-row">
+                  <button class="button small" :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving" @click="editEmployee(row)">Modifier</button>
+                  <button class="button danger small" :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving" @click="deleteEmployee(row)">Supprimer</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Historique des contrats</h2>
+        <p>Les contrats utilisés par une fiche restent protégés ; ils peuvent être désactivés mais pas supprimés.</p>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Employé</th><th>Type</th><th>Début</th><th>Fin</th><th>Valeur</th><th>Activité</th><th>État</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr v-for="row in workspace.catalog.contracts" :key="n(row,'id')">
+                <td>{{ employeeName(n(row,'employe_id')) }}</td>
+                <td>{{ s(row,'type') }}</td>
+                <td>{{ s(row,'date_debut') }}</td>
+                <td>{{ s(row,'date_fin') || 'Sans fin' }}</td>
+                <td>{{ money(n(row, s(row,'type') === 'mensuel' ? 'salaire_mensuel_centimes' : 'taux_horaire_centimes')) }}</td>
+                <td>{{ percentage(n(row,'taux_activite_ppm')) }} %</td>
+                <td><span :class="['status-chip', n(row,'actif') === 1 ? 'ok' : 'warning']">{{ n(row,'actif') === 1 ? 'Actif' : 'Inactif' }}</span></td>
+                <td class="button-row">
+                  <button class="button small" :disabled="!workspace.capabilities.manage || store.saving" @click="editContract(row)">Modifier</button>
+                  <button class="button danger small" :disabled="!workspace.capabilities.manage || store.saving" @click="deleteContract(row)">Supprimer</button>
+                </td>
+              </tr>
+              <tr v-if="!workspace.catalog.contracts.length"><td colspan="8">Aucun contrat.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </template>
 
     <template v-else-if="tab === 'calculs'">
@@ -538,7 +789,7 @@ onMounted(() => reload());
               <label>Employé
                 <select v-model.number="draft.employee_id" :disabled="draft.id > 0" required>
                   <option :value="0" disabled>Choisir un employé…</option>
-                  <option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">
+                  <option v-for="row in activeEmployees" :key="n(row,'id')" :value="n(row,'id')">
                     {{ employeeName(n(row,'id')) }}
                   </option>
                 </select>

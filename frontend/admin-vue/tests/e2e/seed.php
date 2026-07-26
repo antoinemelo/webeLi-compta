@@ -255,6 +255,36 @@ $payrollEmployee = $payrollConfiguration->createEmployee(
     ],
     $administratorId
 );
+$temporaryPayrollEmployee = $payrollConfiguration->createEmployee(
+    $organisationA,
+    $dossierA,
+    [
+        'prenom' => 'Jean',
+        'nom' => 'Temporaire',
+        'email' => 'jean.temporaire@example.test',
+        'numero_avs' => '756.9999.9999.99',
+        'procedure' => 'ordinaire',
+        'supplement_vacances_ppm' => 83300,
+        'impot_source_ppm' => 0,
+    ],
+    $administratorId
+);
+$payrollConfiguration->saveContract(
+    $organisationA,
+    $dossierA,
+    [
+        'employe_id' => $temporaryPayrollEmployee,
+        'type' => 'horaire',
+        'date_debut' => '2026-01-01',
+        'date_fin' => '',
+        'taux_horaire_centimes' => 3000,
+        'salaire_mensuel_centimes' => 0,
+        'heures_hebdo_milli' => 40000,
+        'taux_activite_ppm' => 1_000_000,
+        'source' => 'Contrat temporaire E2E',
+    ],
+    $administratorId
+);
 $payrollConfiguration->saveContract(
     $organisationA,
     $dossierA,

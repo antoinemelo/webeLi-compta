@@ -66,8 +66,10 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/references/periods` | création ou changement de statut d’une période |
 | POST | `/api/v1/configuration/access` | rôles directs d’un utilisateur sur le dossier |
 | GET | `/api/v1/salaires` | employés, contrats, fiches, dettes, paiements et récapitulatifs annuels |
-| POST | `/api/v1/salaires/employes` | création d’un employé genevois |
-| POST | `/api/v1/salaires/contrats` | contrat horaire ou mensuel daté |
+| POST | `/api/v1/salaires/employes` | création ou modification optimiste d’un employé genevois |
+| POST | `/api/v1/salaires/employes/supprimer` | suppression d’un employé sans historique salarial |
+| POST | `/api/v1/salaires/contrats` | création ou modification optimiste d’un contrat daté |
+| POST | `/api/v1/salaires/contrats/supprimer` | suppression d’un contrat jamais utilisé |
 | POST | `/api/v1/salaires/fiches` | création ou recalcul optimiste d’un brouillon |
 | POST | `/api/v1/salaires/fiches/brouillon/supprimer` | suppression d’un brouillon non validé |
 | POST | `/api/v1/salaires/fiches/valider` | validation et gel des snapshots |

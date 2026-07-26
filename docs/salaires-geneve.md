@@ -37,6 +37,12 @@ snapshot de l’employé, de l’employeur, des taux et de chaque composant. La
 validation fige ces données et crée les dettes séparées : salaire net, OCAS,
 LAA, LPP et impôt à la source.
 
+Les données d’un employé et ses contrats restent modifiables avec contrôle de
+version. Un employé ou un contrat encore inutilisé peut être supprimé. Dès
+qu’une fiche existe, l’employé est conservé ; dès qu’un contrat figure dans un
+snapshot de fiche, il peut être désactivé mais plus supprimé. Les snapshots
+historiques ne sont jamais réécrits par ces modifications.
+
 Avant validation, un brouillon peut être repris dans le formulaire, recalculé
 avec contrôle de version ou supprimé. Son employé et sa période restent fixes ;
 un changement de périmètre exige de supprimer le brouillon puis d’en créer un

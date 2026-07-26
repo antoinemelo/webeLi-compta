@@ -5324,12 +5324,127 @@ final class Tests
             'AVS masqué sans droit PII'
         );
 
+        $temporaryEmployee = $configuration->createEmployee(
+            $organisationId,
+            $dossierId,
+            [
+                'prenom' => 'Employé',
+                'nom' => 'Temporaire',
+                'email' => 'temporaire@example.test',
+                'numero_avs' => '756.9999.9999.99',
+                'procedure' => 'ordinaire',
+                'supplement_vacances_ppm' => 83300,
+                'impot_source_ppm' => 0,
+            ]
+        );
+        $temporaryRow = $configuration->employee(
+            $organisationId,
+            $dossierId,
+            $temporaryEmployee
+        );
+        $configuration->saveEmployee(
+            $organisationId,
+            $dossierId,
+            [
+                'id' => $temporaryEmployee,
+                'version' => (int) $temporaryRow['version'],
+                'prenom' => 'Employée',
+                'nom' => 'Corrigée',
+                'email' => 'corrigee@example.test',
+                'numero_avs' => '756.9999.9999.99',
+                'procedure' => 'ordinaire',
+                'supplement_vacances_ppm' => 83300,
+                'impot_source_ppm' => 0,
+                'actif' => 1,
+            ]
+        );
+        $this->same(
+            'Employée',
+            (string) $configuration->employee(
+                $organisationId,
+                $dossierId,
+                $temporaryEmployee
+            )['prenom'],
+            'données d’un employé modifiables avec contrôle de version'
+        );
+        $temporaryContract = $configuration->saveContract(
+            $organisationId,
+            $dossierId,
+            [
+                'employe_id' => $temporaryEmployee,
+                'type' => 'mensuel',
+                'date_debut' => '2026-01-01',
+                'date_fin' => '',
+                'taux_horaire_centimes' => 0,
+                'salaire_mensuel_centimes' => 400000,
+                'heures_hebdo_milli' => 40000,
+                'taux_activite_ppm' => 1_000_000,
+                'source' => 'Contrat temporaire',
+            ]
+        );
+        $temporaryContractRow = array_values(array_filter(
+            $configuration->catalog($organisationId, $dossierId)['contracts'],
+            static fn (array $row): bool => (int) $row['id'] === $temporaryContract
+        ))[0];
+        $configuration->saveContract(
+            $organisationId,
+            $dossierId,
+            [
+                'id' => $temporaryContract,
+                'version' => (int) $temporaryContractRow['version'],
+                'employe_id' => $temporaryEmployee,
+                'type' => 'mensuel',
+                'date_debut' => '2026-01-01',
+                'date_fin' => '2026-06-30',
+                'taux_horaire_centimes' => 0,
+                'salaire_mensuel_centimes' => 420000,
+                'heures_hebdo_milli' => 40000,
+                'taux_activite_ppm' => 800000,
+                'source' => 'Avenant temporaire',
+                'actif' => 1,
+            ]
+        );
+        $updatedTemporaryContract = array_values(array_filter(
+            $configuration->catalog($organisationId, $dossierId)['contracts'],
+            static fn (array $row): bool => (int) $row['id'] === $temporaryContract
+        ))[0];
+        $this->same(
+            420000,
+            (int) $updatedTemporaryContract['salaire_mensuel_centimes'],
+            'contrat modifiable sans créer de doublon'
+        );
+        $configuration->deleteContract(
+            $organisationId,
+            $dossierId,
+            $temporaryContract,
+            (int) $updatedTemporaryContract['version']
+        );
+        $temporaryRow = $configuration->employee(
+            $organisationId,
+            $dossierId,
+            $temporaryEmployee
+        );
+        $configuration->deleteEmployee(
+            $organisationId,
+            $dossierId,
+            $temporaryEmployee,
+            (int) $temporaryRow['version']
+        );
+        $this->throws(
+            fn () => $configuration->employee(
+                $organisationId,
+                $dossierId,
+                $temporaryEmployee
+            ),
+            'employé sans historique et ses contrats supprimables'
+        );
+
         $payrolls = new PayrollService(
             $pdo,
             $audit,
             new EntryService($pdo, $audit)
         );
-        $configuration->saveContract(
+        $hourlyContractId = $configuration->saveContract(
             $organisationId,
             $dossierId,
             [
@@ -5377,6 +5492,33 @@ final class Tests
                 $organisationId, $dossierId, $hourlyDraftId, true
             )['salaire_travail_centimes'],
             'contrat horaire appliqué au millième sans flottant'
+        );
+        $hourlyContractRow = array_values(array_filter(
+            $configuration->catalog($organisationId, $dossierId)['contracts'],
+            static fn (array $row): bool => (int) $row['id'] === $hourlyContractId
+        ))[0];
+        $this->throws(
+            fn () => $configuration->deleteContract(
+                $organisationId,
+                $dossierId,
+                $hourlyContractId,
+                (int) $hourlyContractRow['version']
+            ),
+            'contrat utilisé protégé contre la suppression'
+        );
+        $employeeRow = $configuration->employee(
+            $organisationId,
+            $dossierId,
+            $employee
+        );
+        $this->throws(
+            fn () => $configuration->deleteEmployee(
+                $organisationId,
+                $dossierId,
+                $employee,
+                (int) $employeeRow['version']
+            ),
+            'employé avec fiches protégé contre la suppression'
         );
         $hourlyDraft = $payrolls->payroll(
             $organisationId,
