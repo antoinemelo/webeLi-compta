@@ -352,7 +352,12 @@ async function createCredit(item: BillingDocument): Promise<void> {
 
 async function downloadPdf(item: BillingDocument): Promise<void> {
   try {
-    const result = await store.mutate<{ filename: string; content_base64: string }>(
+    const result = await store.mutate<{
+      filename: string;
+      content_base64: string;
+      qr_included: boolean;
+      warning: string;
+    }>(
       '/facturation/documents/pdf',
       { document_id: item.id }
     );
@@ -366,7 +371,10 @@ async function downloadPdf(item: BillingDocument): Promise<void> {
     link.download = result.filename;
     link.click();
     URL.revokeObjectURL(url);
-    notifications.push('PDF et QR-facture archivés puis téléchargés.', 'success');
+    notifications.push(
+      result.warning || 'PDF et QR-facture archivés puis téléchargés.',
+      result.qr_included ? 'success' : 'warning'
+    );
   } catch {
     notifications.push(store.error, 'warning');
   }

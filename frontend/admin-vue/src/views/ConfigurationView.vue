@@ -58,8 +58,7 @@ const identity = reactive({
   canton: '',
   country: 'CH',
   phone: '',
-  payment_iban: '',
-  payment_bic: '',
+  billing_iban: '',
   email: '',
   website: '',
   base_currency: 'CHF'
@@ -97,6 +96,8 @@ const contactDraft = reactive({
   country: 'CH'
 });
 const vatDraft = reactive({
+  id: 0,
+  active: true,
   code: '',
   label: '',
   treatment: 'normal',
@@ -320,6 +321,7 @@ watch(
       phone: value.organization.phone,
       email: value.organization.email,
       website: value.organization.website,
+      billing_iban: value.organization.billing_iban,
       base_currency: value.dossier.base_currency
     });
     markUnsavedChanges(false);
@@ -441,9 +443,88 @@ function editContact(
   });
 }
 
-async function createVatCode(): Promise<void> {
+function resetVatCode(): void {
+  Object.assign(vatDraft, {
+    id: 0,
+    active: true,
+    code: '',
+    label: '',
+    treatment: 'normal',
+    nature: 'collectee',
+    legal_rate_id: 0,
+    deduction_right: false,
+    default_deduction_percent: '0',
+    afc_box: '',
+    account_id: 0,
+    valid_from: today,
+    valid_until: ''
+  });
+}
+
+function editVatCode(
+  code: NonNullable<typeof managedReferences.value>['vat']['codes'][number]
+): void {
+  Object.assign(vatDraft, {
+    id: code.id,
+    active: code.active,
+    code: code.code,
+    label: code.label,
+    treatment: code.treatment,
+    nature: code.nature,
+    legal_rate_id: code.legal_rate_id || 0,
+    deduction_right: code.deduction_right,
+    default_deduction_percent: percentFromBasisPoints(code.default_deduction_bp),
+    afc_box: code.afc_box,
+    account_id: code.account_id || 0,
+    valid_from: code.valid_from,
+    valid_until: code.valid_until || ''
+  });
+}
+
+function vatPayload(
+  code: NonNullable<typeof managedReferences.value>['vat']['codes'][number],
+  active: boolean
+): Record<string, unknown> {
+  return {
+    id: code.id,
+    active,
+    code: code.code,
+    label: code.label,
+    treatment: code.treatment,
+    nature: code.nature,
+    legal_rate_id: code.legal_rate_id,
+    deduction_right: code.deduction_right,
+    default_deduction_bp: code.default_deduction_bp,
+    afc_box: code.afc_box,
+    account_id: code.account_id,
+    valid_from: code.valid_from,
+    valid_until: code.valid_until || ''
+  };
+}
+
+async function toggleVatCode(
+  code: NonNullable<typeof managedReferences.value>['vat']['codes'][number]
+): Promise<void> {
+  await store.saveVatCode(vatPayload(code, !code.active));
+  if (vatDraft.id === code.id) resetVatCode();
+  notifications.push(code.active ? 'Code TVA désactivé.' : 'Code TVA réactivé.', 'success');
+}
+
+async function deleteVatCode(
+  code: NonNullable<typeof managedReferences.value>['vat']['codes'][number]
+): Promise<void> {
+  if (!window.confirm(`Supprimer définitivement le code TVA ${code.code} ?`)) return;
+  await store.deleteVatCode(code.id);
+  if (vatDraft.id === code.id) resetVatCode();
+  notifications.push('Code TVA inutilisé supprimé.', 'success');
+}
+
+async function saveVatCode(): Promise<void> {
   try {
-    await store.createVatCode({
+    const edited = vatDraft.id > 0;
+    await store.saveVatCode({
+      id: vatDraft.id,
+      active: vatDraft.active,
       code: vatDraft.code,
       label: vatDraft.label,
       treatment: vatDraft.treatment,
@@ -459,9 +540,11 @@ async function createVatCode(): Promise<void> {
       valid_from: vatDraft.valid_from,
       valid_until: vatDraft.valid_until
     });
-    vatDraft.code = '';
-    vatDraft.label = '';
-    notifications.push('Code TVA daté créé.', 'success');
+    resetVatCode();
+    notifications.push(
+      edited ? 'Code TVA modifié.' : 'Code TVA daté créé.',
+      'success'
+    );
   } catch (error) {
     if (error instanceof Error && !store.error) store.error = error.message;
   }
@@ -731,6 +814,21 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           <FormField id="website" label="Site web">
             <template #default="{ describedBy }">
               <input id="website" v-model="identity.website" type="url" :aria-describedby="describedBy">
+            </template>
+          </FormField>
+          <FormField
+            id="billing-iban"
+            label="IBAN de facturation"
+            hint="IBAN CH ou LI utilisé dans la section Swiss QR des factures clients."
+          >
+            <template #default="{ describedBy }">
+              <input
+                id="billing-iban"
+                v-model="identity.billing_iban"
+                autocomplete="off"
+                placeholder="CH…"
+                :aria-describedby="describedBy"
+              >
             </template>
           </FormField>
           <FormField
@@ -1227,10 +1325,13 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           <form
             v-if="managedReferences.capabilities.vat"
             class="panel configuration-form"
-            @submit.prevent="createVatCode"
+            @submit.prevent="saveVatCode"
           >
             <div class="panel-heading">
-              <div><p class="eyebrow">Valeur datée</p><h2>Nouveau code TVA</h2></div>
+              <div>
+                <p class="eyebrow">Valeur datée</p>
+                <h2>{{ vatDraft.id ? 'Modifier le code TVA' : 'Nouveau code TVA' }}</h2>
+              </div>
             </div>
             <div class="configuration-grid">
               <label>Code
@@ -1298,10 +1399,21 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               <input v-model="vatDraft.deduction_right" type="checkbox">
               Ouvre un droit à déduction
             </label>
+            <label class="checkbox-field">
+              <input v-model="vatDraft.active" type="checkbox">
+              Code actif
+            </label>
             <div class="form-actions">
               <button class="button primary" type="submit" :disabled="store.saving">
-                Créer le code TVA
+                {{ vatDraft.id ? 'Enregistrer les modifications' : 'Créer le code TVA' }}
               </button>
+              <button
+                v-if="vatDraft.id"
+                class="button secondary"
+                type="button"
+                :disabled="store.saving"
+                @click="resetVatCode"
+              >Annuler</button>
             </div>
           </form>
           <article class="panel">
@@ -1329,7 +1441,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Code</th><th>Traitement</th><th>Taux</th><th>Compte</th><th>Validité</th></tr></thead>
+                <thead><tr><th>Code</th><th>Traitement</th><th>Taux</th><th>Compte</th><th>Validité</th><th>État</th><th>Actions</th></tr></thead>
                 <tbody>
                   <tr v-for="code in managedReferences.vat.codes" :key="code.id">
                     <td><strong>{{ code.code }}</strong><br><small>{{ code.label }}</small></td>
@@ -1337,6 +1449,27 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                     <td>{{ code.rate_bp === null ? '—' : `${percentFromBasisPoints(code.rate_bp)} %` }}</td>
                     <td>{{ code.account || '—' }}</td>
                     <td>{{ code.valid_from }} — {{ code.valid_until || 'sans fin' }}</td>
+                    <td>
+                      <span class="status-badge" :class="code.active ? 'status-ouverte' : 'status-fermee'">
+                        {{ code.active ? 'Actif' : 'Inactif' }}
+                      </span>
+                    </td>
+                    <td>
+                      <div class="table-actions">
+                        <button class="button secondary compact" type="button" @click="editVatCode(code)">
+                          Modifier
+                        </button>
+                        <button class="button secondary compact" type="button" @click="toggleVatCode(code)">
+                          {{ code.active ? 'Désactiver' : 'Réactiver' }}
+                        </button>
+                        <button
+                          v-if="!code.used"
+                          class="button danger compact"
+                          type="button"
+                          @click="deleteVatCode(code)"
+                        >Supprimer</button>
+                      </div>
+                    </td>
                   </tr>
                 </tbody>
               </table>

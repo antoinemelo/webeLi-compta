@@ -87,7 +87,13 @@ final class ApiRouteRegistry
                 $router,
                 'POST',
                 '/api/v1/configuration/references/vat-codes',
-                $this->configuration->createVatCode(...)
+                $this->configuration->saveVatCode(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/vat-codes/delete',
+                $this->configuration->deleteVatCode(...)
             );
             $this->add(
                 $router,

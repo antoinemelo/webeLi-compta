@@ -122,8 +122,8 @@ final class VatConfigurationService
             'INSERT INTO tva_codes
              (organisation_id, dossier_id, code, libelle, traitement, nature,
               taux_legal_id, droit_deduction, deduction_defaut_bp, chiffre_afc,
-              compte_tva_id, date_debut, date_fin, cree_par)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+              compte_tva_id, date_debut, date_fin, actif, cree_par)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
             $organisationId,
@@ -139,6 +139,7 @@ final class VatConfigurationService
             $data['compte_tva_id'] ?? null,
             (string) $data['date_debut'],
             ($data['date_fin'] ?? null) ?: null,
+            !array_key_exists('actif', $data) || !empty($data['actif']) ? 1 : 0,
             $actorId,
         ]);
         $id = (int) $this->pdo->lastInsertId();
@@ -155,6 +156,88 @@ final class VatConfigurationService
             ]
         );
         return $id;
+    }
+
+    /** @param array<string,mixed> $data */
+    public function updateCode(
+        int $organisationId,
+        int $dossierId,
+        int $codeId,
+        array $data,
+        ?int $actorId = null,
+    ): void {
+        $this->assertCode($organisationId, $dossierId, $codeId);
+        if (($data['compte_tva_id'] ?? null) !== null) {
+            $this->assertAccount(
+                $organisationId,
+                $dossierId,
+                (int) $data['compte_tva_id']
+            );
+        }
+        $stmt = $this->pdo->prepare(
+            'UPDATE tva_codes
+             SET code = ?, libelle = ?, traitement = ?, nature = ?,
+                 taux_legal_id = ?, droit_deduction = ?,
+                 deduction_defaut_bp = ?, chiffre_afc = ?,
+                 compte_tva_id = ?, date_debut = ?, date_fin = ?, actif = ?
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+        );
+        $stmt->execute([
+            strtoupper(trim((string) $data['code'])),
+            trim((string) $data['libelle']),
+            (string) $data['traitement'],
+            (string) $data['nature'],
+            $data['taux_legal_id'] ?? null,
+            !empty($data['droit_deduction']) ? 1 : 0,
+            (int) ($data['deduction_defaut_bp'] ?? 0),
+            trim((string) ($data['chiffre_afc'] ?? '')),
+            $data['compte_tva_id'] ?? null,
+            (string) $data['date_debut'],
+            ($data['date_fin'] ?? null) ?: null,
+            !empty($data['actif']) ? 1 : 0,
+            $codeId,
+            $organisationId,
+            $dossierId,
+        ]);
+        $this->audit->log(
+            'tva.code_modifie',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'code_tva',
+            (string) $codeId,
+            [
+                'code' => strtoupper(trim((string) $data['code'])),
+                'actif' => !empty($data['actif']),
+            ]
+        );
+    }
+
+    public function deleteCode(
+        int $organisationId,
+        int $dossierId,
+        int $codeId,
+        ?int $actorId = null,
+    ): void {
+        $this->assertCode($organisationId, $dossierId, $codeId);
+        if ($this->codeUsageCount($organisationId, $dossierId, $codeId) > 0) {
+            throw new VatException(
+                'Ce code TVA est déjà utilisé. Désactivez-le pour préserver l’historique.'
+            );
+        }
+        $stmt = $this->pdo->prepare(
+            'DELETE FROM tva_codes
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+        );
+        $stmt->execute([$codeId, $organisationId, $dossierId]);
+        $this->audit->log(
+            'tva.code_supprime',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'code_tva',
+            (string) $codeId
+        );
     }
 
     /** @param array<string,mixed> $data */
@@ -204,6 +287,58 @@ final class VatConfigurationService
             throw new VatException('Aucun régime TVA applicable à cette date.');
         }
         return $row;
+    }
+
+    private function assertCode(
+        int $organisationId,
+        int $dossierId,
+        int $codeId,
+    ): void {
+        $stmt = $this->pdo->prepare(
+            'SELECT 1 FROM tva_codes
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+        );
+        $stmt->execute([$codeId, $organisationId, $dossierId]);
+        if ($stmt->fetchColumn() === false) {
+            throw new VatException('Code TVA absent ou hors du dossier.');
+        }
+    }
+
+    private function codeUsageCount(
+        int $organisationId,
+        int $dossierId,
+        int $codeId,
+    ): int {
+        $stmt = $this->pdo->prepare(
+            'SELECT
+                (SELECT COUNT(*)
+                 FROM lignes_document l
+                 JOIN documents_financiers d ON d.id = l.document_id
+                 WHERE l.code_tva_id = ?
+                   AND d.organisation_id = ? AND d.dossier_id = ?)
+              + (SELECT COUNT(*) FROM tva_lignes
+                 WHERE code_tva_id = ?
+                   AND organisation_id = ? AND dossier_id = ?)
+              + (SELECT COUNT(*) FROM modeles_factures_recurrentes m
+                 WHERE m.organisation_id = ? AND m.dossier_id = ?
+                   AND EXISTS (
+                       SELECT 1 FROM json_each(m.lignes_json) j
+                       WHERE CAST(json_extract(j.value, \'$.code_tva_id\') AS INTEGER) = ?
+                   ))
+              + (SELECT COUNT(*) FROM modeles_depenses_recurrentes m
+                 WHERE m.organisation_id = ? AND m.dossier_id = ?
+                   AND EXISTS (
+                       SELECT 1 FROM json_each(m.lignes_json) j
+                       WHERE CAST(json_extract(j.value, \'$.code_tva_id\') AS INTEGER) = ?
+                   ))'
+        );
+        $stmt->execute([
+            $codeId, $organisationId, $dossierId,
+            $codeId, $organisationId, $dossierId,
+            $organisationId, $dossierId, $codeId,
+            $organisationId, $dossierId, $codeId,
+        ]);
+        return (int) $stmt->fetchColumn();
     }
 
     private function assertAccount(int $organisationId, int $dossierId, int $accountId): void

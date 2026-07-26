@@ -251,6 +251,10 @@ final class BillingApiController
             return [
                 'filename' => ((string) $document['numero'] ?: 'facture') . '.pdf',
                 'content_base64' => base64_encode($bytes),
+                'qr_included' => (string) $document['qr_payload'] !== '',
+                'warning' => (string) $document['qr_payload'] === ''
+                    ? 'PDF généré sans section Swiss QR. Complétez l’identité, l’IBAN de facturation et l’adresse du client pour l’ajouter.'
+                    : '',
             ];
         });
     }

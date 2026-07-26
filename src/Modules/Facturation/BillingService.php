@@ -716,11 +716,13 @@ final class BillingService
     public function creditorProfile(int $organisationId, int $dossierId): array
     {
         $organisation = $this->pdo->prepare(
-            'SELECT nom FROM organisations WHERE id = ?'
+            'SELECT nom, raison_sociale, adresse_ligne1, adresse_ligne2,
+                    code_postal, localite, pays
+             FROM organisations WHERE id = ?'
         );
         $organisation->execute([$organisationId]);
-        $name = $organisation->fetchColumn();
-        if ($name === false) {
+        $identity = $organisation->fetch();
+        if ($identity === false) {
             throw new BillingException('Organisation absente.');
         }
         $params = $this->pdo->prepare(
@@ -735,6 +737,14 @@ final class BillingService
         foreach ($params->fetchAll() as $row) {
             $values[(string) $row['cle']] = (string) $row['valeur'];
         }
+        foreach ([
+            'adresse_ligne1', 'adresse_ligne2', 'code_postal',
+            'localite', 'pays',
+        ] as $key) {
+            if (trim((string) ($identity[$key] ?? '')) !== '') {
+                $values[$key] = (string) $identity[$key];
+            }
+        }
         if (($values['iban_facturation'] ?? '') === '') {
             $iban = $this->pdo->prepare(
                 "SELECT iban FROM comptes_tresorerie
@@ -746,7 +756,9 @@ final class BillingService
             $values['iban_facturation'] = (string) ($iban->fetchColumn() ?: '');
         }
         return [
-            'nom' => (string) $name,
+            'nom' => trim((string) $identity['raison_sociale']) !== ''
+                ? (string) $identity['raison_sociale']
+                : (string) $identity['nom'],
             'ligne1' => $values['adresse_ligne1'] ?? '',
             'ligne2' => $values['adresse_ligne2'] ?? '',
             'code_postal' => $values['code_postal'] ?? '',

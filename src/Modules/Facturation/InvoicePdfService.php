@@ -87,6 +87,7 @@ final class InvoicePdfService
         if (
             $document['type'] === 'facture_client'
             && (int) $document['total_brut_centimes'] > 0
+            && $this->qrProfileComplete($creditor, $debtorAddress)
         ) {
             $payload = $this->qr->payload(
                 (string) ($creditor['iban'] ?? ''),
@@ -137,6 +138,32 @@ final class InvoicePdfService
             throw new BillingException('La génération du PDF a échoué.');
         }
         return [$bytes, $payload];
+    }
+
+    /** @param array<string,mixed> $creditor @param array<string,mixed> $debtor */
+    private function qrProfileComplete(array $creditor, array $debtor): bool
+    {
+        $iban = strtoupper((string) preg_replace(
+            '/\s+/',
+            '',
+            (string) ($creditor['iban'] ?? '')
+        ));
+        if (preg_match('/^(CH|LI)[0-9A-Z]{19}$/', $iban) !== 1) {
+            return false;
+        }
+        foreach ([$creditor, $debtor] as $address) {
+            foreach (['nom', 'ligne1', 'code_postal', 'localite'] as $field) {
+                if (trim((string) ($address[$field] ?? '')) === '') {
+                    return false;
+                }
+            }
+            if (preg_match('/^[A-Z]{2}$/', strtoupper(
+                trim((string) ($address['pays'] ?? ''))
+            )) !== 1) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** @return array<string,mixed> */

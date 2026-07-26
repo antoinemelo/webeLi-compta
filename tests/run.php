@@ -493,6 +493,46 @@ final class Tests
             (int) $pdo->query('SELECT COUNT(*) FROM tva_codes')->fetchColumn(),
             'codes TVA complets et sans doublon'
         );
+        $outsideId = (int) $pdo->query(
+            "SELECT id FROM tva_codes WHERE code = 'HCH'"
+        )->fetchColumn();
+        $vatConfiguration = new VatConfigurationService($pdo, new AuditLogger($pdo));
+        $vatConfiguration->updateCode(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $outsideId,
+            [
+                'code' => 'HCH',
+                'libelle' => 'Hors champ modifié',
+                'traitement' => 'hors_champ',
+                'nature' => 'non_taxable',
+                'taux_legal_id' => null,
+                'droit_deduction' => false,
+                'deduction_defaut_bp' => 0,
+                'chiffre_afc' => '221',
+                'compte_tva_id' => null,
+                'date_debut' => '2024-01-01',
+                'date_fin' => null,
+                'actif' => false,
+            ]
+        );
+        $this->same(
+            'Hors champ modifié|0',
+            (string) $pdo->query(
+                "SELECT libelle || '|' || actif FROM tva_codes WHERE id = {$outsideId}"
+            )->fetchColumn(),
+            'code TVA modifiable et désactivable'
+        );
+        $vatConfiguration->deleteCode(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $outsideId
+        );
+        $this->same(
+            9,
+            (int) $pdo->query('SELECT COUNT(*) FROM tva_codes')->fetchColumn(),
+            'code TVA inutilisé supprimable'
+        );
     }
 
     private function payrollCalculatorParityTests(): void
@@ -1243,6 +1283,7 @@ final class Tests
                 'phone' => '+41 22 000 00 00',
                 'email' => 'compta@example.test',
                 'website' => 'https://example.test',
+                'billing_iban' => 'CH9300762011623852957',
                 'base_currency' => 'EUR',
             ],
             $userId
@@ -1252,6 +1293,11 @@ final class Tests
             $updatedIdentity['organization']['legal_name']
                 . '|' . $updatedIdentity['dossier']['base_currency'],
             'identité légale et devise de base enregistrées'
+        );
+        $this->same(
+            'CH9300762011623852957',
+            $updatedIdentity['organization']['billing_iban'],
+            'IBAN de facturation centralisé avec l’identité légale'
         );
         $this->throws(
             fn () => $configuration->updateIdentity(
@@ -2269,23 +2315,26 @@ final class Tests
             "SELECT id FROM comptes
              WHERE dossier_id = {$ids['dossier_a']} AND numero = '2200'"
         )->fetchColumn();
+        $vatCodePayload = [
+            'id' => 0,
+            'active' => true,
+            'code' => 'VUE81',
+            'label' => 'Ventes Vue 8,1 %',
+            'treatment' => 'normal',
+            'nature' => 'collectee',
+            'legal_rate_id' => $normalVatRateId,
+            'deduction_right' => false,
+            'default_deduction_bp' => 0,
+            'afc_box' => '200',
+            'account_id' => $vatAccountId,
+            'valid_from' => '2026-01-01',
+            'valid_until' => '',
+        ];
         $vatFromConfiguration = $app->handle(new Request(
             'POST',
             '/api/v1/configuration/references/vat-codes',
             server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
-            json: ['data' => [
-                'code' => 'VUE81',
-                'label' => 'Ventes Vue 8,1 %',
-                'treatment' => 'normal',
-                'nature' => 'collectee',
-                'legal_rate_id' => $normalVatRateId,
-                'deduction_right' => false,
-                'default_deduction_bp' => 0,
-                'afc_box' => '200',
-                'account_id' => $vatAccountId,
-                'valid_from' => '2026-01-01',
-                'valid_until' => '',
-            ]]
+            json: ['data' => $vatCodePayload]
         ));
         $this->same(
             200,
@@ -2300,6 +2349,32 @@ final class Tests
             )->fetchColumn(),
             'création du code TVA auditée'
         );
+        $vatCodeId = (int) ($this->responseJson($vatFromConfiguration)['data']['id'] ?? 0);
+        $vatUpdated = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/vat-codes',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => array_replace($vatCodePayload, [
+                'id' => $vatCodeId,
+                'active' => false,
+                'label' => 'Ventes Vue modifiées',
+            ])]
+        ));
+        $this->same(200, $vatUpdated->status, 'code TVA modifié depuis Configuration Vue');
+        $this->same(
+            'Ventes Vue modifiées|0',
+            (string) $pdo->query(
+                "SELECT libelle || '|' || actif FROM tva_codes WHERE id = {$vatCodeId}"
+            )->fetchColumn(),
+            'activation du code TVA administrable'
+        );
+        $vatDeleted = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/vat-codes/delete',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['id' => $vatCodeId]]
+        ));
+        $this->same(200, $vatDeleted->status, 'code TVA inutilisé supprimé depuis Vue');
         $payrollPayload = [
             'year' => 2026,
             'avs_ppm' => 53000,
@@ -5250,6 +5325,14 @@ final class Tests
 
         $draftA = $draft(100000, 'Facture mille');
         $draftB = $draft(5000, 'Second brouillon');
+        $this->throws(
+            fn () => $vat->deleteCode(
+                $organisationId,
+                $dossierId,
+                $exempt
+            ),
+            'code TVA utilisé non supprimable'
+        );
         $this->same(
             2,
             (int) $pdo->query(
@@ -5516,6 +5599,26 @@ final class Tests
                  WHERE document_id IN ('{$multi}', '{$credit}')"
             )->fetchColumn(),
             'snapshots TVA du document et de son avoir conservés'
+        );
+
+        $pdfWithoutQr = (new InvoicePdfService($pdo, $audit))->archive(
+            $organisationId,
+            $dossierId,
+            $clientInvoice,
+            $billing->creditorProfile($organisationId, $dossierId)
+        );
+        $this->true(
+            str_starts_with($pdfWithoutQr, '%PDF-'),
+            'PDF généré même sans coordonnées Swiss QR'
+        );
+        $this->same(
+            '',
+            (string) $billing->document(
+                $organisationId,
+                $dossierId,
+                $clientInvoice
+            )['qr_payload'],
+            'section Swiss QR omise si la configuration est incomplète'
         );
 
         $billing->saveCreditorProfile(

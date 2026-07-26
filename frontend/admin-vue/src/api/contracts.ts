@@ -124,6 +124,7 @@ export type ConfigurationPayload = {
       phone: string;
       email: string;
       website: string;
+      billing_iban: string;
       version: number;
     };
     dossier: {
@@ -188,6 +189,7 @@ export type ManagedReferencesPayload = {
       valid_from: string;
       valid_until: string | null;
       active: boolean;
+      used: boolean;
     }>;
     legal_rates: Array<{
       id: number;

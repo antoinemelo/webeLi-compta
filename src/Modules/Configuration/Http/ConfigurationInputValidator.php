@@ -20,7 +20,7 @@ final class ConfigurationInputValidator
             'organization_version', 'dossier_version', 'name', 'legal_name',
             'legal_form', 'uid', 'address_line1', 'address_line2',
             'postal_code', 'city', 'canton', 'country', 'phone', 'email',
-            'website', 'base_currency',
+            'website', 'billing_iban', 'base_currency',
         ]);
         $errors = [];
         foreach (['organization_version', 'dossier_version'] as $field) {
@@ -32,6 +32,10 @@ final class ConfigurationInputValidator
             if (!is_string($data[$field] ?? null) || trim((string) $data[$field]) === '') {
                 $errors[$field][] = 'Valeur requise.';
             }
+        }
+        $data['billing_iban'] ??= '';
+        if (!is_string($data['billing_iban'])) {
+            $errors['billing_iban'][] = 'IBAN textuel requis.';
         }
         $this->fail($errors);
         return $data;
@@ -226,6 +230,7 @@ final class ConfigurationInputValidator
     public function vatCode(Request $request): array
     {
         $data = $this->only($request, [
+            'id', 'active',
             'code', 'label', 'treatment', 'nature', 'legal_rate_id',
             'deduction_right', 'default_deduction_bp', 'afc_box',
             'account_id', 'valid_from', 'valid_until',
@@ -238,6 +243,14 @@ final class ConfigurationInputValidator
         $natures = [
             'collectee', 'prealable', 'acquisition', 'non_taxable', 'correction',
         ];
+        $id = $data['id'] ?? 0;
+        if (!is_int($id) || $id < 0) {
+            $errors['id'][] = 'Identifiant positif ou nul requis.';
+        }
+        $active = $data['active'] ?? true;
+        if (!is_bool($active)) {
+            $errors['active'][] = 'Booléen requis.';
+        }
         if (
             !is_string($data['code'] ?? null)
             || preg_match('/^[A-Z0-9_-]{1,20}$/i', trim($data['code'])) !== 1
@@ -318,6 +331,8 @@ final class ConfigurationInputValidator
         }
         $this->fail($errors);
         return [
+            'id' => (int) $id,
+            'active' => (bool) $active,
             'code' => strtoupper(trim((string) $data['code'])),
             'label' => trim((string) $data['label']),
             'treatment' => (string) $data['treatment'],
@@ -330,6 +345,17 @@ final class ConfigurationInputValidator
             'valid_from' => (string) $data['valid_from'],
             'valid_until' => (string) ($data['valid_until'] ?? ''),
         ];
+    }
+
+    public function referenceIdentifier(Request $request): int
+    {
+        $data = $this->only($request, ['id']);
+        $errors = [];
+        if (!is_int($data['id'] ?? null) || $data['id'] < 1) {
+            $errors['id'][] = 'Identifiant positif requis.';
+        }
+        $this->fail($errors);
+        return (int) $data['id'];
     }
 
     /** @return array<string,mixed> */

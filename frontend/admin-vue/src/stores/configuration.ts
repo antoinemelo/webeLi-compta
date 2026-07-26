@@ -32,8 +32,11 @@ export const useConfigurationStore = defineStore('configuration', {
     async createContact(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/contacts', data);
     },
-    async createVatCode(data: Record<string, unknown>): Promise<void> {
+    async saveVatCode(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/vat-codes', data);
+    },
+    async deleteVatCode(id: number): Promise<void> {
+      await this.mutateReference('/configuration/references/vat-codes/delete', { id });
     },
     async savePayrollRates(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/payroll-rates', data);

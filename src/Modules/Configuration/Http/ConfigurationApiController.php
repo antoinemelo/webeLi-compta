@@ -190,7 +190,7 @@ final class ConfigurationApiController
         });
     }
 
-    public function createVatCode(Request $request): Response
+    public function saveVatCode(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');
         return $this->referenceMutation($request, function () use (
@@ -199,10 +199,30 @@ final class ConfigurationApiController
             $organisationId,
             $dossierId
         ): array {
-            $id = $this->managedReferences->createVatCode(
+            $id = $this->managedReferences->saveVatCode(
                 $organisationId,
                 $dossierId,
                 $this->validator->vatCode($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function deleteVatCode(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->validator->referenceIdentifier($request);
+            $this->managedReferences->deleteVatCode(
+                $organisationId,
+                $dossierId,
+                $id,
                 $userId
             );
             return ['id' => $id];

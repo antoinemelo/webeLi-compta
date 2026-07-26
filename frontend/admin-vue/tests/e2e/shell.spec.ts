@@ -100,6 +100,7 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('link', { name: 'Configuration', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Configuration', exact: true })).toBeVisible();
   await expect(page.getByLabel('Navigation Configuration')).toBeVisible();
+  await expect(page.getByLabel('IBAN de facturation')).toBeVisible();
 
   await page.getByRole('link', { name: 'Modules', exact: true }).click();
   const learningCard = page.getByRole('heading', { name: 'Apprentissage' }).locator('..').locator('..');
@@ -135,6 +136,19 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('button', { name: 'TVA', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau code TVA' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Taux TVA suisses' })).toBeVisible();
+  const vatRow = page.getByRole('row').filter({ hasText: 'VE81' });
+  await vatRow.getByRole('button', { name: 'Modifier' }).click();
+  await expect(page.getByRole('heading', { name: 'Modifier le code TVA' })).toBeVisible();
+  await page.getByLabel('Libellé').fill('Ventes E2E modifiées');
+  await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
+  await expect(vatRow).toContainText('Ventes E2E modifiées');
+  await vatRow.getByRole('button', { name: 'Désactiver' }).click();
+  await expect(vatRow).toContainText('Inactif');
+  await vatRow.getByRole('button', { name: 'Réactiver' }).click();
+  await expect(vatRow).toContainText('Actif');
+  await vatRow.getByRole('button', { name: 'Modifier' }).click();
+  await page.getByLabel('Libellé').fill('Ventes 8,1 %');
+  await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
 
   await page.getByRole('button', { name: 'Charges sociales' }).click();
   await expect(page.getByRole('heading', { name: 'Taux annuels des charges sociales' })).toBeVisible();

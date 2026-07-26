@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace Compta\Modules\Configuration\Application;
 
 use Compta\Core\Audit\AuditLogger;
+use Compta\Modules\Tresorerie\BankCoordinates;
+use Compta\Modules\Tresorerie\TreasuryException;
 use DateTimeImmutable;
 use PDO;
 use Throwable;
@@ -53,6 +55,25 @@ final class ConfigurationService
             );
         }
         $organization = $this->validateIdentity($data);
+        $billingIban = BankCoordinates::normalizeIban(
+            (string) ($data['billing_iban'] ?? '')
+        );
+        try {
+            if ($billingIban !== '') {
+                BankCoordinates::assertIban($billingIban);
+            }
+        } catch (TreasuryException) {
+            throw new ConfigurationException('IBAN de facturation invalide.');
+        }
+        if (
+            $billingIban !== ''
+            && !str_starts_with($billingIban, 'CH')
+            && !str_starts_with($billingIban, 'LI')
+        ) {
+            throw new ConfigurationException(
+                'La QR-facture exige un IBAN suisse ou liechtensteinois.'
+            );
+        }
         $currency = mb_strtoupper(trim((string) ($data['base_currency'] ?? '')));
         if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
             throw new ConfigurationException('La devise doit être un code ISO de trois lettres.');
@@ -75,6 +96,7 @@ final class ConfigurationService
             $organizationVersion,
             $dossierVersion,
             $organization,
+            $billingIban,
             $currency,
             $actorId,
             $identity
@@ -113,6 +135,13 @@ final class ConfigurationService
             $updateDossier->execute([
                 $currency, $dossierId, $organisationId, $dossierVersion,
             ]);
+            $billingIbanStatement = $this->pdo->prepare(
+                'INSERT INTO parametres_organisation (organisation_id, cle, valeur)
+                 VALUES (?, \'iban_facturation\', ?)
+                 ON CONFLICT (organisation_id, cle)
+                 DO UPDATE SET valeur = excluded.valeur'
+            );
+            $billingIbanStatement->execute([$organisationId, $billingIban]);
             if ($updateOrganization->rowCount() !== 1 || $updateDossier->rowCount() !== 1) {
                 throw new ConfigurationException(
                     'Conflit de version pendant l’enregistrement.'
@@ -126,6 +155,9 @@ final class ConfigurationService
             }
             if ($identity['dossier']['base_currency'] !== $currency) {
                 $changed[] = 'base_currency';
+            }
+            if (($identity['organization']['billing_iban'] ?? '') !== $billingIban) {
+                $changed[] = 'billing_iban';
             }
             $this->audit->log(
                 'configuration.identite_modifiee',
@@ -353,6 +385,11 @@ final class ConfigurationService
                     o.forme_juridique, o.numero_ide, o.adresse_ligne1,
                     o.adresse_ligne2, o.code_postal, o.localite, o.canton,
                     o.pays, o.telephone, o.email, o.site_web,
+                    COALESCE((
+                        SELECT p.valeur FROM parametres_organisation p
+                        WHERE p.organisation_id = o.id
+                          AND p.cle = \'iban_facturation\'
+                    ), \'\') AS billing_iban,
                     o.version AS organisation_version,
                     d.id AS dossier_id, d.nom AS dossier_nom, d.monnaie,
                     d.version AS dossier_version
@@ -381,6 +418,7 @@ final class ConfigurationService
                 'phone' => (string) $row['telephone'],
                 'email' => (string) $row['email'],
                 'website' => (string) $row['site_web'],
+                'billing_iban' => (string) $row['billing_iban'],
                 'version' => (int) $row['organisation_version'],
             ],
             'dossier' => [

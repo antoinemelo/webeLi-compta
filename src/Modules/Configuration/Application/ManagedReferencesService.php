@@ -164,13 +164,13 @@ final class ManagedReferencesService
     }
 
     /** @param array<string,mixed> $data */
-    public function createVatCode(
+    public function saveVatCode(
         int $organisationId,
         int $dossierId,
         array $data,
         int $actorId,
     ): int {
-        return $this->vat->addCode([
+        $payload = [
             'organisation_id' => $organisationId,
             'dossier_id' => $dossierId,
             'code' => $data['code'],
@@ -184,7 +184,33 @@ final class ManagedReferencesService
             'compte_tva_id' => $data['account_id'],
             'date_debut' => $data['valid_from'],
             'date_fin' => $data['valid_until'],
-        ], $actorId);
+            'actif' => $data['active'],
+        ];
+        if ($data['id'] > 0) {
+            $this->vat->updateCode(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $payload,
+                $actorId
+            );
+            return $data['id'];
+        }
+        return $this->vat->addCode($payload, $actorId);
+    }
+
+    public function deleteVatCode(
+        int $organisationId,
+        int $dossierId,
+        int $codeId,
+        int $actorId,
+    ): void {
+        $this->vat->deleteCode(
+            $organisationId,
+            $dossierId,
+            $codeId,
+            $actorId
+        );
     }
 
     /** @param array<string,mixed> $data */
@@ -412,7 +438,7 @@ final class ManagedReferencesService
              ORDER BY c.actif DESC, c.code, c.date_debut DESC'
         );
         $stmt->execute([$organisationId, $dossierId]);
-        return array_map(static fn (array $row): array => [
+        return array_map(fn (array $row): array => [
             'id' => (int) $row['id'],
             'code' => (string) $row['code'],
             'label' => (string) $row['libelle'],
@@ -438,7 +464,53 @@ final class ManagedReferencesService
                 ? null
                 : (string) $row['date_fin'],
             'active' => (int) $row['actif'] === 1,
+            'used' => $this->vatCodeUsed(
+                $organisationId,
+                $dossierId,
+                (int) $row['id']
+            ),
         ], $stmt->fetchAll());
+    }
+
+    private function vatCodeUsed(
+        int $organisationId,
+        int $dossierId,
+        int $codeId,
+    ): bool {
+        $stmt = $this->pdo->prepare(
+            'SELECT EXISTS (
+                SELECT 1
+                FROM lignes_document l
+                JOIN documents_financiers d ON d.id = l.document_id
+                WHERE l.code_tva_id = ?
+                  AND d.organisation_id = ? AND d.dossier_id = ?
+             ) OR EXISTS (
+                SELECT 1 FROM tva_lignes
+                WHERE code_tva_id = ?
+                  AND organisation_id = ? AND dossier_id = ?
+             ) OR EXISTS (
+                SELECT 1 FROM modeles_factures_recurrentes m
+                WHERE m.organisation_id = ? AND m.dossier_id = ?
+                  AND EXISTS (
+                      SELECT 1 FROM json_each(m.lignes_json) j
+                      WHERE CAST(json_extract(j.value, \'$.code_tva_id\') AS INTEGER) = ?
+                  )
+             ) OR EXISTS (
+                SELECT 1 FROM modeles_depenses_recurrentes m
+                WHERE m.organisation_id = ? AND m.dossier_id = ?
+                  AND EXISTS (
+                      SELECT 1 FROM json_each(m.lignes_json) j
+                      WHERE CAST(json_extract(j.value, \'$.code_tva_id\') AS INTEGER) = ?
+                  )
+             )'
+        );
+        $stmt->execute([
+            $codeId, $organisationId, $dossierId,
+            $codeId, $organisationId, $dossierId,
+            $organisationId, $dossierId, $codeId,
+            $organisationId, $dossierId, $codeId,
+        ]);
+        return (int) $stmt->fetchColumn() === 1;
     }
 
     /** @return list<array<string,mixed>> */
