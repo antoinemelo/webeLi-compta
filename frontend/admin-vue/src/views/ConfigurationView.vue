@@ -131,6 +131,22 @@ const payrollRateFields = [
   { key: 'emp_lpp_ppm', label: 'LPP employeur' }
 ] as const;
 payrollRateFields.forEach(({ key }) => { payrollDraft[key] = ''; });
+const payrollSettings = reactive({
+  weekly_hours: '40',
+  mapping: {} as Record<string, number>
+});
+const payrollMappingFields = [
+  ['charge_salaires_id', 'Charge salaires'],
+  ['charge_ocas_id', 'Charge OCAS'],
+  ['charge_laa_id', 'Charge LAA'],
+  ['charge_lpp_id', 'Charge LPP'],
+  ['dette_net_id', 'Dette salaires nets'],
+  ['dette_ocas_id', 'Dette OCAS'],
+  ['dette_laa_id', 'Dette LAA'],
+  ['dette_lpp_id', 'Dette LPP'],
+  ['dette_impot_id', 'Dette impôt source']
+] as const;
+payrollMappingFields.forEach(([key]) => { payrollSettings.mapping[key] = 0; });
 const treasuryDraft = reactive({
   id: 0,
   version: 0,
@@ -241,6 +257,12 @@ watch(
     if (!periodDraft.exercise_id && value.accounting_setup.exercises.length) {
       periodDraft.exercise_id = value.accounting_setup.exercises[0].id;
     }
+    payrollSettings.weekly_hours = String(
+      value.payroll.employer.weekly_hours_milli / 1000
+    );
+    payrollMappingFields.forEach(([key]) => {
+      payrollSettings.mapping[key] = Number(value.payroll.mapping?.[key] || 0);
+    });
   },
   { deep: true }
 );
@@ -586,6 +608,39 @@ async function saveIdentity(): Promise<void> {
   markUnsavedChanges(false);
   await context.load();
   notifications.push('Identité légale et devise enregistrées.', 'success');
+}
+
+async function savePayrollEmployerSettings(): Promise<void> {
+  const normalizedHours = payrollSettings.weekly_hours.trim().replace(',', '.');
+  if (!/^\d{1,3}(?:\.\d{1,3})?$/.test(normalizedHours)) {
+    store.error = 'Les heures hebdomadaires doivent être un nombre positif.';
+    return;
+  }
+  const weeklyHoursMilli = Math.round(Number(normalizedHours) * 1000);
+  if (weeklyHoursMilli < 1 || weeklyHoursMilli > 168000) {
+    store.error = 'Les heures hebdomadaires doivent être comprises entre 0,001 et 168.';
+    return;
+  }
+  try {
+    await store.savePayrollEmployerSettings({
+      weekly_hours_milli: weeklyHoursMilli
+    });
+    notifications.push(
+      'Paramètres de l’employeur salarial enregistrés.',
+      'success'
+    );
+  } catch (error) {
+    if (error instanceof Error && !store.error) store.error = error.message;
+  }
+}
+
+async function savePayrollMappingSettings(): Promise<void> {
+  try {
+    await store.savePayrollMappingSettings({ ...payrollSettings.mapping });
+    notifications.push('Mapping comptable des salaires enregistré.', 'success');
+  } catch (error) {
+    if (error instanceof Error && !store.error) store.error = error.message;
+  }
 }
 
 async function toggleModule(code: string, enabled: boolean, version: number): Promise<void> {
@@ -1602,6 +1657,134 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             </div>
           </article>
         </template>
+      </section>
+
+      <section
+        v-else-if="activeTab === 'salaires' && managedReferences"
+        class="configuration-stack"
+      >
+        <form
+          class="panel configuration-form"
+          @submit.prevent="savePayrollEmployerSettings"
+        >
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Employeur et comptabilisation</p>
+              <h2>Paramètres salariaux</h2>
+            </div>
+            <span
+              class="status-badge"
+              :class="managedReferences.payroll.employer.configured
+                ? 'status-ouverte'
+                : 'status-fermee'"
+            >
+              {{ managedReferences.payroll.employer.configured
+                ? 'Configuré'
+                : 'À enregistrer' }}
+            </span>
+          </div>
+          <p class="field-hint">
+            L’identité et les coordonnées ci-dessous proviennent de
+            <RouterLink to="/configuration">Configuration → Entité</RouterLink>.
+            Elles sont reprises automatiquement dans les calculs et les futures fiches.
+          </p>
+          <div class="configuration-grid">
+            <label>Employeur
+              <input
+                :value="managedReferences.payroll.employer.name"
+                readonly
+                aria-readonly="true"
+              >
+            </label>
+            <label>Adresse
+              <input
+                :value="managedReferences.payroll.employer.address"
+                readonly
+                aria-readonly="true"
+              >
+            </label>
+            <label>NPA
+              <input
+                :value="managedReferences.payroll.employer.postal_code"
+                readonly
+                aria-readonly="true"
+              >
+            </label>
+            <label>Localité
+              <input
+                :value="managedReferences.payroll.employer.city"
+                readonly
+                aria-readonly="true"
+              >
+            </label>
+            <label>E-mail
+              <input
+                :value="managedReferences.payroll.employer.email"
+                readonly
+                aria-readonly="true"
+              >
+            </label>
+            <label>Téléphone
+              <input
+                :value="managedReferences.payroll.employer.phone"
+                readonly
+                aria-readonly="true"
+              >
+            </label>
+            <label>Heures hebdomadaires
+              <input
+                v-model="payrollSettings.weekly_hours"
+                inputmode="decimal"
+                required
+              >
+            </label>
+          </div>
+          <div class="form-actions">
+            <button
+              class="button primary"
+              type="submit"
+              :disabled="store.saving || !managedReferences.capabilities.payroll"
+            >
+              Enregistrer les paramètres employeur
+            </button>
+          </div>
+        </form>
+
+        <form
+          class="panel configuration-form"
+          @submit.prevent="savePayrollMappingSettings"
+        >
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Grand livre</p>
+              <h2>Comptes de salaires</h2>
+            </div>
+          </div>
+          <div class="configuration-grid">
+            <label v-for="[key, label] in payrollMappingFields" :key="key">
+              {{ label }}
+              <select v-model.number="payrollSettings.mapping[key]" required>
+                <option :value="0">Choisir…</option>
+                <option
+                  v-for="account in managedReferences.payroll.accounts"
+                  :key="account.id"
+                  :value="account.id"
+                >
+                  {{ account.number }} — {{ account.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button
+              class="button primary"
+              type="submit"
+              :disabled="store.saving || !managedReferences.capabilities.payroll"
+            >
+              Enregistrer les comptes de salaires
+            </button>
+          </div>
+        </form>
       </section>
 
       <section v-else-if="activeTab === 'acces' && managedReferences" class="configuration-stack">

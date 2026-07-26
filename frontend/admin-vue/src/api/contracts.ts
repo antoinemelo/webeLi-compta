@@ -207,6 +207,21 @@ export type ManagedReferencesPayload = {
     fields: string[];
     rates: Array<Record<string, string | number | null>>;
     suggested_rates: Record<string, string | number>;
+    employer: {
+      name: string;
+      address: string;
+      postal_code: string;
+      city: string;
+      country: string;
+      phone: string;
+      email: string;
+      weekly_hours_milli: number;
+      configured: boolean;
+      source: string;
+    };
+    mapping: Record<string, number> | null;
+    mapping_fields: string[];
+    accounts: Array<{ id: number; number: string; label: string }>;
   };
   treasury: {
     accounts: Array<{

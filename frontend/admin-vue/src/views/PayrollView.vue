@@ -56,23 +56,7 @@ const payment = reactive({
   amount: '', account_id: 0, reference: ''
 });
 const allocation = reactive({ payment_id: 0, liability_id: 0, amount: '' });
-const employer = reactive({
-  name: '', address: '', postal_code: '', city: '', email: '', phone: '', weekly_hours: '40'
-});
-const mapping = reactive<Record<string, number>>({
-  charge_salaires_id: 0, charge_ocas_id: 0, charge_laa_id: 0, charge_lpp_id: 0,
-  dette_net_id: 0, dette_ocas_id: 0, dette_laa_id: 0, dette_lpp_id: 0,
-  dette_impot_id: 0
-});
 const ocasVerifiedOn = ref(today);
-
-const mappingFields: Array<[string, string]> = [
-  ['charge_salaires_id', 'Charge salaires'], ['charge_ocas_id', 'Charge OCAS'],
-  ['charge_laa_id', 'Charge LAA'], ['charge_lpp_id', 'Charge LPP'],
-  ['dette_net_id', 'Dette salaires nets'], ['dette_ocas_id', 'Dette OCAS'],
-  ['dette_laa_id', 'Dette LAA'], ['dette_lpp_id', 'Dette LPP'],
-  ['dette_impot_id', 'Dette impôt source']
-];
 const activeEmployees = computed(() => (
   workspace.value?.employees.filter((row) => n(row, 'actif') === 1) || []
 ));
@@ -246,17 +230,6 @@ async function reload(payrollId?: number): Promise<void> {
   if (!draft.employee_id) draft.employee_id = n(activeEmployees.value[0] || {}, 'id');
   if (!contract.employee_id) contract.employee_id = draft.employee_id;
   if (!payment.employee_id) payment.employee_id = draft.employee_id;
-  const employerSource = workspace.value.employer || workspace.value.employer_suggestion;
-  if (employerSource) {
-    employer.name = String(employerSource.nom || '');
-    employer.address = String(employerSource.rue || '');
-    employer.postal_code = String(employerSource.npa || '');
-    employer.city = String(employerSource.localite || '');
-    employer.email = String(employerSource.email || '');
-    employer.phone = String(employerSource.telephone || '');
-    employer.weekly_hours = String(Number(employerSource.heures_hebdo_milli || 40000) / 1000);
-  }
-  if (workspace.value.mapping) Object.assign(mapping, workspace.value.mapping);
   if (!draft.id && draftElements.value.length === 0) resetDraftElements();
 }
 async function mutate(
@@ -533,14 +506,6 @@ async function postPayment(row: Record<string, unknown>): Promise<void> {
     id: n(row, 'id'), version: 0, ...posting
   }, 'Paiement comptabilisé.');
 }
-async function saveEmployer(): Promise<void> {
-  await mutate('/salaires/employeur', {
-    ...employer, weekly_hours_milli: milli(employer.weekly_hours)
-  }, 'Employeur enregistré.');
-}
-async function saveMapping(): Promise<void> {
-  await mutate('/salaires/mapping', { ...mapping }, 'Mapping salarial enregistré.');
-}
 async function confirmOcas(): Promise<void> {
   if (!store.ocas) return;
   await mutate('/salaires/taux-ocas/confirmer', {
@@ -600,26 +565,15 @@ onMounted(() => reload());
       <div class="section-heading">
         <div>
           <p class="eyebrow">Prérequis de calcul</p>
-          <h2 id="payroll-employer-setup">Préparation des salaires</h2>
+          <h2 id="payroll-employer-setup">Paramètres salariaux requis</h2>
         </div>
-        <span class="status-chip">Employeur à confirmer</span>
+        <span class="status-chip">Configuration incomplète</span>
       </div>
       <p class="notice warning" role="alert">
-        Confirmez l’employeur prérempli depuis l’identité légale. Aucun calcul ne sera lancé
-        tant que ce snapshot obligatoire n’est pas disponible.
+        Définissez les heures hebdomadaires et les comptes sous
+        <RouterLink to="/configuration/salaires">Configuration → Salaires</RouterLink>.
+        L’identité de l’employeur est reprise automatiquement de l’entité légale.
       </p>
-      <form class="form-grid three" @submit.prevent="saveEmployer">
-        <label>Employeur<input v-model="employer.name" required></label>
-        <label>Adresse<input v-model="employer.address"></label>
-        <label>NPA<input v-model="employer.postal_code"></label>
-        <label>Localité<input v-model="employer.city"></label>
-        <label>E-mail<input v-model="employer.email" type="email"></label>
-        <label>Téléphone<input v-model="employer.phone"></label>
-        <label>Heures hebdomadaires<input v-model="employer.weekly_hours" required></label>
-        <button class="button primary" :disabled="!workspace.capabilities.manage || store.saving">
-          Enregistrer et activer les calculs
-        </button>
-      </form>
     </section>
     <p
       v-if="workspace.configuration.employer_ready && !workspace.configuration.rates_ready"
@@ -635,7 +589,7 @@ onMounted(() => reload());
       role="status"
     >
       Le calcul des brouillons est disponible. Configurez aussi le mapping comptable dans
-      l’onglet Annuels avant de valider une fiche.
+      Configuration → Salaires avant de valider une fiche.
     </p>
 
     <template v-if="tab === 'employees'">
@@ -1013,7 +967,6 @@ onMounted(() => reload());
       <section class="metric-strip"><span><small>Brut annuel</small><strong>{{ money(Number(workspace.annual.employer.gross_cents || 0)) }}</strong></span><span><small>Retenues</small><strong>{{ money(Number(workspace.annual.employer.deductions_cents || 0)) }}</strong></span><span><small>Charges employeur</small><strong>{{ money(Number(workspace.annual.employer.employer_charges_cents || 0)) }}</strong></span><span><small>Coût total</small><strong>{{ money(Number(workspace.annual.employer.total_cost_cents || 0)) }}</strong></span></section>
       <section class="panel"><h2>Récapitulatifs et certificats</h2><div class="table-scroll"><table><thead><tr><th>Employé</th><th>Fiches</th><th>Brut</th><th>Net</th><th>Certificat</th></tr></thead><tbody><tr v-for="row in workspace.annual.employees" :key="n(row,'employe_id')"><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ n(row,'fiches') }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td class="button-row"><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii || n(row,'fiches') === 0" @click="certificate('preparer',n(row,'employe_id'))">Préparer</button><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii" @click="certificate('controler',n(row,'employe_id'))">Contrôler</button><a class="button small" :href="certificateUrl(n(row,'employe_id'))">Exporter</a></td></tr></tbody></table></div><p class="notice warning">{{ workspace.definitions.certificate }}</p></section>
       <section class="panel"><h2>Import annuel OCAS</h2><div class="button-row"><button class="button" :disabled="store.saving" @click="store.previewOcas(year)">Prévisualiser sans écrire</button><label>Contrôlé le <input v-model="ocasVerifiedOn" type="date"></label><button v-if="store.ocas?.available" class="button primary" :disabled="store.ocas.missing_keys.length > 0" @click="confirmOcas">Confirmer l’import</button></div><p v-if="store.ocas" :class="['notice', store.ocas.available ? 'success' : 'warning']">{{ store.ocas.message }}</p><p v-if="store.ocas?.missing_keys.length">Clés manquantes : {{ store.ocas.missing_keys.join(', ') }}</p><div v-if="store.ocas?.rows.length" class="table-scroll"><table><thead><tr><th>Clé OCAS</th><th>Cible COMPTA</th><th>Valeur</th><th>Décision</th></tr></thead><tbody><tr v-for="row in store.ocas.rows" :key="s(row,'key')"><td>{{ s(row,'key') }}</td><td>{{ s(row,'target') || 'Non applicable' }}</td><td>{{ s(row,'value') }}</td><td>{{ s(row,'status') }} {{ s(row,'reason') }}</td></tr></tbody></table></div></section>
-      <section class="panel"><h2>Paramétrage employeur et comptes</h2><form class="form-grid three" @submit.prevent="saveEmployer"><label>Employeur<input v-model="employer.name" required></label><label>Adresse<input v-model="employer.address"></label><label>NPA<input v-model="employer.postal_code"></label><label>Localité<input v-model="employer.city"></label><label>E-mail<input v-model="employer.email"></label><label>Téléphone<input v-model="employer.phone"></label><label>Heures hebdomadaires<input v-model="employer.weekly_hours"></label><button class="button">Enregistrer l’employeur</button></form><form class="form-grid three" @submit.prevent="saveMapping"><label v-for="[key,label] in mappingFields" :key="key">{{ label }}<select v-model.number="mapping[key]"><option :value="0">Choisir…</option><option v-for="row in workspace.catalog.accounts" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'numero') }} — {{ s(row,'libelle') }}</option></select></label><button class="button primary">Enregistrer le mapping</button></form></section>
     </template>
   </template>
   <EmptyState v-else-if="!store.loading" title="Salaires indisponibles" description="Sélectionnez un dossier autorisé." />

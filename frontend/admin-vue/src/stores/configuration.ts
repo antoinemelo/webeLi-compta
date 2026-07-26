@@ -41,6 +41,12 @@ export const useConfigurationStore = defineStore('configuration', {
     async savePayrollRates(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/payroll-rates', data);
     },
+    async savePayrollEmployerSettings(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/payroll/employer', data);
+    },
+    async savePayrollMappingSettings(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/payroll/mapping', data);
+    },
     async saveTreasuryAccount(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/treasury-accounts', data);
     },

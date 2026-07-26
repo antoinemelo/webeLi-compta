@@ -161,6 +161,29 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Nouvel exercice comptable' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Nouvelle période' })).toBeVisible();
 
+  const configurationNavigation = page.getByLabel('Navigation Configuration');
+  expect(await configurationNavigation.getByRole('link').allTextContents()).toEqual([
+    'Entité', 'Modules', 'Paiements', 'Référentiels', 'Salaires', 'Accès', 'Audit'
+  ]);
+  await configurationNavigation.getByRole('link', { name: 'Salaires', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Paramètres salariaux' })).toBeVisible();
+  await expect(page.getByLabel('Employeur')).toHaveValue('Entreprise Alpha SA');
+  await expect(page.getByLabel('Employeur')).toHaveAttribute('readonly', '');
+  await expect(page.getByText(/Configuration → Entité/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Comptes de salaires' })).toBeVisible();
+  await page.getByRole('button', {
+    name: 'Enregistrer les paramètres employeur'
+  }).click();
+  await expect(page.getByText(
+    'Paramètres de l’employeur salarial enregistrés.'
+  )).toBeVisible();
+  await page.getByRole('button', {
+    name: 'Enregistrer les comptes de salaires'
+  }).click();
+  await expect(page.getByText(
+    'Mapping comptable des salaires enregistré.'
+  )).toBeVisible();
+
   await page.getByRole('link', { name: 'Accès', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Rôles du dossier' })).toBeVisible();
 });
@@ -501,6 +524,9 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await expect(page.getByRole('button', { name: 'Voir et valider' })).toBeVisible();
   await page.getByRole('link', { name: 'Annuels', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Récapitulatifs et certificats' })).toBeVisible();
+  await expect(page.getByRole('heading', {
+    name: 'Paramétrage employeur et comptes'
+  })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Prévisualiser sans écrire' }).click();
   await expect(page.getByText('Source OCAS absente : aucun millésime n’est inventé.')).toBeVisible();

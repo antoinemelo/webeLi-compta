@@ -5250,6 +5250,14 @@ final class Tests
                 'heures_hebdo_milli' => 40000,
             ]
         );
+        $this->same(
+            'Organisation A',
+            (string) $configuration->employer(
+                $organisationId,
+                $dossierId
+            )['nom'],
+            'identité employeur reprise de l’entité légale'
+        );
         $rates = [
             'avs_ppm' => 53000,
             'ac_ppm' => 11000,

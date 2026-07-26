@@ -47,6 +47,7 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
       label: 'Référentiels',
       path: '/configuration/referentiels/plan'
     },
+    { key: 'payroll', label: 'Salaires', path: '/configuration/salaires' },
     { key: 'access', label: 'Accès', path: '/configuration/acces' },
     { key: 'audit', label: 'Audit', path: '/configuration/audit' }
   ]

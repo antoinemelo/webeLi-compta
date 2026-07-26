@@ -62,6 +62,7 @@ final class ManagedReferencesService
                 'rates' => $this->payrollRates($organisationId, $dossierId),
                 'fields' => PayrollConfigurationService::RATE_FIELDS,
                 'suggested_rates' => [],
+                ...$this->payrollSettings($organisationId, $dossierId),
             ],
             'treasury' => [
                 'accounts' => $this->treasuryAccounts($organisationId, $dossierId),
@@ -205,6 +206,35 @@ final class ManagedReferencesService
             $dossierId,
             $data['year'],
             $data,
+            $actorId
+        );
+    }
+
+    public function savePayrollEmployerSettings(
+        int $organisationId,
+        int $dossierId,
+        int $weeklyHoursMilli,
+        int $actorId,
+    ): int {
+        return $this->payroll->saveEmployer(
+            $organisationId,
+            $dossierId,
+            ['heures_hebdo_milli' => $weeklyHoursMilli],
+            $actorId
+        );
+    }
+
+    /** @param array<string,int> $mapping */
+    public function savePayrollMappingSettings(
+        int $organisationId,
+        int $dossierId,
+        array $mapping,
+        int $actorId,
+    ): void {
+        $this->payroll->saveMapping(
+            $organisationId,
+            $dossierId,
+            $mapping,
             $actorId
         );
     }
@@ -559,6 +589,61 @@ final class ManagedReferencesService
             }
             return $result;
         }, $stmt->fetchAll());
+    }
+
+    /** @return array<string,mixed> */
+    private function payrollSettings(int $organisationId, int $dossierId): array
+    {
+        $configured = true;
+        try {
+            $employer = $this->payroll->employer($organisationId, $dossierId);
+        } catch (\Compta\Modules\Salaires\PayrollException) {
+            $configured = false;
+            $employer = $this->payroll->employerSuggestion(
+                $organisationId,
+                $dossierId
+            );
+        }
+        try {
+            $mapping = $this->payroll->mapping($organisationId, $dossierId);
+        } catch (\Compta\Modules\Salaires\PayrollException) {
+            $mapping = null;
+        }
+        $accounts = $this->pdo->prepare(
+            'SELECT id, numero, libelle FROM comptes
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             ORDER BY length(numero), numero'
+        );
+        $accounts->execute([$organisationId, $dossierId]);
+        return [
+            'employer' => [
+                'name' => (string) $employer['nom'],
+                'address' => (string) $employer['rue'],
+                'postal_code' => (string) $employer['npa'],
+                'city' => (string) $employer['localite'],
+                'country' => (string) $employer['pays'],
+                'phone' => (string) $employer['telephone'],
+                'email' => (string) $employer['email'],
+                'weekly_hours_milli' => (int) $employer['heures_hebdo_milli'],
+                'configured' => $configured,
+                'source' => 'Configuration → Entité',
+            ],
+            'mapping' => $mapping === null
+                ? null
+                : array_combine(
+                    PayrollConfigurationService::MAPPING_FIELDS,
+                    array_map(
+                        static fn (string $field): int => (int) $mapping[$field],
+                        PayrollConfigurationService::MAPPING_FIELDS
+                    )
+                ),
+            'mapping_fields' => PayrollConfigurationService::MAPPING_FIELDS,
+            'accounts' => array_map(static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'number' => (string) $row['numero'],
+                'label' => (string) $row['libelle'],
+            ], $accounts->fetchAll()),
+        ];
     }
 
     /** @return list<array<string,mixed>> */

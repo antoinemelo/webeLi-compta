@@ -108,6 +108,18 @@ final class ApiRouteRegistry
             $this->add(
                 $router,
                 'POST',
+                '/api/v1/configuration/payroll/employer',
+                $this->configuration->savePayrollEmployerSettings(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/payroll/mapping',
+                $this->configuration->savePayrollMappingSettings(...)
+            );
+            $this->add(
+                $router,
+                'POST',
                 '/api/v1/configuration/references/treasury-accounts',
                 $this->configuration->saveTreasuryAccount(...)
             );

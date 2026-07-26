@@ -404,6 +404,38 @@ final class ConfigurationInputValidator
         return $result;
     }
 
+    public function payrollEmployerSettings(Request $request): int
+    {
+        $data = $this->only($request, ['weekly_hours_milli']);
+        $errors = [];
+        if (
+            !is_int($data['weekly_hours_milli'] ?? null)
+            || $data['weekly_hours_milli'] < 1
+            || $data['weekly_hours_milli'] > 168000
+        ) {
+            $errors['weekly_hours_milli'][] = 'Durée hebdomadaire entière invalide.';
+        }
+        $this->fail($errors);
+        return (int) $data['weekly_hours_milli'];
+    }
+
+    /** @return array<string,int> */
+    public function payrollMappingSettings(Request $request): array
+    {
+        $data = $this->only($request, PayrollConfigurationService::MAPPING_FIELDS);
+        $errors = [];
+        $mapping = [];
+        foreach (PayrollConfigurationService::MAPPING_FIELDS as $field) {
+            if (!is_int($data[$field] ?? null) || $data[$field] < 1) {
+                $errors[$field][] = 'Compte requis.';
+                continue;
+            }
+            $mapping[$field] = (int) $data[$field];
+        }
+        $this->fail($errors);
+        return $mapping;
+    }
+
     /** @return array<string,mixed> */
     public function treasuryAccount(Request $request): array
     {

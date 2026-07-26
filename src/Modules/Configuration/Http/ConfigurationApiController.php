@@ -250,6 +250,48 @@ final class ConfigurationApiController
         });
     }
 
+    public function savePayrollEmployerSettings(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'salaires.manage'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->savePayrollEmployerSettings(
+                $organisationId,
+                $dossierId,
+                $this->validator->payrollEmployerSettings($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function savePayrollMappingSettings(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'salaires.manage'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $this->managedReferences->savePayrollMappingSettings(
+                $organisationId,
+                $dossierId,
+                $this->validator->payrollMappingSettings($request),
+                $userId
+            );
+            return ['saved' => true];
+        });
+    }
+
     public function saveTreasuryAccount(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope(

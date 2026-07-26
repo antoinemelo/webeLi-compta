@@ -35,7 +35,8 @@ final class PayrollConfigurationService
         array $data,
         ?int $actorId = null,
     ): int {
-        $name = trim((string) ($data['nom'] ?? ''));
+        $identity = $this->employerSuggestion($organisationId, $dossierId);
+        $name = trim((string) $identity['nom']);
         if ($name === '') {
             throw new PayrollException('Le nom de l’employeur est requis.');
         }
@@ -55,12 +56,12 @@ final class PayrollConfigurationService
         );
         $stmt->execute([
             $organisationId, $dossierId, $name,
-            trim((string) ($data['rue'] ?? '')),
-            trim((string) ($data['npa'] ?? '')),
-            trim((string) ($data['localite'] ?? '')),
-            strtoupper(trim((string) ($data['pays'] ?? 'CH'))),
-            trim((string) ($data['telephone'] ?? '')),
-            trim((string) ($data['email'] ?? '')),
+            trim((string) $identity['rue']),
+            trim((string) $identity['npa']),
+            trim((string) $identity['localite']),
+            strtoupper(trim((string) $identity['pays'])),
+            trim((string) $identity['telephone']),
+            trim((string) $identity['email']),
             (int) ($data['heures_hebdo_milli'] ?? 40000),
             trim((string) ($data['contact_nom'] ?? '')),
             trim((string) ($data['contact_telephone'] ?? '')),
@@ -91,10 +92,12 @@ final class PayrollConfigurationService
         if ($row === false) {
             throw new PayrollException(
                 'Employeur salarial non configuré. Enregistrez-le dans '
-                . '« Préparation des salaires » avant de calculer une fiche.'
+                . 'Configuration → Salaires avant de calculer une fiche.'
             );
         }
-        return $row;
+        $identity = $this->employerSuggestion($organisationId, $dossierId);
+        $identity['heures_hebdo_milli'] = (int) $row['heures_hebdo_milli'];
+        return array_replace($row, $identity);
     }
 
     /** @return array<string,mixed> */

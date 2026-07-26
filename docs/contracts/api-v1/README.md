@@ -60,6 +60,8 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/references/contacts` | création ou édition optimiste d’un contact multi-rôles |
 | POST | `/api/v1/configuration/references/vat-codes` | nouveau code TVA daté |
 | POST | `/api/v1/configuration/references/payroll-rates` | taux sociaux annuels en ppm |
+| POST | `/api/v1/configuration/payroll/employer` | heures de référence ; identité employeur reprise de l’entité |
+| POST | `/api/v1/configuration/payroll/mapping` | mapping des comptes de salaires |
 | POST | `/api/v1/configuration/references/treasury-accounts` | création ou édition optimiste d’un compte de trésorerie |
 | POST | `/api/v1/configuration/references/journals` | création ou édition optimiste d’un journal |
 | POST | `/api/v1/configuration/references/exercises` | création ou changement de statut d’un exercice |

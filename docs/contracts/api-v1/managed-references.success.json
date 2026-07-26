@@ -25,7 +25,44 @@
         "avs_ppm": 53000,
         "source": "OCAS Genève 2026 — TAUX_DEFAUT",
         "verified_on": "2026-07-25"
-      }
+      },
+      "employer": {
+        "name": "Entreprise Exemple SA",
+        "address": "Rue de l’Exemple 1",
+        "postal_code": "1200",
+        "city": "Genève",
+        "country": "CH",
+        "phone": "+41 22 000 00 00",
+        "email": "compta@example.test",
+        "weekly_hours_milli": 40000,
+        "configured": true,
+        "source": "Configuration → Entité"
+      },
+      "mapping": {
+        "charge_salaires_id": 501,
+        "charge_ocas_id": 570,
+        "charge_laa_id": 570,
+        "charge_lpp_id": 570,
+        "dette_net_id": 200,
+        "dette_ocas_id": 227,
+        "dette_laa_id": 227,
+        "dette_lpp_id": 227,
+        "dette_impot_id": 227
+      },
+      "mapping_fields": [
+        "charge_salaires_id",
+        "charge_ocas_id",
+        "charge_laa_id",
+        "charge_lpp_id",
+        "dette_net_id",
+        "dette_ocas_id",
+        "dette_laa_id",
+        "dette_lpp_id",
+        "dette_impot_id"
+      ],
+      "accounts": [
+        { "id": 501, "number": "5000", "label": "Charges de personnel" }
+      ]
     },
     "treasury": {
       "accounts": [],
