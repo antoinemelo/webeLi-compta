@@ -3,7 +3,25 @@
     "year": 2026,
     "scope": {"organisation_id": 1, "dossier_id": 1},
     "employer": null,
+    "employer_suggestion": {
+      "nom": "Entreprise Exemple SA",
+      "rue": "Rue du Rhône 1",
+      "npa": "1204",
+      "localite": "Genève",
+      "pays": "CH",
+      "telephone": "",
+      "email": "compta@example.test",
+      "heures_hebdo_milli": 40000,
+      "source": "Identité légale de l’organisation"
+    },
     "mapping": null,
+    "configuration": {
+      "employer_ready": false,
+      "rates_ready": false,
+      "mapping_ready": false,
+      "calculation_ready": false,
+      "validation_ready": false
+    },
     "employees": [],
     "payrolls": [],
     "payments": [],

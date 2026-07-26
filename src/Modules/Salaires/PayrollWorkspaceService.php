@@ -31,6 +31,17 @@ final class PayrollWorkspaceService
             $mapping = $this->configuration->mapping($organisationId, $dossierId);
         } catch (PayrollException) {
         }
+        $catalog = $this->configuration->catalog($organisationId, $dossierId);
+        $ratesReady = false;
+        foreach ($catalog['rates'] as $rates) {
+            if ((int) ($rates['annee'] ?? 0) <= $year) {
+                $ratesReady = true;
+                break;
+            }
+        }
+        $employerSuggestion = $employer === null
+            ? $this->configuration->employerSuggestion($organisationId, $dossierId)
+            : null;
         $selected = null;
         if ($payrollId !== null) {
             $selected = $this->payrolls->payroll(
@@ -52,7 +63,15 @@ final class PayrollWorkspaceService
             'year' => $year,
             'scope' => ['organisation_id' => $organisationId, 'dossier_id' => $dossierId],
             'employer' => $employer,
+            'employer_suggestion' => $employerSuggestion,
             'mapping' => $mapping,
+            'configuration' => [
+                'employer_ready' => $employer !== null,
+                'rates_ready' => $ratesReady,
+                'mapping_ready' => $mapping !== null,
+                'calculation_ready' => $employer !== null && $ratesReady,
+                'validation_ready' => $mapping !== null,
+            ],
             'employees' => $this->configuration->employees(
                 $organisationId,
                 $dossierId,
@@ -65,7 +84,7 @@ final class PayrollWorkspaceService
             ),
             'payments' => $this->payments->payments($organisationId, $dossierId),
             'liabilities' => $this->payments->liabilities($organisationId, $dossierId),
-            'catalog' => $this->configuration->catalog($organisationId, $dossierId),
+            'catalog' => $catalog,
             'annual' => [
                 'employees' => $summary,
                 'employer' => [

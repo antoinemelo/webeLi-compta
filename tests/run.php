@@ -3192,9 +3192,19 @@ final class Tests
                 $salaryWorkspaceJson['data']['payments'],
                 $salaryWorkspaceJson['data']['annual'],
                 $salaryWorkspaceJson['data']['certificates'],
+                $salaryWorkspaceJson['data']['configuration'],
                 $salaryWorkspaceJson['data']['capabilities']
             ),
             'contrat salarial Vue complet et stable'
+        );
+        $this->false(
+            (bool) $salaryWorkspaceJson['data']['configuration']['employer_ready'],
+            'absence d’employeur exposée comme prérequis plutôt que comme erreur de chargement'
+        );
+        $this->same(
+            'Organisation A',
+            (string) ($salaryWorkspaceJson['data']['employer_suggestion']['nom'] ?? ''),
+            'employeur salarial prérempli depuis l’identité légale'
         );
         $salaryScopeInjection = $app->handle(new Request(
             'GET',

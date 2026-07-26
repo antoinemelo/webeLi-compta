@@ -97,14 +97,15 @@ async function reload(payrollId?: number): Promise<void> {
   if (!draft.employee_id) draft.employee_id = n(workspace.value.employees[0] || {}, 'id');
   if (!contract.employee_id) contract.employee_id = draft.employee_id;
   if (!payment.employee_id) payment.employee_id = draft.employee_id;
-  if (workspace.value.employer) {
-    employer.name = String(workspace.value.employer.nom || '');
-    employer.address = String(workspace.value.employer.rue || '');
-    employer.postal_code = String(workspace.value.employer.npa || '');
-    employer.city = String(workspace.value.employer.localite || '');
-    employer.email = String(workspace.value.employer.email || '');
-    employer.phone = String(workspace.value.employer.telephone || '');
-    employer.weekly_hours = String(Number(workspace.value.employer.heures_hebdo_milli || 40000) / 1000);
+  const employerSource = workspace.value.employer || workspace.value.employer_suggestion;
+  if (employerSource) {
+    employer.name = String(employerSource.nom || '');
+    employer.address = String(employerSource.rue || '');
+    employer.postal_code = String(employerSource.npa || '');
+    employer.city = String(employerSource.localite || '');
+    employer.email = String(employerSource.email || '');
+    employer.phone = String(employerSource.telephone || '');
+    employer.weekly_hours = String(Number(employerSource.heures_hebdo_milli || 40000) / 1000);
   }
   if (workspace.value.mapping) Object.assign(mapping, workspace.value.mapping);
 }
@@ -227,6 +228,51 @@ onMounted(() => reload());
         <span class="status-chip">{{ workspace.capabilities.pii ? 'PII autorisées' : 'PII masquées' }}</span>
       </div>
     </section>
+    <section
+      v-if="!workspace.configuration.employer_ready"
+      class="panel"
+      aria-labelledby="payroll-employer-setup"
+    >
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Prérequis de calcul</p>
+          <h2 id="payroll-employer-setup">Préparation des salaires</h2>
+        </div>
+        <span class="status-chip">Employeur à confirmer</span>
+      </div>
+      <p class="notice warning" role="alert">
+        Confirmez l’employeur prérempli depuis l’identité légale. Aucun calcul ne sera lancé
+        tant que ce snapshot obligatoire n’est pas disponible.
+      </p>
+      <form class="form-grid three" @submit.prevent="saveEmployer">
+        <label>Employeur<input v-model="employer.name" required></label>
+        <label>Adresse<input v-model="employer.address"></label>
+        <label>NPA<input v-model="employer.postal_code"></label>
+        <label>Localité<input v-model="employer.city"></label>
+        <label>E-mail<input v-model="employer.email" type="email"></label>
+        <label>Téléphone<input v-model="employer.phone"></label>
+        <label>Heures hebdomadaires<input v-model="employer.weekly_hours" required></label>
+        <button class="button primary" :disabled="!workspace.capabilities.manage || store.saving">
+          Enregistrer et activer les calculs
+        </button>
+      </form>
+    </section>
+    <p
+      v-if="workspace.configuration.employer_ready && !workspace.configuration.rates_ready"
+      class="notice warning"
+      role="alert"
+    >
+      Aucun taux salarial contrôlé n’est disponible pour {{ year }}. Importez et confirmez
+      les taux annuels avant de calculer une fiche.
+    </p>
+    <p
+      v-if="workspace.configuration.calculation_ready && !workspace.configuration.mapping_ready"
+      class="notice warning"
+      role="status"
+    >
+      Le calcul des brouillons est disponible. Configurez aussi le mapping comptable dans
+      l’onglet Annuels avant de valider une fiche.
+    </p>
 
     <template v-if="tab === 'employees'">
       <section class="panel">
@@ -272,7 +318,12 @@ onMounted(() => reload());
           <label v-if="draft.type === 'heures'">Nombre d’heures<input v-model="draft.quantity" required></label>
           <label v-else>Montant<input v-model="draft.amount" required></label>
           <label>Justification<input v-model="draft.note"></label>
-          <button class="button primary" :disabled="!workspace.capabilities.manage">Calculer le brouillon</button>
+          <button
+            class="button primary"
+            :disabled="!workspace.capabilities.manage || !workspace.configuration.calculation_ready || store.saving"
+          >
+            Calculer le brouillon
+          </button>
         </form>
       </section>
       <section class="panel"><h2>Résultats calculés</h2><div class="table-scroll"><table><thead><tr><th>Période</th><th>Employé</th><th>Brut</th><th>Retenues</th><th>Net</th><th>Coût</th><th>Statut</th></tr></thead><tbody><tr v-for="row in workspace.payrolls" :key="n(row,'id')"><td>{{ String(n(row,'mois')).padStart(2,'0') }}/{{ n(row,'annee') }}</td><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'total_deductions_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td>{{ money(n(row,'cout_total_centimes')) }}</td><td>{{ s(row,'statut') }}</td></tr></tbody></table></div></section>
@@ -280,7 +331,7 @@ onMounted(() => reload());
 
     <template v-else-if="tab === 'fiches'">
       <section class="panel"><div class="form-grid three"><label>Exercice<select v-model.number="posting.exercise_id"><option v-for="row in workspace.catalog.exercises" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'libelle') }}</option></select></label><label>Journal<select v-model.number="posting.journal_id"><option v-for="row in workspace.catalog.journals" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'code') }} — {{ s(row,'libelle') }}</option></select></label><label>Date comptable<input v-model="posting.date" type="date"></label></div></section>
-      <section class="panel"><h2>Fiches de salaire</h2><div class="table-scroll"><table><thead><tr><th>Période</th><th>Employé</th><th>Net</th><th>Dette ouverte</th><th>Statut</th><th>Actions</th></tr></thead><tbody><tr v-for="row in workspace.payrolls" :key="n(row,'id')"><td>{{ n(row,'mois') }}/{{ n(row,'annee') }}</td><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td>{{ money(n(row,'solde_dettes_centimes')) }}</td><td>{{ s(row,'statut') }}</td><td class="button-row"><button v-if="s(row,'statut') === 'brouillon'" class="button small" @click="validatePayroll(row)">Valider</button><button v-if="s(row,'statut') === 'validee'" class="button small" @click="postPayroll(row)">Comptabiliser</button><button v-if="['validee','comptabilisee'].includes(s(row,'statut'))" class="button danger small" @click="cancelPayroll(row)">Contre-passer</button></td></tr></tbody></table></div></section>
+      <section class="panel"><h2>Fiches de salaire</h2><div class="table-scroll"><table><thead><tr><th>Période</th><th>Employé</th><th>Net</th><th>Dette ouverte</th><th>Statut</th><th>Actions</th></tr></thead><tbody><tr v-for="row in workspace.payrolls" :key="n(row,'id')"><td>{{ n(row,'mois') }}/{{ n(row,'annee') }}</td><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td>{{ money(n(row,'solde_dettes_centimes')) }}</td><td>{{ s(row,'statut') }}</td><td class="button-row"><button v-if="s(row,'statut') === 'brouillon'" class="button small" :disabled="!workspace.capabilities.validate || !workspace.configuration.validation_ready || store.saving" @click="validatePayroll(row)">Valider</button><button v-if="s(row,'statut') === 'validee'" class="button small" :disabled="!workspace.capabilities.post || store.saving" @click="postPayroll(row)">Comptabiliser</button><button v-if="['validee','comptabilisee'].includes(s(row,'statut'))" class="button danger small" :disabled="!workspace.capabilities.post || store.saving" @click="cancelPayroll(row)">Contre-passer</button></td></tr></tbody></table></div></section>
       <section class="panel"><h2>Paiements et lettrage</h2><form class="form-grid three" @submit.prevent="createPayment"><label>Bénéficiaire<select v-model="payment.beneficiary_type"><option value="employe">Employé</option><option value="organisme">Organisme</option></select></label><label v-if="payment.beneficiary_type === 'employe'">Employé<select v-model.number="payment.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label><label>Date<input v-model="payment.date" type="date"></label><label>Montant<input v-model="payment.amount" required></label><label>Compte de trésorerie<select v-model.number="payment.account_id"><option v-for="row in workspace.catalog.treasury_accounts" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'numero') }} — {{ s(row,'libelle') }}</option></select></label><label>Référence<input v-model="payment.reference"></label><button class="button primary">Saisir</button></form><form class="form-grid three" @submit.prevent="allocatePayment"><label>Paiement<select v-model.number="allocation.payment_id"><option v-for="row in workspace.payments" :key="n(row,'id')" :value="n(row,'id')">#{{ n(row,'id') }} · {{ money(n(row,'non_alloue_centimes')) }}</option></select></label><label>Dette<select v-model.number="allocation.liability_id"><option v-for="row in workspace.liabilities" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'type') }} · {{ employeeName(n(row,'employe_id')) }} · {{ money(n(row,'solde_centimes')) }}</option></select></label><label>Montant<input v-model="allocation.amount"></label><button class="button">Allouer</button></form><div class="table-scroll"><table><thead><tr><th>Date</th><th>Bénéficiaire</th><th>Montant</th><th>Non alloué</th><th></th></tr></thead><tbody><tr v-for="row in workspace.payments" :key="n(row,'id')"><td>{{ s(row,'date_paiement') }}</td><td>{{ s(row,'beneficiaire_type') }}</td><td>{{ money(n(row,'montant_centimes')) }}</td><td>{{ money(n(row,'non_alloue_centimes')) }}</td><td><button v-if="n(row,'non_alloue_centimes') === 0 && !row.ecriture_id" class="button small" @click="postPayment(row)">Comptabiliser</button></td></tr></tbody></table></div></section>
     </template>
 

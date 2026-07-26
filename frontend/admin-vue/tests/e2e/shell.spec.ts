@@ -436,9 +436,12 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import Lass
   await expect(page.getByRole('heading', { name: 'Salaires', exact: true })).toBeVisible();
   await expect(page.getByLabel('Navigation des salaires')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Employés et contrats' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Préparation des salaires' })).toBeVisible();
+  await expect(page.getByLabel('Employeur', { exact: true })).toHaveValue('Entreprise Alpha SA');
 
   await page.getByRole('link', { name: 'Calculs', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Traitement d’une période' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Calculer le brouillon' })).toBeDisabled();
   await page.getByRole('link', { name: 'Fiches', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fiches de salaire' })).toBeVisible();
   await page.getByRole('link', { name: 'Annuels', exact: true }).click();

@@ -6,12 +6,21 @@ ne sont donc jamais partagés implicitement entre deux dossiers.
 
 ## Mise en route
 
+À l’ouverture de **Salaires**, le bloc **Préparation des salaires** expose les
+prérequis au lieu de laisser échouer un calcul. Si l’employeur manque, le
+formulaire est prérempli depuis l’identité légale de l’organisation puis doit
+être explicitement confirmé. Le calcul reste désactivé tant que l’employeur et
+un millésime de taux applicable ne sont pas disponibles.
+
 Dans **Salaires → Annuels** :
 
-1. enregistrer l’employeur du dossier ;
+1. contrôler ou modifier l’employeur du dossier ;
 2. saisir tous les taux de l’année, leur source et leur date de vérification ;
 3. créer, si nécessaire, les unités et tarifs proposés ;
 4. rattacher chaque charge et dette à un compte du plan comptable du dossier.
+
+Le mapping comptable n’est pas nécessaire au calcul d’un brouillon, mais il est
+obligatoire avant sa validation et la création des dettes salariales.
 
 Aucun taux annuel de production n’est fourni par défaut. Configurez
 `LASSO_DB_PATH` vers une base SQLite Lasso contenant `taux_par_annee` pour

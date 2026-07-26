@@ -1103,7 +1103,15 @@ export type BillingPayment = {
 export type PayrollWorkspace = {
   year: number;
   employer: Record<string, unknown> | null;
+  employer_suggestion: Record<string, unknown> | null;
   mapping: Record<string, number> | null;
+  configuration: {
+    employer_ready: boolean;
+    rates_ready: boolean;
+    mapping_ready: boolean;
+    calculation_ready: boolean;
+    validation_ready: boolean;
+  };
   employees: Array<Record<string, unknown>>;
   payrolls: Array<Record<string, unknown>>;
   payments: Array<Record<string, unknown>>;

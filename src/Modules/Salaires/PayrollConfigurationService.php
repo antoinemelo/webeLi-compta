@@ -89,9 +89,47 @@ final class PayrollConfigurationService
         $stmt->execute([$organisationId, $dossierId]);
         $row = $stmt->fetch();
         if ($row === false) {
-            throw new PayrollException('Employeur salarial non configuré.');
+            throw new PayrollException(
+                'Employeur salarial non configuré. Enregistrez-le dans '
+                . '« Préparation des salaires » avant de calculer une fiche.'
+            );
         }
         return $row;
+    }
+
+    /** @return array<string,mixed> */
+    public function employerSuggestion(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT o.nom, o.raison_sociale, o.adresse_ligne1,
+                    o.adresse_ligne2, o.code_postal, o.localite, o.pays,
+                    o.telephone, o.email
+             FROM organisations o
+             JOIN dossiers d ON d.organisation_id = o.id
+             WHERE o.id = ? AND d.id = ?'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            throw new PayrollException('Identité légale du dossier introuvable.');
+        }
+        $address = trim((string) $row['adresse_ligne1']);
+        $addressLine2 = trim((string) $row['adresse_ligne2']);
+        if ($addressLine2 !== '') {
+            $address .= ($address === '' ? '' : ', ') . $addressLine2;
+        }
+        $legalName = trim((string) $row['raison_sociale']);
+        return [
+            'nom' => $legalName !== '' ? $legalName : (string) $row['nom'],
+            'rue' => $address,
+            'npa' => (string) $row['code_postal'],
+            'localite' => (string) $row['localite'],
+            'pays' => (string) ($row['pays'] ?: 'CH'),
+            'telephone' => (string) $row['telephone'],
+            'email' => (string) $row['email'],
+            'heures_hebdo_milli' => 40000,
+            'source' => 'Identité légale de l’organisation',
+        ];
     }
 
     /** @param array<string,mixed> $data */
