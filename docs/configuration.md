@@ -20,11 +20,11 @@ dossier sélectionné.
 | Utilisateurs et droits | tables d’authentification et d’autorisations |
 | Traçabilité | `audit_events` |
 
-Les cartes de référentiels sont des vues et des liens vers ces sources. Elles
-ne créent pas de second registre.
+Le contrat `/api/v1/configuration/references` lit directement ces sources. Il
+n’existe plus de seconde projection SQL dans `ConfigurationService`, ni de
+chemin vers un formulaire PHP.
 
-Sous `/app/configuration/referentiels`, trois référentiels sont entièrement
-gérés dans Vue :
+Sous `/app/configuration/referentiels`, les référentiels sont gérés dans Vue :
 
 - débiteurs et créanciers : création et édition optimiste de contacts
   multi-rôles via `ContactService` ;
@@ -32,10 +32,16 @@ gérés dans Vue :
   `VatConfigurationService` ;
 - charges sociales : millésimes en ppm via
   `PayrollConfigurationService`, avec reprise proposée des valeurs Lasso 2026.
+- comptes bancaires, postaux, caisse et cartes : création, édition et
+  activation via `TreasuryAccountService`, toujours liés au grand livre ;
+- journaux : création et édition optimiste via `AccountingSetupService` ;
+- exercices et périodes : création, fermeture et réouverture contrôlées ; un
+  exercice ne peut être fermé tant qu’une de ses périodes reste ouverte ;
+- rôles directs du dossier : affectation transactionnelle et auditée, sans
+  modifier les rôles hérités de l’organisation ou de l’installation.
 
-L’ancien onglet Contacts redirige vers Configuration et l’ancien formulaire de
-taux salariaux ne permet plus une seconde écriture. Les instantanés des factures
-et fiches validées restent inchangés.
+Le plan comptable est géré par l’écran Vue spécialisé `/app/compta/plan`. Les
+instantanés des factures et fiches validées restent inchangés.
 
 ## Modules
 
@@ -80,3 +86,6 @@ sauvegarde contrôlée, jamais en retirant manuellement des colonnes.
 Les taux de charges sociales restent ceux du module Salaires, issus de la
 correspondance Lasso documentée. Leur import et leur évolution annuelle
 demeurent versionnés ; les fiches validées conservent leurs snapshots.
+
+Le périmètre exact pouvant être retiré sans perte fonctionnelle est consigné
+dans [`vue-retirement-audit.md`](vue-retirement-audit.md).

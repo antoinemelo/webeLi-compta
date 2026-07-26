@@ -47,7 +47,7 @@ Les exemples versionnés sont :
 | GET | `/api/v1/exercises` | exercices du dossier courant, paginés |
 | GET | `/api/v1/references` | types, statuts et devise de base |
 | GET | `/api/v1/dashboard` | projection comptable à une date et pour un exercice |
-| GET | `/api/v1/configuration` | identité, modules, paiements et liens vers les référentiels |
+| GET | `/api/v1/configuration` | identité, modules, paiements et audit |
 | POST | `/api/v1/configuration/identity` | identité légale et devise de base |
 | POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
 | POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
@@ -56,6 +56,11 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/references/contacts` | création ou édition optimiste d’un contact multi-rôles |
 | POST | `/api/v1/configuration/references/vat-codes` | nouveau code TVA daté |
 | POST | `/api/v1/configuration/references/payroll-rates` | taux sociaux annuels en ppm |
+| POST | `/api/v1/configuration/references/treasury-accounts` | création ou édition optimiste d’un compte de trésorerie |
+| POST | `/api/v1/configuration/references/journals` | création ou édition optimiste d’un journal |
+| POST | `/api/v1/configuration/references/exercises` | création ou changement de statut d’un exercice |
+| POST | `/api/v1/configuration/references/periods` | création ou changement de statut d’une période |
+| POST | `/api/v1/configuration/access` | rôles directs d’un utilisateur sur le dossier |
 | GET | `/api/v1/accounting` | exercice, journal, extrait et plan issus du moteur comptable |
 | POST | `/api/v1/accounting/entries` | création et éventuelle validation d’une écriture |
 | POST | `/api/v1/accounting/chart/types` | libellés des types de comptes |

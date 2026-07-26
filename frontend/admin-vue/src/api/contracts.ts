@@ -107,20 +107,6 @@ export type PaymentTerm = {
   version: number;
 };
 
-export type ConfigurationReferenceItem = {
-  id: number;
-  label: string;
-  type: string;
-  detail: string;
-  active: boolean;
-};
-
-export type ConfigurationReference = {
-  count: number;
-  items: ConfigurationReferenceItem[];
-  legacy_path: string;
-};
-
 export type ConfigurationPayload = {
   identity: {
     organization: {
@@ -149,7 +135,6 @@ export type ConfigurationPayload = {
   };
   modules: ConfigurationModule[];
   payment_terms: PaymentTerm[];
-  references: Record<string, ConfigurationReference>;
   audit: Array<{
     id: number;
     action: string;
@@ -219,10 +204,69 @@ export type ManagedReferencesPayload = {
     rates: Array<Record<string, string | number | null>>;
     suggested_rates: Record<string, string | number>;
   };
+  treasury: {
+    accounts: Array<{
+      id: number;
+      ledger_account_id: number;
+      ledger_account_number: string;
+      label: string;
+      type: 'banque' | 'poste' | 'caisse' | 'carte';
+      iban: string;
+      bic: string;
+      currency: string;
+      accounting_multiplier: -1 | 1;
+      active: boolean;
+      version: number;
+    }>;
+    ledger_accounts: Array<{ id: number; number: string; label: string }>;
+  };
+  accounting_setup: {
+    journal_types: string[];
+    journals: Array<{
+      id: number;
+      code: string;
+      label: string;
+      type: string;
+      active: boolean;
+      version: number;
+    }>;
+    exercises: Array<{
+      id: number;
+      label: string;
+      start_date: string;
+      end_date: string;
+      status: 'ouvert' | 'ferme';
+      version: number;
+    }>;
+    periods: Array<{
+      id: number;
+      exercise_id: number;
+      exercise: string;
+      label: string;
+      start_date: string;
+      end_date: string;
+      status: 'ouverte' | 'fermee';
+      version: number;
+    }>;
+  };
+  access: {
+    roles: Array<{ id: number; code: string; label: string }>;
+    users: Array<{
+      id: number;
+      email: string;
+      name: string;
+      active: boolean;
+      dossier_role_ids: number[];
+      inherited_roles: string[];
+    }>;
+  };
   capabilities: {
     contacts: boolean;
     vat: boolean;
     payroll: boolean;
+    treasury: boolean;
+    accounting_setup: boolean;
+    access: boolean;
   };
 };
 

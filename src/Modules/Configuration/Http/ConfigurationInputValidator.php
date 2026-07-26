@@ -5,6 +5,7 @@ namespace Compta\Modules\Configuration\Http;
 
 use Compta\Core\Http\Api\ApiException;
 use Compta\Core\Http\Request;
+use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
 use DateTimeImmutable;
 
@@ -355,6 +356,200 @@ final class ConfigurationInputValidator
         return $result;
     }
 
+    /** @return array<string,mixed> */
+    public function treasuryAccount(Request $request): array
+    {
+        $data = $this->only($request, [
+            'id', 'version', 'ledger_account_id', 'label', 'type', 'iban',
+            'bic', 'currency', 'accounting_multiplier', 'active',
+        ]);
+        $errors = [];
+        $this->idsAndVersion($data, $errors);
+        if (
+            !is_int($data['ledger_account_id'] ?? null)
+            || $data['ledger_account_id'] < 1
+        ) {
+            $errors['ledger_account_id'][] = 'Compte comptable requis.';
+        }
+        if (!is_string($data['label'] ?? null) || trim($data['label']) === '') {
+            $errors['label'][] = 'Libellé requis.';
+        }
+        if (
+            !is_string($data['type'] ?? null)
+            || !in_array($data['type'], ['banque', 'poste', 'caisse', 'carte'], true)
+        ) {
+            $errors['type'][] = 'Type de trésorerie invalide.';
+        }
+        $iban = strtoupper((string) preg_replace(
+            '/\s+/',
+            '',
+            trim((string) ($data['iban'] ?? ''))
+        ));
+        if ($iban !== '' && preg_match('/^[A-Z]{2}[0-9A-Z]{13,32}$/', $iban) !== 1) {
+            $errors['iban'][] = 'IBAN invalide.';
+        }
+        $bic = strtoupper(trim((string) ($data['bic'] ?? '')));
+        if ($bic !== '' && preg_match('/^[A-Z0-9]{8}([A-Z0-9]{3})?$/', $bic) !== 1) {
+            $errors['bic'][] = 'BIC invalide.';
+        }
+        $currency = strtoupper(trim((string) ($data['currency'] ?? '')));
+        if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
+            $errors['currency'][] = 'Code devise ISO requis.';
+        }
+        if (
+            !is_int($data['accounting_multiplier'] ?? null)
+            || !in_array($data['accounting_multiplier'], [-1, 1], true)
+        ) {
+            $errors['accounting_multiplier'][] = 'Sens comptable invalide.';
+        }
+        if (!is_bool($data['active'] ?? null)) {
+            $errors['active'][] = 'Booléen requis.';
+        }
+        $this->fail($errors);
+        return [
+            'id' => (int) $data['id'],
+            'version' => (int) $data['version'],
+            'ledger_account_id' => (int) $data['ledger_account_id'],
+            'label' => trim((string) $data['label']),
+            'type' => (string) $data['type'],
+            'iban' => $iban,
+            'bic' => $bic,
+            'currency' => $currency,
+            'accounting_multiplier' => (int) $data['accounting_multiplier'],
+            'active' => (bool) $data['active'],
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function journal(Request $request): array
+    {
+        $data = $this->only($request, [
+            'id', 'version', 'code', 'label', 'type', 'active',
+        ]);
+        $errors = [];
+        $this->idsAndVersion($data, $errors);
+        if (
+            !is_string($data['code'] ?? null)
+            || preg_match('/^[A-Z0-9_-]{1,12}$/i', trim($data['code'])) !== 1
+        ) {
+            $errors['code'][] = 'Code alphanumérique requis.';
+        }
+        if (!is_string($data['label'] ?? null) || trim($data['label']) === '') {
+            $errors['label'][] = 'Libellé requis.';
+        }
+        if (
+            !is_string($data['type'] ?? null)
+            || !in_array($data['type'], AccountingSetupService::JOURNAL_TYPES, true)
+        ) {
+            $errors['type'][] = 'Type de journal invalide.';
+        }
+        if (!is_bool($data['active'] ?? null)) {
+            $errors['active'][] = 'Booléen requis.';
+        }
+        $this->fail($errors);
+        return [
+            'id' => (int) $data['id'],
+            'version' => (int) $data['version'],
+            'code' => strtoupper(trim((string) $data['code'])),
+            'label' => trim((string) $data['label']),
+            'type' => (string) $data['type'],
+            'active' => (bool) $data['active'],
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function exercise(Request $request): array
+    {
+        $data = $this->only($request, [
+            'id', 'version', 'label', 'start_date', 'end_date', 'status',
+        ]);
+        $errors = [];
+        $this->idsAndVersion($data, $errors);
+        if (!is_string($data['label'] ?? null) || trim($data['label']) === '') {
+            $errors['label'][] = 'Libellé requis.';
+        }
+        $this->dateRange($data, 'start_date', 'end_date', $errors);
+        if (
+            !is_string($data['status'] ?? null)
+            || !in_array($data['status'], ['ouvert', 'ferme'], true)
+        ) {
+            $errors['status'][] = 'Statut d’exercice invalide.';
+        }
+        $this->fail($errors);
+        return [
+            'id' => (int) $data['id'],
+            'version' => (int) $data['version'],
+            'label' => trim((string) $data['label']),
+            'start_date' => (string) $data['start_date'],
+            'end_date' => (string) $data['end_date'],
+            'status' => (string) $data['status'],
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function period(Request $request): array
+    {
+        $data = $this->only($request, [
+            'id', 'version', 'exercise_id', 'label', 'start_date',
+            'end_date', 'status',
+        ]);
+        $errors = [];
+        $this->idsAndVersion($data, $errors);
+        if (
+            !is_int($data['exercise_id'] ?? null)
+            || $data['exercise_id'] < 1
+        ) {
+            $errors['exercise_id'][] = 'Exercice requis.';
+        }
+        if (!is_string($data['label'] ?? null) || trim($data['label']) === '') {
+            $errors['label'][] = 'Libellé requis.';
+        }
+        $this->dateRange($data, 'start_date', 'end_date', $errors);
+        if (
+            !is_string($data['status'] ?? null)
+            || !in_array($data['status'], ['ouverte', 'fermee'], true)
+        ) {
+            $errors['status'][] = 'Statut de période invalide.';
+        }
+        $this->fail($errors);
+        return [
+            'id' => (int) $data['id'],
+            'version' => (int) $data['version'],
+            'exercise_id' => (int) $data['exercise_id'],
+            'label' => trim((string) $data['label']),
+            'start_date' => (string) $data['start_date'],
+            'end_date' => (string) $data['end_date'],
+            'status' => (string) $data['status'],
+        ];
+    }
+
+    /** @return array{user_id:int,role_ids:list<int>} */
+    public function dossierAccess(Request $request): array
+    {
+        $data = $this->only($request, ['user_id', 'role_ids']);
+        $errors = [];
+        if (!is_int($data['user_id'] ?? null) || $data['user_id'] < 1) {
+            $errors['user_id'][] = 'Utilisateur requis.';
+        }
+        $roleIds = $data['role_ids'] ?? null;
+        if (!is_array($roleIds)) {
+            $errors['role_ids'][] = 'Liste de rôles requise.';
+            $roleIds = [];
+        } else {
+            foreach ($roleIds as $roleId) {
+                if (!is_int($roleId) || $roleId < 1) {
+                    $errors['role_ids'][] = 'Identifiant de rôle invalide.';
+                    break;
+                }
+            }
+        }
+        $this->fail($errors);
+        return [
+            'user_id' => (int) $data['user_id'],
+            'role_ids' => array_values(array_unique($roleIds)),
+        ];
+    }
+
     /** @param list<string> $allowed @return array<string,mixed> */
     private function only(Request $request, array $allowed): array
     {
@@ -380,5 +575,45 @@ final class ConfigurationInputValidator
     {
         $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
         return $date !== false && $date->format('Y-m-d') === $value;
+    }
+
+    /** @param array<string,mixed> $data @param array<string,list<string>> $errors */
+    private function idsAndVersion(array $data, array &$errors): void
+    {
+        foreach (['id', 'version'] as $field) {
+            if (!is_int($data[$field] ?? null) || $data[$field] < 0) {
+                $errors[$field][] = 'Entier positif ou nul requis.';
+            }
+        }
+        if (($data['id'] ?? 0) > 0 && ($data['version'] ?? 0) < 1) {
+            $errors['version'][] = 'Version requise pour une modification.';
+        }
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @param array<string,list<string>> $errors
+     */
+    private function dateRange(
+        array $data,
+        string $startField,
+        string $endField,
+        array &$errors,
+    ): void {
+        $start = is_string($data[$startField] ?? null)
+            ? $data[$startField]
+            : '';
+        $end = is_string($data[$endField] ?? null)
+            ? $data[$endField]
+            : '';
+        if (!$this->validDate($start)) {
+            $errors[$startField][] = 'Date de début invalide.';
+        }
+        if (!$this->validDate($end)) {
+            $errors[$endField][] = 'Date de fin invalide.';
+        }
+        if ($start !== '' && $end !== '' && $start > $end) {
+            $errors[$endField][] = 'La fin précède le début.';
+        }
     }
 }

@@ -7,7 +7,6 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
-import { runtimeConfig } from '@/config';
 import { markUnsavedChanges } from '@/composables/unsavedChanges';
 import { subNavigation } from '@/router/navigation';
 import { useConfigurationStore } from '@/stores/configuration';
@@ -23,11 +22,25 @@ const activeTab = computed(() => String(route.params.tab || 'entity'));
 const configuration = computed(() => store.configuration);
 const managedReferences = computed(() => store.managedReferences);
 const canManage = computed(() => context.can('dossier.manage'));
+const currentUserId = computed(() => context.context?.user.id ?? 0);
 const today = new Date().toISOString().slice(0, 10);
 const requestedReferenceSection = String(route.query.section || 'overview');
-const referenceSection = ref<'overview' | 'contacts' | 'vat' | 'payroll'>(
-  ['contacts', 'vat', 'payroll'].includes(requestedReferenceSection)
-    ? requestedReferenceSection as 'contacts' | 'vat' | 'payroll'
+type ReferenceSection =
+  | 'overview'
+  | 'treasury'
+  | 'contacts'
+  | 'vat'
+  | 'payroll'
+  | 'journals'
+  | 'exercises'
+  | 'periods';
+const referenceSections: ReferenceSection[] = [
+  'overview', 'treasury', 'contacts', 'vat', 'payroll',
+  'journals', 'exercises', 'periods'
+];
+const referenceSection = ref<ReferenceSection>(
+  referenceSections.includes(requestedReferenceSection as ReferenceSection)
+    ? requestedReferenceSection as ReferenceSection
     : 'overview'
 );
 
@@ -116,37 +129,141 @@ const payrollRateFields = [
   { key: 'emp_lpp_ppm', label: 'LPP employeur' }
 ] as const;
 payrollRateFields.forEach(({ key }) => { payrollDraft[key] = ''; });
-
-const referenceLabels: Record<string, string> = {
-  bank_accounts: 'Comptes bancaires et de trésorerie',
-  vat_codes: 'Codes et taux TVA',
-  payroll_rates: 'Taux de charges sociales',
-  chart_of_accounts: 'Plan comptable',
-  journals: 'Journaux',
-  exercises: 'Exercices comptables',
-  periods: 'Périodes',
-  contacts: 'Débiteurs et créanciers',
-  users: 'Utilisateurs'
-};
-const referenceCards = computed(() =>
-  Object.entries(configuration.value?.references ?? {}).map(([key, value]) => ({
-    key,
-    label: referenceLabels[key] || key,
-    ...value
-  }))
-);
-const visibleReferenceCards = computed(() =>
-  referenceCards.value.filter((item) =>
-    activeTab.value === 'acces'
-      ? item.key === 'users'
-      : !['users'].includes(item.key)
-  )
-);
-const managedReferenceSections: Record<string, 'contacts' | 'vat' | 'payroll'> = {
-  contacts: 'contacts',
-  vat_codes: 'vat',
-  payroll_rates: 'payroll'
-};
+const treasuryDraft = reactive({
+  id: 0,
+  version: 0,
+  ledger_account_id: 0,
+  label: '',
+  type: 'banque' as 'banque' | 'poste' | 'caisse' | 'carte',
+  iban: '',
+  bic: '',
+  currency: 'CHF',
+  accounting_multiplier: 1 as -1 | 1,
+  active: true
+});
+const journalDraft = reactive({
+  id: 0,
+  version: 0,
+  code: '',
+  label: '',
+  type: 'general',
+  active: true
+});
+const exerciseDraft = reactive({
+  id: 0,
+  version: 0,
+  label: '',
+  start_date: `${new Date().getFullYear()}-01-01`,
+  end_date: `${new Date().getFullYear()}-12-31`,
+  status: 'ouvert' as 'ouvert' | 'ferme'
+});
+const periodDraft = reactive({
+  id: 0,
+  version: 0,
+  exercise_id: 0,
+  label: '',
+  start_date: today,
+  end_date: today,
+  status: 'ouverte' as 'ouverte' | 'fermee'
+});
+const accessSelections = reactive<Record<number, number[]>>({});
+const referenceCards = computed(() => {
+  const data = managedReferences.value;
+  if (!data) return [];
+  return [
+    {
+      key: 'treasury',
+      label: 'Comptes bancaires et de trésorerie',
+      count: data.treasury.accounts.length,
+      section: 'treasury' as ReferenceSection,
+      items: data.treasury.accounts.map((item) => ({
+        id: item.id,
+        label: item.label,
+        type: item.type,
+        detail: `${item.currency} · ${item.ledger_account_number}`,
+        active: item.active
+      }))
+    },
+    {
+      key: 'vat',
+      label: 'Codes et taux TVA',
+      count: data.vat.codes.length,
+      section: 'vat' as ReferenceSection,
+      items: data.vat.codes.map((item) => ({
+        id: item.id,
+        label: item.code,
+        type: item.treatment,
+        detail: item.label,
+        active: item.active
+      }))
+    },
+    {
+      key: 'payroll',
+      label: 'Taux de charges sociales',
+      count: data.payroll.rates.length,
+      section: 'payroll' as ReferenceSection,
+      items: data.payroll.rates.map((item) => ({
+        id: Number(item.id),
+        label: String(item.year),
+        type: 'Genève',
+        detail: String(item.source),
+        active: true
+      }))
+    },
+    {
+      key: 'journals',
+      label: 'Journaux',
+      count: data.accounting_setup.journals.length,
+      section: 'journals' as ReferenceSection,
+      items: data.accounting_setup.journals.map((item) => ({
+        id: item.id,
+        label: item.code,
+        type: item.type,
+        detail: item.label,
+        active: item.active
+      }))
+    },
+    {
+      key: 'exercises',
+      label: 'Exercices comptables',
+      count: data.accounting_setup.exercises.length,
+      section: 'exercises' as ReferenceSection,
+      items: data.accounting_setup.exercises.map((item) => ({
+        id: item.id,
+        label: item.label,
+        type: item.status,
+        detail: `${item.start_date} — ${item.end_date}`,
+        active: item.status === 'ouvert'
+      }))
+    },
+    {
+      key: 'periods',
+      label: 'Périodes',
+      count: data.accounting_setup.periods.length,
+      section: 'periods' as ReferenceSection,
+      items: data.accounting_setup.periods.map((item) => ({
+        id: item.id,
+        label: item.label,
+        type: item.status,
+        detail: `${item.start_date} — ${item.end_date}`,
+        active: item.status === 'ouverte'
+      }))
+    },
+    {
+      key: 'contacts',
+      label: 'Débiteurs et créanciers',
+      count: data.contacts.length,
+      section: 'contacts' as ReferenceSection,
+      items: data.contacts.map((item) => ({
+        id: item.id,
+        label: contactName(item),
+        type: item.roles.join(', '),
+        detail: item.email,
+        active: true
+      }))
+    }
+  ];
+});
 const vatTreatmentsWithRate = ['normal', 'reduit', 'special', 'acquisition', 'import'];
 const paymentRows = computed<Array<Record<string, unknown>>>(() =>
   (configuration.value?.payment_terms ?? []).map((item) => ({
@@ -205,6 +322,22 @@ watch(
   },
   { deep: true }
 );
+watch(
+  managedReferences,
+  (value) => {
+    if (!value) return;
+    Object.keys(accessSelections).forEach((key) => {
+      delete accessSelections[Number(key)];
+    });
+    value.access.users.forEach((user) => {
+      accessSelections[user.id] = [...user.dossier_role_ids];
+    });
+    if (!periodDraft.exercise_id && value.accounting_setup.exercises.length) {
+      periodDraft.exercise_id = value.accounting_setup.exercises[0].id;
+    }
+  },
+  { deep: true }
+);
 
 onMounted(load);
 onBeforeUnmount(() => markUnsavedChanges(false));
@@ -217,10 +350,6 @@ async function load(): Promise<void> {
 
 function directionLabel(value: string): string {
   return value === 'client' ? 'Clients' : value === 'fournisseur' ? 'Fournisseurs' : 'Tous';
-}
-
-function legacyUrl(path: string): string {
-  return `${runtimeConfig.baseUrl}${path}`;
 }
 
 function contactName(contact: NonNullable<typeof managedReferences.value>['contacts'][number]): string {
@@ -357,6 +486,108 @@ async function savePayrollRates(): Promise<void> {
   } catch (error) {
     if (error instanceof Error && !store.error) store.error = error.message;
   }
+}
+
+function resetTreasuryDraft(): void {
+  Object.assign(treasuryDraft, {
+    id: 0,
+    version: 0,
+    ledger_account_id: 0,
+    label: '',
+    type: 'banque',
+    iban: '',
+    bic: '',
+    currency: configuration.value?.identity.dossier.base_currency || 'CHF',
+    accounting_multiplier: 1,
+    active: true
+  });
+}
+
+function editTreasuryAccount(
+  account: NonNullable<typeof managedReferences.value>['treasury']['accounts'][number]
+): void {
+  Object.assign(treasuryDraft, account);
+}
+
+async function saveTreasuryAccount(): Promise<void> {
+  await store.saveTreasuryAccount({ ...treasuryDraft });
+  resetTreasuryDraft();
+  notifications.push('Compte de trésorerie enregistré.', 'success');
+}
+
+function resetJournalDraft(): void {
+  Object.assign(journalDraft, {
+    id: 0,
+    version: 0,
+    code: '',
+    label: '',
+    type: 'general',
+    active: true
+  });
+}
+
+function editJournal(
+  journal: NonNullable<typeof managedReferences.value>['accounting_setup']['journals'][number]
+): void {
+  Object.assign(journalDraft, journal);
+}
+
+async function saveJournal(): Promise<void> {
+  await store.saveJournal({ ...journalDraft });
+  resetJournalDraft();
+  notifications.push('Journal comptable enregistré.', 'success');
+}
+
+async function createExercise(): Promise<void> {
+  await store.saveExercise({ ...exerciseDraft });
+  Object.assign(exerciseDraft, {
+    id: 0,
+    version: 0,
+    label: '',
+    status: 'ouvert'
+  });
+  notifications.push('Exercice comptable créé.', 'success');
+}
+
+async function toggleExercise(
+  exercise: NonNullable<typeof managedReferences.value>['accounting_setup']['exercises'][number]
+): Promise<void> {
+  await store.saveExercise({
+    ...exercise,
+    status: exercise.status === 'ouvert' ? 'ferme' : 'ouvert'
+  });
+  await context.load();
+  notifications.push('Statut de l’exercice mis à jour.', 'success');
+}
+
+async function createPeriod(): Promise<void> {
+  await store.savePeriod({ ...periodDraft });
+  Object.assign(periodDraft, {
+    id: 0,
+    version: 0,
+    label: '',
+    status: 'ouverte'
+  });
+  notifications.push('Période comptable créée.', 'success');
+}
+
+async function togglePeriod(
+  period: NonNullable<typeof managedReferences.value>['accounting_setup']['periods'][number]
+): Promise<void> {
+  await store.savePeriod({
+    ...period,
+    status: period.status === 'ouverte' ? 'fermee' : 'ouverte'
+  });
+  notifications.push('Statut de la période mis à jour.', 'success');
+}
+
+async function saveAccess(userId: number): Promise<void> {
+  await store.saveDossierAccess({
+    user_id: userId,
+    role_ids: [...(accessSelections[userId] || [])]
+  });
+  await context.load();
+  notifications.push('Rôles du dossier enregistrés.', 'success');
 }
 
 async function saveIdentity(): Promise<void> {
@@ -681,6 +912,13 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           </button>
           <button
             type="button"
+            :class="{ active: referenceSection === 'treasury' }"
+            @click="referenceSection = 'treasury'"
+          >
+            Trésorerie
+          </button>
+          <button
+            type="button"
             :class="{ active: referenceSection === 'contacts' }"
             @click="referenceSection = 'contacts'"
           >
@@ -700,10 +938,31 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           >
             Charges sociales
           </button>
+          <button
+            type="button"
+            :class="{ active: referenceSection === 'journals' }"
+            @click="referenceSection = 'journals'"
+          >
+            Journaux
+          </button>
+          <button
+            type="button"
+            :class="{ active: referenceSection === 'exercises' }"
+            @click="referenceSection = 'exercises'"
+          >
+            Exercices
+          </button>
+          <button
+            type="button"
+            :class="{ active: referenceSection === 'periods' }"
+            @click="referenceSection = 'periods'"
+          >
+            Périodes
+          </button>
         </nav>
 
         <div v-if="referenceSection === 'overview'" class="reference-grid">
-          <article v-for="reference in visibleReferenceCards" :key="reference.key" class="panel reference-card">
+          <article v-for="reference in referenceCards" :key="reference.key" class="panel reference-card">
             <div class="panel-heading">
               <div>
                 <p class="eyebrow">Source métier unique</p>
@@ -724,22 +983,129 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             </ul>
             <p v-else>Aucune donnée configurée.</p>
             <button
-              v-if="managedReferenceSections[reference.key]"
               class="button secondary compact"
               type="button"
-              @click="referenceSection = managedReferenceSections[reference.key]"
+              @click="referenceSection = reference.section"
             >
               Gérer dans Configuration
             </button>
-            <a
-              v-else-if="reference.legacy_path"
-              class="button secondary compact"
-              :href="legacyUrl(reference.legacy_path)"
-            >
-              Ouvrir dans Vue
-            </a>
+          </article>
+          <article class="panel reference-card">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Comptabilité</p><h2>Plan comptable</h2></div>
+            </div>
+            <p>Types, structure, comptes, règles de sens et soldes d’ouverture.</p>
+            <RouterLink class="button secondary compact" to="/compta/plan">
+              Gérer le plan comptable
+            </RouterLink>
           </article>
         </div>
+
+        <template v-else-if="managedReferences && referenceSection === 'treasury'">
+          <form
+            v-if="managedReferences.capabilities.treasury"
+            class="panel configuration-form"
+            @submit.prevent="saveTreasuryAccount"
+          >
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Grand livre lié</p>
+                <h2>{{ treasuryDraft.id ? 'Modifier le compte' : 'Nouveau compte de trésorerie' }}</h2>
+              </div>
+            </div>
+            <div class="configuration-grid">
+              <label>Compte comptable
+                <select v-model.number="treasuryDraft.ledger_account_id" required>
+                  <option :value="0">Choisir…</option>
+                  <option
+                    v-for="account in managedReferences.treasury.ledger_accounts"
+                    :key="account.id"
+                    :value="account.id"
+                  >
+                    {{ account.number }} — {{ account.label }}
+                  </option>
+                </select>
+              </label>
+              <label>Libellé
+                <input v-model="treasuryDraft.label" required>
+              </label>
+              <label>Type
+                <select v-model="treasuryDraft.type">
+                  <option value="banque">Banque</option>
+                  <option value="poste">Poste</option>
+                  <option value="caisse">Caisse</option>
+                  <option value="carte">Carte</option>
+                </select>
+              </label>
+              <label>Devise
+                <input v-model="treasuryDraft.currency" maxlength="3" required>
+              </label>
+              <label>IBAN
+                <input v-model="treasuryDraft.iban" autocomplete="off">
+              </label>
+              <label>BIC
+                <input v-model="treasuryDraft.bic" autocomplete="off">
+              </label>
+              <label>Sens dans le grand livre
+                <select v-model.number="treasuryDraft.accounting_multiplier">
+                  <option :value="1">Normal</option>
+                  <option :value="-1">Inversé</option>
+                </select>
+              </label>
+            </div>
+            <label class="checkbox-field">
+              <input v-model="treasuryDraft.active" type="checkbox">
+              Compte actif
+            </label>
+            <div class="form-actions">
+              <button class="button primary" type="submit" :disabled="store.saving">
+                Enregistrer le compte
+              </button>
+              <button
+                v-if="treasuryDraft.id"
+                class="button secondary"
+                type="button"
+                @click="resetTreasuryDraft"
+              >
+                Annuler la modification
+              </button>
+            </div>
+          </form>
+          <article class="panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Source unique</p><h2>Comptes de trésorerie</h2></div>
+              <strong>{{ managedReferences.treasury.accounts.length }}</strong>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Compte</th><th>Type</th><th>Coordonnées</th><th>Statut</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="account in managedReferences.treasury.accounts" :key="account.id">
+                    <td>
+                      <strong>{{ account.label }}</strong><br>
+                      <small>{{ account.ledger_account_number }} · {{ account.currency }}</small>
+                    </td>
+                    <td>{{ account.type }}</td>
+                    <td>{{ account.iban || '—' }}<br><small>{{ account.bic }}</small></td>
+                    <td>{{ account.active ? 'Actif' : 'Inactif' }}</td>
+                    <td>
+                      <button class="button secondary compact" type="button" @click="editTreasuryAccount(account)">
+                        Modifier
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <EmptyState
+              v-if="!managedReferences.treasury.accounts.length"
+              title="Aucun compte de trésorerie"
+              description="Créez le premier compte et liez-le au grand livre."
+            />
+          </article>
+        </template>
 
         <template v-else-if="managedReferences && referenceSection === 'contacts'">
           <form
@@ -1044,23 +1410,257 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             />
           </article>
         </template>
+
+        <template v-else-if="managedReferences && referenceSection === 'journals'">
+          <form
+            v-if="managedReferences.capabilities.accounting_setup"
+            class="panel configuration-form"
+            @submit.prevent="saveJournal"
+          >
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Comptabilité</p>
+                <h2>{{ journalDraft.id ? 'Modifier le journal' : 'Nouveau journal' }}</h2>
+              </div>
+            </div>
+            <div class="configuration-grid">
+              <label>Code
+                <input v-model="journalDraft.code" maxlength="12" required>
+              </label>
+              <label>Libellé
+                <input v-model="journalDraft.label" required>
+              </label>
+              <label>Type
+                <select v-model="journalDraft.type">
+                  <option
+                    v-for="type in managedReferences.accounting_setup.journal_types"
+                    :key="type"
+                    :value="type"
+                  >
+                    {{ type }}
+                  </option>
+                </select>
+              </label>
+            </div>
+            <label class="checkbox-field">
+              <input v-model="journalDraft.active" type="checkbox">
+              Journal actif
+            </label>
+            <div class="form-actions">
+              <button class="button primary" type="submit" :disabled="store.saving">
+                Enregistrer le journal
+              </button>
+              <button
+                v-if="journalDraft.id"
+                class="button secondary"
+                type="button"
+                @click="resetJournalDraft"
+              >
+                Annuler la modification
+              </button>
+            </div>
+          </form>
+          <article class="panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Source unique</p><h2>Journaux comptables</h2></div>
+              <strong>{{ managedReferences.accounting_setup.journals.length }}</strong>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Code</th><th>Libellé</th><th>Type</th><th>Statut</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="journal in managedReferences.accounting_setup.journals" :key="journal.id">
+                    <td><strong>{{ journal.code }}</strong></td>
+                    <td>{{ journal.label }}</td>
+                    <td>{{ journal.type }}</td>
+                    <td>{{ journal.active ? 'Actif' : 'Inactif' }}</td>
+                    <td>
+                      <button class="button secondary compact" type="button" @click="editJournal(journal)">
+                        Modifier
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </template>
+
+        <template v-else-if="managedReferences && referenceSection === 'exercises'">
+          <form
+            v-if="managedReferences.capabilities.accounting_setup"
+            class="panel configuration-form"
+            @submit.prevent="createExercise"
+          >
+            <div class="panel-heading">
+              <div><p class="eyebrow">Périmètre temporel</p><h2>Nouvel exercice comptable</h2></div>
+            </div>
+            <div class="configuration-grid">
+              <label>Libellé
+                <input v-model="exerciseDraft.label" required>
+              </label>
+              <label>Début
+                <input v-model="exerciseDraft.start_date" type="date" required>
+              </label>
+              <label>Fin
+                <input v-model="exerciseDraft.end_date" type="date" required>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="button primary" type="submit" :disabled="store.saving">
+                Créer l’exercice
+              </button>
+            </div>
+          </form>
+          <article class="panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Dossier</p><h2>Exercices comptables</h2></div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Exercice</th><th>Début</th><th>Fin</th><th>Statut</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="exercise in managedReferences.accounting_setup.exercises" :key="exercise.id">
+                    <td><strong>{{ exercise.label }}</strong></td>
+                    <td>{{ exercise.start_date }}</td>
+                    <td>{{ exercise.end_date }}</td>
+                    <td>{{ exercise.status }}</td>
+                    <td>
+                      <button
+                        class="button secondary compact"
+                        type="button"
+                        :disabled="store.saving"
+                        @click="toggleExercise(exercise)"
+                      >
+                        {{ exercise.status === 'ouvert' ? 'Fermer' : 'Rouvrir' }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </template>
+
+        <template v-else-if="managedReferences && referenceSection === 'periods'">
+          <form
+            v-if="managedReferences.capabilities.accounting_setup"
+            class="panel configuration-form"
+            @submit.prevent="createPeriod"
+          >
+            <div class="panel-heading">
+              <div><p class="eyebrow">Verrouillage comptable</p><h2>Nouvelle période</h2></div>
+            </div>
+            <div class="configuration-grid">
+              <label>Exercice
+                <select v-model.number="periodDraft.exercise_id" required>
+                  <option :value="0">Choisir…</option>
+                  <option
+                    v-for="exercise in managedReferences.accounting_setup.exercises"
+                    :key="exercise.id"
+                    :value="exercise.id"
+                  >
+                    {{ exercise.label }}
+                  </option>
+                </select>
+              </label>
+              <label>Libellé
+                <input v-model="periodDraft.label" required>
+              </label>
+              <label>Début
+                <input v-model="periodDraft.start_date" type="date" required>
+              </label>
+              <label>Fin
+                <input v-model="periodDraft.end_date" type="date" required>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="button primary" type="submit" :disabled="store.saving">
+                Créer la période
+              </button>
+            </div>
+          </form>
+          <article class="panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Contrôle de saisie</p><h2>Périodes comptables</h2></div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Période</th><th>Exercice</th><th>Dates</th><th>Statut</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="period in managedReferences.accounting_setup.periods" :key="period.id">
+                    <td><strong>{{ period.label }}</strong></td>
+                    <td>{{ period.exercise }}</td>
+                    <td>{{ period.start_date }} — {{ period.end_date }}</td>
+                    <td>{{ period.status }}</td>
+                    <td>
+                      <button
+                        class="button secondary compact"
+                        type="button"
+                        :disabled="store.saving"
+                        @click="togglePeriod(period)"
+                      >
+                        {{ period.status === 'ouverte' ? 'Fermer' : 'Rouvrir' }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </template>
       </section>
 
-      <section v-else-if="activeTab === 'acces'" class="reference-grid">
-        <article v-for="reference in visibleReferenceCards" :key="reference.key" class="panel reference-card">
+      <section v-else-if="activeTab === 'acces' && managedReferences" class="configuration-stack">
+        <article class="panel">
           <div class="panel-heading">
-            <div><p class="eyebrow">Accès</p><h2>{{ reference.label }}</h2></div>
-            <strong>{{ reference.count }}</strong>
+            <div><p class="eyebrow">Accès directs</p><h2>Rôles du dossier</h2></div>
+            <strong>{{ managedReferences.access.users.length }}</strong>
           </div>
-          <ul v-if="reference.items.length" class="compact-list">
-            <li v-for="item in reference.items.slice(0, 8)" :key="item.id">
-              <span><strong>{{ item.label }}</strong><small>{{ item.type }} · {{ item.detail }}</small></span>
-              <span class="status-badge" :class="item.active ? 'status-ouverte' : 'status-fermee'">
-                {{ item.active ? 'Actif' : 'Inactif' }}
-              </span>
-            </li>
-          </ul>
-          <p v-else>Aucun utilisateur configuré.</p>
+          <p>
+            Les rôles hérités de l’installation ou de l’organisation restent visibles,
+            mais seuls les rôles directs de ce dossier sont modifiés ici.
+          </p>
+          <div class="access-list">
+            <form
+              v-for="user in managedReferences.access.users"
+              :key="user.id"
+              class="access-card"
+              @submit.prevent="saveAccess(user.id)"
+            >
+              <div>
+                <h3>{{ user.name || user.email }}</h3>
+                <p>{{ user.email }}</p>
+                <small v-if="user.inherited_roles.length">
+                  Hérité : {{ user.inherited_roles.join(' · ') }}
+                </small>
+              </div>
+              <fieldset class="checkbox-group">
+                <legend>Rôles directs</legend>
+                <label v-for="role in managedReferences.access.roles" :key="role.id">
+                  <input
+                    v-model="accessSelections[user.id]"
+                    type="checkbox"
+                    :value="role.id"
+                    :disabled="user.id === currentUserId"
+                  >
+                  {{ role.label }}
+                </label>
+              </fieldset>
+              <button
+                class="button secondary compact"
+                type="submit"
+                :disabled="store.saving || user.id === currentUserId"
+              >
+                Enregistrer les rôles
+              </button>
+            </form>
+          </div>
+          <EmptyState
+            v-if="!managedReferences.access.users.length"
+            title="Aucun utilisateur administrable"
+            description="Les comptes sont créés au niveau de l’installation, puis affectés ici."
+          />
         </article>
       </section>
 

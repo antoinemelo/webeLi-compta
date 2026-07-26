@@ -3,10 +3,14 @@ declare(strict_types=1);
 
 namespace Compta\Modules\Configuration\Application;
 
+use Compta\Core\Audit\AuditLogger;
+use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
+use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tva\VatConfigurationService;
 use PDO;
+use Throwable;
 
 final class ManagedReferencesService
 {
@@ -15,6 +19,9 @@ final class ManagedReferencesService
         private readonly ContactService $contacts,
         private readonly VatConfigurationService $vat,
         private readonly PayrollConfigurationService $payroll,
+        private readonly TreasuryAccountService $treasury,
+        private readonly AccountingSetupService $accountingSetup,
+        private readonly AuditLogger $audit,
     ) {
     }
 
@@ -73,6 +80,20 @@ final class ManagedReferencesService
                     'source' => 'Lasso — TAUX_DEFAUT / OCAS Genève 2026',
                     'verified_on' => '2026-07-25',
                 ],
+            ],
+            'treasury' => [
+                'accounts' => $this->treasuryAccounts($organisationId, $dossierId),
+                'ledger_accounts' => $this->accounts($organisationId, $dossierId),
+            ],
+            'accounting_setup' => [
+                'journals' => $this->journals($organisationId, $dossierId),
+                'journal_types' => AccountingSetupService::JOURNAL_TYPES,
+                'exercises' => $this->exercises($organisationId, $dossierId),
+                'periods' => $this->periods($organisationId, $dossierId),
+            ],
+            'access' => [
+                'users' => $this->users($organisationId, $dossierId),
+                'roles' => $this->roles(),
             ],
         ];
     }
@@ -174,6 +195,202 @@ final class ManagedReferencesService
             $data,
             $actorId
         );
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveTreasuryAccount(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        $payload = [
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'compte_comptable_id' => $data['ledger_account_id'],
+            'libelle' => $data['label'],
+            'type' => $data['type'],
+            'iban' => $data['iban'],
+            'bic' => $data['bic'],
+            'monnaie' => $data['currency'],
+            'multiplicateur_comptable' => $data['accounting_multiplier'],
+            'actif' => $data['active'],
+        ];
+        if ($data['id'] > 0) {
+            $this->treasury->update(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $payload,
+                $actorId
+            );
+            return $data['id'];
+        }
+        return $this->treasury->create($payload, $actorId);
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveJournal(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        if ($data['id'] > 0) {
+            $this->accountingSetup->updateJournal(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $data['code'],
+                $data['label'],
+                $data['type'],
+                $data['active'],
+                $actorId
+            );
+            return $data['id'];
+        }
+        return $this->accountingSetup->createJournal(
+            $organisationId,
+            $dossierId,
+            $data['code'],
+            $data['label'],
+            $data['type'],
+            $actorId,
+            $data['active']
+        );
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveExercise(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        if ($data['id'] > 0) {
+            $this->accountingSetup->setExerciseStatus(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $data['status'],
+                $actorId
+            );
+            return $data['id'];
+        }
+        return $this->accountingSetup->createExercise(
+            $organisationId,
+            $dossierId,
+            $data['label'],
+            $data['start_date'],
+            $data['end_date'],
+            $actorId
+        );
+    }
+
+    /** @param array<string,mixed> $data */
+    public function savePeriod(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        if ($data['id'] > 0) {
+            $this->accountingSetup->setPeriodStatus(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $data['status'],
+                $actorId
+            );
+            return $data['id'];
+        }
+        return $this->accountingSetup->createPeriod(
+            $organisationId,
+            $dossierId,
+            $data['exercise_id'],
+            $data['label'],
+            $data['start_date'],
+            $data['end_date'],
+            $actorId
+        );
+    }
+
+    /** @param array{user_id:int,role_ids:list<int>} $data */
+    public function saveDossierAccess(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        if ($data['user_id'] === $actorId) {
+            throw new ConfigurationException(
+                'Votre propre accès ne peut pas être modifié depuis ce dossier.'
+            );
+        }
+        $user = $this->pdo->prepare(
+            'SELECT 1 FROM utilisateurs u
+             WHERE u.id = ? AND u.actif = 1
+               AND (
+                   EXISTS (
+                       SELECT 1 FROM utilisateur_roles_organisation uro
+                       WHERE uro.utilisateur_id = u.id
+                         AND uro.organisation_id = ?
+                   )
+                   OR EXISTS (
+                       SELECT 1 FROM utilisateur_roles_dossier urd
+                       WHERE urd.utilisateur_id = u.id
+                         AND urd.dossier_id = ?
+                   )
+               )'
+        );
+        $user->execute([$data['user_id'], $organisationId, $dossierId]);
+        if ($user->fetchColumn() === false) {
+            throw new ConfigurationException(
+                'Utilisateur absent du périmètre administrable.'
+            );
+        }
+        if ($data['role_ids'] !== []) {
+            $placeholders = implode(',', array_fill(0, count($data['role_ids']), '?'));
+            $roles = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM roles WHERE id IN ({$placeholders})"
+            );
+            $roles->execute($data['role_ids']);
+            if ((int) $roles->fetchColumn() !== count($data['role_ids'])) {
+                throw new ConfigurationException('Un rôle sélectionné est invalide.');
+            }
+        }
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $data,
+            $actorId
+        ): void {
+            $this->pdo->prepare(
+                'DELETE FROM utilisateur_roles_dossier
+                 WHERE utilisateur_id = ? AND dossier_id = ?'
+            )->execute([$data['user_id'], $dossierId]);
+            $insert = $this->pdo->prepare(
+                'INSERT INTO utilisateur_roles_dossier
+                 (utilisateur_id, dossier_id, role_id) VALUES (?, ?, ?)'
+            );
+            foreach ($data['role_ids'] as $roleId) {
+                $insert->execute([$data['user_id'], $dossierId, $roleId]);
+            }
+            $this->audit->log(
+                'configuration.acces_dossier_modifie',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'utilisateur',
+                (string) $data['user_id'],
+                ['role_ids' => $data['role_ids']]
+            );
+        });
+        return $data['user_id'];
     }
 
     /** @return list<array<string,mixed>> */
@@ -284,5 +501,174 @@ final class ManagedReferencesService
             }
             return $result;
         }, $stmt->fetchAll());
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function treasuryAccounts(int $organisationId, int $dossierId): array
+    {
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'ledger_account_id' => (int) $row['compte_comptable_id'],
+            'ledger_account_number' => (string) $row['numero_comptable'],
+            'label' => (string) $row['libelle'],
+            'type' => (string) $row['type'],
+            'iban' => (string) $row['iban'],
+            'bic' => (string) $row['bic'],
+            'currency' => (string) $row['monnaie'],
+            'accounting_multiplier' => (int) $row['multiplicateur_comptable'],
+            'active' => (int) $row['actif'] === 1,
+            'version' => (int) $row['version'],
+        ], $this->treasury->list($organisationId, $dossierId));
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function journals(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, code, libelle, type, actif, version
+             FROM journaux
+             WHERE organisation_id = ? AND dossier_id = ?
+             ORDER BY actif DESC, code'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'code' => (string) $row['code'],
+            'label' => (string) $row['libelle'],
+            'type' => (string) $row['type'],
+            'active' => (int) $row['actif'] === 1,
+            'version' => (int) $row['version'],
+        ], $stmt->fetchAll());
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function exercises(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT x.id, x.libelle, x.date_debut, x.date_fin, x.statut,
+                    x.version
+             FROM exercices x
+             JOIN dossiers d ON d.id = x.dossier_id
+             WHERE x.dossier_id = ? AND d.organisation_id = ?
+             ORDER BY x.date_debut DESC'
+        );
+        $stmt->execute([$dossierId, $organisationId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'label' => (string) $row['libelle'],
+            'start_date' => (string) $row['date_debut'],
+            'end_date' => (string) $row['date_fin'],
+            'status' => (string) $row['statut'],
+            'version' => (int) $row['version'],
+        ], $stmt->fetchAll());
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function periods(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT p.id, p.exercice_id, x.libelle AS exercice,
+                    p.libelle, p.date_debut, p.date_fin, p.statut, p.version
+             FROM periodes p
+             JOIN exercices x ON x.id = p.exercice_id
+             WHERE p.organisation_id = ? AND p.dossier_id = ?
+             ORDER BY p.date_debut DESC'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'exercise_id' => (int) $row['exercice_id'],
+            'exercise' => (string) $row['exercice'],
+            'label' => (string) $row['libelle'],
+            'start_date' => (string) $row['date_debut'],
+            'end_date' => (string) $row['date_fin'],
+            'status' => (string) $row['statut'],
+            'version' => (int) $row['version'],
+        ], $stmt->fetchAll());
+    }
+
+    /** @return list<array{id:int,code:string,label:string}> */
+    private function roles(): array
+    {
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'code' => (string) $row['code'],
+            'label' => (string) $row['libelle'],
+        ], $this->pdo->query(
+            'SELECT id, code, libelle FROM roles ORDER BY id'
+        )->fetchAll());
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function users(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT u.id, u.email, u.prenom, u.nom, u.actif,
+                    (
+                        SELECT GROUP_CONCAT(urd.role_id)
+                        FROM utilisateur_roles_dossier urd
+                        WHERE urd.utilisateur_id = u.id
+                          AND urd.dossier_id = :dossier
+                    ) AS dossier_role_ids,
+                    (
+                        SELECT GROUP_CONCAT(r.libelle, ', ')
+                        FROM utilisateur_roles_organisation uro
+                        JOIN roles r ON r.id = uro.role_id
+                        WHERE uro.utilisateur_id = u.id
+                          AND uro.organisation_id = :organisation
+                    ) AS organisation_roles,
+                    (
+                        SELECT GROUP_CONCAT(r.libelle, ', ')
+                        FROM utilisateur_roles_installation uri
+                        JOIN roles r ON r.id = uri.role_id
+                        WHERE uri.utilisateur_id = u.id
+                    ) AS installation_roles
+             FROM utilisateurs u
+             WHERE EXISTS (
+                 SELECT 1 FROM utilisateur_roles_organisation uro
+                 WHERE uro.utilisateur_id = u.id
+                   AND uro.organisation_id = :organisation
+             )
+                OR EXISTS (
+                 SELECT 1 FROM utilisateur_roles_dossier urd
+                 WHERE urd.utilisateur_id = u.id
+                   AND urd.dossier_id = :dossier
+             )
+             ORDER BY u.actif DESC, u.email"
+        );
+        $stmt->execute([
+            'organisation' => $organisationId,
+            'dossier' => $dossierId,
+        ]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'email' => (string) $row['email'],
+            'name' => trim(
+                (string) $row['prenom'] . ' ' . (string) $row['nom']
+            ),
+            'active' => (int) $row['actif'] === 1,
+            'dossier_role_ids' => $row['dossier_role_ids'] === null
+                ? []
+                : array_map('intval', explode(',', (string) $row['dossier_role_ids'])),
+            'inherited_roles' => array_values(array_filter([
+                (string) ($row['installation_roles'] ?? ''),
+                (string) ($row['organisation_roles'] ?? ''),
+            ])),
+        ], $stmt->fetchAll());
+    }
+
+    /** @param callable():void $callback */
+    private function transaction(callable $callback): void
+    {
+        $this->pdo->beginTransaction();
+        try {
+            $callback();
+            $this->pdo->commit();
+        } catch (Throwable $exception) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $exception;
+        }
     }
 }

@@ -17,6 +17,7 @@ use Compta\Core\Security\NativeSessionStore;
 use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Compta\AccountingInputValidator;
+use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\AccountingWorkspaceService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\ReportingService;
@@ -44,6 +45,7 @@ use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Shell\Http\ShellInputValidator;
 use Compta\Modules\Shell\Http\ShellPageController;
 use Compta\Modules\Tva\VatConfigurationService;
+use Compta\Modules\Tresorerie\TreasuryAccountService;
 
 require __DIR__ . '/autoload.php';
 
@@ -73,6 +75,8 @@ $chart = new ChartOfAccountsService($pdo, $audit);
 $contacts = new ContactService($pdo, $audit);
 $payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
 $vatConfiguration = new VatConfigurationService($pdo, $audit);
+$treasuryAccounts = new TreasuryAccountService($pdo, $audit);
+$accountingSetup = new AccountingSetupService($pdo, $audit);
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
 $apiRoutes = new ApiRouteRegistry(
@@ -104,7 +108,10 @@ $apiRoutes = new ApiRouteRegistry(
             $pdo,
             $contacts,
             $vatConfiguration,
-            $payrollConfiguration
+            $payrollConfiguration,
+            $treasuryAccounts,
+            $accountingSetup,
+            $audit
         )
     ),
     new AccountingApiController(

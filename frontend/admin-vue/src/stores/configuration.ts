@@ -38,6 +38,21 @@ export const useConfigurationStore = defineStore('configuration', {
     async savePayrollRates(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/payroll-rates', data);
     },
+    async saveTreasuryAccount(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/treasury-accounts', data);
+    },
+    async saveJournal(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/journals', data);
+    },
+    async saveExercise(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/exercises', data);
+    },
+    async savePeriod(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/periods', data);
+    },
+    async saveDossierAccess(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/access', data);
+    },
     async load(): Promise<void> {
       this.loading = true;
       this.error = '';

@@ -89,6 +89,36 @@ final class ApiRouteRegistry
                 '/api/v1/configuration/references/payroll-rates',
                 $this->configuration->savePayrollRates(...)
             );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/treasury-accounts',
+                $this->configuration->saveTreasuryAccount(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/journals',
+                $this->configuration->saveJournal(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/exercises',
+                $this->configuration->saveExercise(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/periods',
+                $this->configuration->savePeriod(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/access',
+                $this->configuration->saveDossierAccess(...)
+            );
         }
         if ($this->accounting !== null) {
             $this->add(

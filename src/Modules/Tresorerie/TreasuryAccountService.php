@@ -33,8 +33,8 @@ final class TreasuryAccountService
         $stmt = $this->pdo->prepare(
             'INSERT INTO comptes_tresorerie
              (organisation_id, dossier_id, compte_comptable_id, libelle, type,
-              iban, bic, monnaie, multiplicateur_comptable, cree_par)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+              iban, bic, monnaie, multiplicateur_comptable, actif, cree_par)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
             (int) $data['organisation_id'],
@@ -46,6 +46,7 @@ final class TreasuryAccountService
             strtoupper(trim((string) ($data['bic'] ?? ''))),
             $currency,
             (int) ($data['multiplicateur_comptable'] ?? 1),
+            (bool) ($data['actif'] ?? true) ? 1 : 0,
             $actorId,
         ]);
         $id = (int) $this->pdo->lastInsertId();
@@ -59,6 +60,76 @@ final class TreasuryAccountService
             ['type' => $type, 'iban' => $iban]
         );
         return $id;
+    }
+
+    /** @param array<string,mixed> $data */
+    public function update(
+        int $organisationId,
+        int $dossierId,
+        int $accountId,
+        int $expectedVersion,
+        array $data,
+        ?int $actorId = null,
+    ): void {
+        $type = (string) ($data['type'] ?? '');
+        if (!in_array($type, ['banque', 'poste', 'caisse', 'carte'], true)) {
+            throw new TreasuryException('Type de compte de trésorerie invalide.');
+        }
+        $label = trim((string) ($data['libelle'] ?? ''));
+        $currency = strtoupper(trim((string) ($data['monnaie'] ?? 'CHF')));
+        $iban = $this->iban((string) ($data['iban'] ?? ''));
+        $ledgerAccountId = (int) ($data['compte_comptable_id'] ?? 0);
+        $multiplier = (int) ($data['multiplicateur_comptable'] ?? 1);
+        $active = (bool) ($data['actif'] ?? true);
+        if (
+            $accountId < 1
+            || $expectedVersion < 1
+            || $ledgerAccountId < 1
+            || $label === ''
+            || preg_match('/^[A-Z]{3}$/', $currency) !== 1
+            || !in_array($multiplier, [-1, 1], true)
+        ) {
+            throw new TreasuryException('Données du compte de trésorerie invalides.');
+        }
+        if ($iban !== '' && preg_match('/^[A-Z]{2}[0-9A-Z]{13,32}$/', $iban) !== 1) {
+            throw new TreasuryException('IBAN invalide.');
+        }
+        $stmt = $this->pdo->prepare(
+            'UPDATE comptes_tresorerie
+             SET compte_comptable_id = ?, libelle = ?, type = ?, iban = ?,
+                 bic = ?, monnaie = ?, multiplicateur_comptable = ?, actif = ?,
+                 modifie_le = datetime(\'now\'), version = version + 1
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND version = ?'
+        );
+        $stmt->execute([
+            $ledgerAccountId,
+            $label,
+            $type,
+            $iban,
+            strtoupper(trim((string) ($data['bic'] ?? ''))),
+            $currency,
+            $multiplier,
+            $active ? 1 : 0,
+            $accountId,
+            $organisationId,
+            $dossierId,
+            $expectedVersion,
+        ]);
+        if ($stmt->rowCount() !== 1) {
+            throw new TreasuryException(
+                'Compte absent ou modifié par un autre utilisateur.'
+            );
+        }
+        $this->audit->log(
+            'tresorerie.compte_modifie',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'compte_tresorerie',
+            (string) $accountId,
+            ['type' => $type, 'actif' => $active]
+        );
     }
 
     /** @return list<array<string,mixed>> */

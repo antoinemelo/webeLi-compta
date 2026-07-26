@@ -1351,11 +1351,12 @@ final class Tests
             ),
             'snapshot de paiement du document émis immuable'
         );
-        $read = $configuration->read($organisationId, $dossierId);
         $this->same(
             1,
-            $read['references']['contacts']['count'],
-            'Configuration lie le registre unique de contacts'
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM contacts WHERE dossier_id = {$dossierId}"
+            )->fetchColumn(),
+            'Configuration ne duplique pas le registre unique de contacts'
         );
         $this->true(
             (int) $pdo->query(
@@ -1384,6 +1385,16 @@ final class Tests
         )->execute([$userId, $ids['dossier_a'], $roleId]);
         (new ScopeManager($pdo, new AuditLogger($pdo)))->grantRole(
             $userId, 'formateur', 'dossier', $ids['dossier_a']
+        );
+        $accessUserId = $users->create(
+            'access-http@example.test',
+            'mot-de-passe-tres-long'
+        );
+        (new ScopeManager($pdo, new AuditLogger($pdo)))->grantRole(
+            $accessUserId,
+            'lecteur',
+            'organisation',
+            $ids['organisation_a']
         );
         $exerciseId = (new ScopeManager($pdo, new AuditLogger($pdo)))->createExercise(
             $ids['dossier_a'],
@@ -1479,7 +1490,10 @@ final class Tests
                     $pdo,
                     $httpContacts,
                     $httpVatConfiguration,
-                    $httpPayrollConfiguration
+                    $httpPayrollConfiguration,
+                    new TreasuryAccountService($pdo, $httpAudit),
+                    new AccountingSetupService($pdo, $httpAudit),
+                    $httpAudit
                 )
             ),
             new AccountingApiController(
@@ -1698,6 +1712,10 @@ final class Tests
             $apiConfiguration->status,
             'configuration centralisée exposée en API'
         );
+        $this->false(
+            array_key_exists('references', $apiConfigurationJson['data'] ?? []),
+            'aucune projection parallèle des référentiels dans Configuration'
+        );
         $managedReferences = $app->handle(new Request(
             'GET',
             '/api/v1/configuration/references'
@@ -1708,6 +1726,10 @@ final class Tests
             $managedReferences->status,
             'référentiels gérés exposés dans Configuration'
         );
+        $this->false(
+            str_contains($managedReferences->body, 'legacy'),
+            'contrat des référentiels sans trace de navigation historique'
+        );
         $this->same(
             53000,
             $managedReferencesJson['data']['payroll']['suggested_rates']['avs_ppm'] ?? 0,
@@ -1717,6 +1739,225 @@ final class Tests
             4,
             count($managedReferencesJson['data']['vat']['legal_rates'] ?? []),
             'taux TVA légaux exposés sans copie côté Vue'
+        );
+        $this->true(
+            isset(
+                $managedReferencesJson['data']['treasury'],
+                $managedReferencesJson['data']['accounting_setup'],
+                $managedReferencesJson['data']['access']
+            ),
+            'tous les référentiels de Configuration partagent le contrat natif'
+        );
+        $treasuryLedgerId = (int) $pdo->query(
+            "SELECT id FROM comptes
+             WHERE dossier_id = {$ids['dossier_a']} AND numero = '1000'"
+        )->fetchColumn();
+        $treasuryFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/treasury-accounts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'ledger_account_id' => $treasuryLedgerId,
+                'label' => 'Caisse Vue',
+                'type' => 'caisse',
+                'iban' => '',
+                'bic' => '',
+                'currency' => 'CHF',
+                'accounting_multiplier' => 1,
+                'active' => true,
+            ]]
+        ));
+        $this->same(
+            200,
+            $treasuryFromConfiguration->status,
+            'compte de trésorerie créé depuis Configuration Vue'
+        );
+        $this->same(
+            'Caisse Vue',
+            (string) $pdo->query(
+                "SELECT libelle FROM comptes_tresorerie
+                 WHERE dossier_id = {$ids['dossier_a']}"
+            )->fetchColumn(),
+            'compte de trésorerie persisté par son service métier'
+        );
+        $configurationTreasuryId = (int) (
+            $this->responseJson($treasuryFromConfiguration)['data']['id'] ?? 0
+        );
+        $updatedTreasuryFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/treasury-accounts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $configurationTreasuryId,
+                'version' => 1,
+                'ledger_account_id' => $treasuryLedgerId,
+                'label' => 'Caisse Vue fermée',
+                'type' => 'caisse',
+                'iban' => '',
+                'bic' => '',
+                'currency' => 'CHF',
+                'accounting_multiplier' => 1,
+                'active' => false,
+            ]]
+        ));
+        $this->same(
+            200,
+            $updatedTreasuryFromConfiguration->status,
+            'compte de trésorerie modifié avec contrôle optimiste'
+        );
+        $this->same(
+            'Caisse Vue fermée|0|2',
+            (string) $pdo->query(
+                "SELECT libelle || '|' || actif || '|' || version
+                 FROM comptes_tresorerie WHERE id = {$configurationTreasuryId}"
+            )->fetchColumn(),
+            'désactivation du compte conservée sans suppression'
+        );
+        $journalFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/journals',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'code' => 'CFG',
+                'label' => 'Configuration Vue',
+                'type' => 'general',
+                'active' => true,
+            ]]
+        ));
+        $this->same(
+            200,
+            $journalFromConfiguration->status,
+            'journal créé depuis Configuration Vue'
+        );
+        $exerciseFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/exercises',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'label' => 'Exercice 2030',
+                'start_date' => '2030-01-01',
+                'end_date' => '2030-12-31',
+                'status' => 'ouvert',
+            ]]
+        ));
+        $this->same(
+            200,
+            $exerciseFromConfiguration->status,
+            'exercice créé depuis Configuration Vue'
+        );
+        $configurationExerciseId = (int) (
+            $this->responseJson($exerciseFromConfiguration)['data']['id'] ?? 0
+        );
+        $periodFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/periods',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'exercise_id' => $configurationExerciseId,
+                'label' => 'Janvier 2030',
+                'start_date' => '2030-01-01',
+                'end_date' => '2030-01-31',
+                'status' => 'ouverte',
+            ]]
+        ));
+        $this->same(
+            200,
+            $periodFromConfiguration->status,
+            'période créée depuis Configuration Vue'
+        );
+        $configurationPeriodId = (int) (
+            $this->responseJson($periodFromConfiguration)['data']['id'] ?? 0
+        );
+        $closePeriodFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/periods',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $configurationPeriodId,
+                'version' => 1,
+                'exercise_id' => $configurationExerciseId,
+                'label' => 'Janvier 2030',
+                'start_date' => '2030-01-01',
+                'end_date' => '2030-01-31',
+                'status' => 'fermee',
+            ]]
+        ));
+        $this->same(
+            200,
+            $closePeriodFromConfiguration->status,
+            'période fermée avec contrôle optimiste depuis Vue'
+        );
+        $closeExerciseFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/exercises',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $configurationExerciseId,
+                'version' => 1,
+                'label' => 'Exercice 2030',
+                'start_date' => '2030-01-01',
+                'end_date' => '2030-12-31',
+                'status' => 'ferme',
+            ]]
+        ));
+        $this->same(
+            200,
+            $closeExerciseFromConfiguration->status,
+            'exercice fermé seulement après ses périodes'
+        );
+        $reopenPeriodInClosedExercise = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/periods',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $configurationPeriodId,
+                'version' => 2,
+                'exercise_id' => $configurationExerciseId,
+                'label' => 'Janvier 2030',
+                'start_date' => '2030-01-01',
+                'end_date' => '2030-01-31',
+                'status' => 'ouverte',
+            ]]
+        ));
+        $this->same(
+            422,
+            $reopenPeriodInClosedExercise->status,
+            'période non réouvrable dans un exercice fermé'
+        );
+        $readerRoleId = (int) $pdo->query(
+            "SELECT id FROM roles WHERE code = 'lecteur'"
+        )->fetchColumn();
+        $accessFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/access',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'user_id' => $accessUserId,
+                'role_ids' => [$readerRoleId],
+            ]]
+        ));
+        $this->same(
+            200,
+            $accessFromConfiguration->status,
+            'rôle direct du dossier géré depuis Configuration Vue'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM utilisateur_roles_dossier
+                 WHERE utilisateur_id = {$accessUserId}
+                   AND dossier_id = {$ids['dossier_a']}
+                   AND role_id = {$readerRoleId}"
+            )->fetchColumn(),
+            'affectation de rôle persistée sans registre parallèle'
         );
         $contactFromConfiguration = $app->handle(new Request(
             'POST',

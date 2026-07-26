@@ -901,6 +901,34 @@ textarea {
   gap: 1rem;
 }
 
+.access-list {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
+.access-card {
+  display: grid;
+  grid-template-columns: minmax(13rem, 1fr) minmax(20rem, 2fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: var(--surface-soft);
+}
+
+.access-card h3,
+.access-card p {
+  margin: 0;
+}
+
+.access-card small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--muted);
+}
+
 .reference-card {
   align-content: start;
 }
@@ -1154,7 +1182,8 @@ textarea {
   }
 
   .configuration-grid,
-  .reference-grid {
+  .reference-grid,
+  .access-card {
     grid-template-columns: 1fr;
   }
 

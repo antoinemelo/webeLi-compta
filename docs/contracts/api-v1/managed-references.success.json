@@ -27,10 +27,35 @@
         "verified_on": "2026-07-25"
       }
     },
+    "treasury": {
+      "accounts": [],
+      "ledger_accounts": []
+    },
+    "accounting_setup": {
+      "journals": [],
+      "journal_types": [
+        "general",
+        "achats",
+        "ventes",
+        "banque",
+        "caisse",
+        "salaires",
+        "ouverture"
+      ],
+      "exercises": [],
+      "periods": []
+    },
+    "access": {
+      "users": [],
+      "roles": []
+    },
     "capabilities": {
       "contacts": true,
       "vat": true,
-      "payroll": true
+      "payroll": true,
+      "treasury": true,
+      "accounting_setup": true,
+      "access": true
     }
   },
   "meta": {

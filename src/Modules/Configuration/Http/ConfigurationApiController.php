@@ -10,12 +10,14 @@ use Compta\Core\Http\Api\ApiResponse;
 use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Security\SessionStore;
+use Compta\Modules\Compta\AccountingException;
 use Compta\Modules\Configuration\Application\ConfigurationException;
 use Compta\Modules\Configuration\Application\ConfigurationService;
 use Compta\Modules\Configuration\Application\ManagedReferencesService;
 use Compta\Modules\Facturation\BillingException;
 use Compta\Modules\Salaires\PayrollException;
 use Compta\Modules\Tva\VatException;
+use Compta\Modules\Tresorerie\TreasuryException;
 use PDOException;
 
 final class ConfigurationApiController
@@ -150,6 +152,19 @@ final class ConfigurationApiController
                 $dossierId,
                 'salaires.manage'
             ),
+            'treasury' => $this->hasPermission(
+                $userId,
+                $organisationId,
+                $dossierId,
+                'tresorerie.setup'
+            ),
+            'accounting_setup' => $this->hasPermission(
+                $userId,
+                $organisationId,
+                $dossierId,
+                'compta.setup'
+            ),
+            'access' => true,
         ];
         return ApiResponse::success($request, $result);
     }
@@ -209,6 +224,103 @@ final class ConfigurationApiController
                 $organisationId,
                 $dossierId,
                 $this->validator->payrollRates($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function saveTreasuryAccount(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'tresorerie.setup'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->saveTreasuryAccount(
+                $organisationId,
+                $dossierId,
+                $this->validator->treasuryAccount($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function saveJournal(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->saveJournal(
+                $organisationId,
+                $dossierId,
+                $this->validator->journal($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function saveExercise(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->saveExercise(
+                $organisationId,
+                $dossierId,
+                $this->validator->exercise($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function savePeriod(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->savePeriod(
+                $organisationId,
+                $dossierId,
+                $this->validator->period($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function saveDossierAccess(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope();
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->saveDossierAccess(
+                $organisationId,
+                $dossierId,
+                $this->validator->dossierAccess($request),
                 $userId
             );
             return ['id' => $id];
@@ -288,7 +400,14 @@ final class ConfigurationApiController
     {
         try {
             return ApiResponse::success($request, $callback());
-        } catch (BillingException|PayrollException|VatException $exception) {
+        } catch (
+            AccountingException
+            |BillingException
+            |ConfigurationException
+            |PayrollException
+            |TreasuryException
+            |VatException $exception
+        ) {
             throw ApiException::validation([
                 'reference' => [$exception->getMessage()],
             ]);

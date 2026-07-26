@@ -25,7 +25,6 @@ final class ConfigurationService
             'identity' => $this->identity($organisationId, $dossierId),
             'modules' => $this->modules->modules($organisationId, $dossierId),
             'payment_terms' => $this->paymentTerms($organisationId, $dossierId),
-            'references' => $this->references($organisationId, $dossierId),
             'audit' => $this->recentAudit($organisationId, $dossierId),
             'definitions' => [
                 'contacts' => 'Le registre unique reste celui de Facturation.',
@@ -422,125 +421,6 @@ final class ConfigurationService
             'is_default' => (int) $row['est_defaut'] === 1,
             'version' => (int) $row['version'],
         ], $stmt->fetchAll());
-    }
-
-    /** @return array<string,mixed> */
-    private function references(int $organisationId, int $dossierId): array
-    {
-        $queries = [
-            'bank_accounts' => [
-                'sql' => 'SELECT t.id, t.libelle AS label, t.type, t.monnaie AS detail,
-                                 t.actif AS active
-                          FROM comptes_tresorerie t
-                          WHERE t.organisation_id = ? AND t.dossier_id = ?
-                          ORDER BY t.actif DESC, t.libelle',
-                'path' => '/app/liquidites',
-            ],
-            'vat_codes' => [
-                'sql' => 'SELECT v.id, v.code AS label, v.traitement AS type,
-                                 COALESCE(CAST(l.taux_bp AS TEXT) || \' bp\', v.nature) AS detail,
-                                 v.actif AS active
-                          FROM tva_codes v
-                          LEFT JOIN tva_taux_legaux l ON l.id = v.taux_legal_id
-                          WHERE v.organisation_id = ? AND v.dossier_id = ?
-                          ORDER BY v.actif DESC, v.code, v.date_debut DESC',
-                'path' => '',
-            ],
-            'payroll_rates' => [
-                'sql' => 'SELECT t.id, CAST(t.annee AS TEXT) AS label,
-                                 \'Genève\' AS type, t.source AS detail, 1 AS active
-                          FROM taux_salaires_annuels t
-                          WHERE t.organisation_id = ? AND t.dossier_id = ?
-                          ORDER BY t.annee DESC',
-                'path' => '',
-            ],
-            'journals' => [
-                'sql' => 'SELECT j.id, j.code AS label, j.type,
-                                 j.libelle AS detail, j.actif AS active
-                          FROM journaux j
-                          WHERE j.organisation_id = ? AND j.dossier_id = ?
-                          ORDER BY j.actif DESC, j.code',
-                'path' => '/app/compta',
-            ],
-            'exercises' => [
-                'sql' => 'SELECT e.id, e.libelle AS label, e.statut AS type,
-                                 e.date_debut || \' — \' || e.date_fin AS detail,
-                                 CASE e.statut WHEN \'ouvert\' THEN 1 ELSE 0 END AS active
-                          FROM exercices e
-                          WHERE e.dossier_id = ?
-                          ORDER BY e.date_debut DESC',
-                'path' => '/app/',
-                'dossier_only' => true,
-            ],
-            'periods' => [
-                'sql' => 'SELECT p.id, p.libelle AS label, p.statut AS type,
-                                 p.date_debut || \' — \' || p.date_fin AS detail,
-                                 CASE p.statut WHEN \'ouverte\' THEN 1 ELSE 0 END AS active
-                          FROM periodes p
-                          WHERE p.organisation_id = ? AND p.dossier_id = ?
-                          ORDER BY p.date_debut DESC',
-                'path' => '/app/compta',
-            ],
-            'users' => [
-                'sql' => 'SELECT DISTINCT u.id, u.email AS label,
-                                 COALESCE(NULLIF(TRIM(u.prenom || \' \' || u.nom), \'\'), \'Utilisateur\') AS type,
-                                 \'Accès au dossier\' AS detail, u.actif AS active
-                          FROM utilisateurs u
-                          LEFT JOIN utilisateur_roles_dossier urd
-                            ON urd.utilisateur_id = u.id AND urd.dossier_id = ?
-                          LEFT JOIN utilisateur_roles_organisation uro
-                            ON uro.utilisateur_id = u.id AND uro.organisation_id = ?
-                          LEFT JOIN utilisateur_roles_installation uri
-                            ON uri.utilisateur_id = u.id
-                          WHERE urd.role_id IS NOT NULL
-                             OR uro.role_id IS NOT NULL
-                             OR uri.role_id IS NOT NULL
-                          ORDER BY u.actif DESC, u.email',
-                'path' => '',
-                'users' => true,
-            ],
-        ];
-        $result = [];
-        foreach ($queries as $key => $definition) {
-            $stmt = $this->pdo->prepare($definition['sql']);
-            $params = isset($definition['dossier_only'])
-                ? [$dossierId]
-                : (isset($definition['users'])
-                    ? [$dossierId, $organisationId]
-                    : [$organisationId, $dossierId]);
-            $stmt->execute($params);
-            $items = array_map(static fn (array $row): array => [
-                'id' => (int) $row['id'],
-                'label' => (string) $row['label'],
-                'type' => (string) $row['type'],
-                'detail' => (string) $row['detail'],
-                'active' => (int) $row['active'] === 1,
-            ], $stmt->fetchAll());
-            $result[$key] = [
-                'count' => count($items),
-                'items' => $items,
-                'legacy_path' => $definition['path'],
-            ];
-        }
-        $contacts = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM contacts
-             WHERE organisation_id = ? AND dossier_id = ?'
-        );
-        $contacts->execute([$organisationId, $dossierId]);
-        $result['contacts'] = [
-            'count' => (int) $contacts->fetchColumn(),
-            'items' => [],
-            'legacy_path' => '',
-        ];
-        $result['chart_of_accounts'] = [
-            'count' => (int) $this->scalar(
-                'SELECT COUNT(*) FROM comptes WHERE organisation_id = ? AND dossier_id = ?',
-                [$organisationId, $dossierId]
-            ),
-            'items' => [],
-            'legacy_path' => '/app/compta/plan',
-        ];
-        return $result;
     }
 
     /** @return list<array<string,mixed>> */

@@ -126,6 +126,9 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Plan comptable' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Débiteurs et créanciers' })).toBeVisible();
 
+  await page.getByRole('button', { name: 'Trésorerie' }).click();
+  await expect(page.getByRole('heading', { name: 'Nouveau compte de trésorerie' })).toBeVisible();
+
   await page.getByRole('button', { name: 'Débiteurs et créanciers' }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau débiteur ou créancier' })).toBeVisible();
 
@@ -139,6 +142,16 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await expect(page.getByLabel('AVS employé (%)')).toHaveValue('5,3');
   await page.getByRole('button', { name: 'Enregistrer les taux annuels' }).click();
   await expect(page.getByText('Taux salariaux annuels enregistrés avec leur source.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Journaux' }).click();
+  await expect(page.getByRole('heading', { name: 'Nouveau journal' })).toBeVisible();
+  await page.getByRole('button', { name: 'Exercices' }).click();
+  await expect(page.getByRole('heading', { name: 'Nouvel exercice comptable' })).toBeVisible();
+  await page.getByRole('button', { name: 'Périodes' }).click();
+  await expect(page.getByRole('heading', { name: 'Nouvelle période' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Accès', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Rôles du dossier' })).toBeVisible();
 });
 
 test('journal, extrait et plan comptable utilisent le parcours Vue unique', async ({ page }) => {
