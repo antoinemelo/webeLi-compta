@@ -1364,3 +1364,147 @@ export type PedagogyWorkspace = {
     export: boolean;
   };
 };
+
+export type ConsolidationMember = {
+  id: number;
+  organisation_id: number;
+  dossier_id: number;
+  organisation: string;
+  dossier: string;
+  currency: string;
+  valid_from: string;
+  valid_until: string | null;
+  accounts: Array<{
+    id: number;
+    number: string;
+    label: string;
+    type: string;
+  }>;
+};
+
+export type ConsolidationWorkspace = {
+  groups: Array<{
+    id: number;
+    code: string;
+    label: string;
+    currency: string;
+    version: number;
+  }>;
+  selected_group: {
+    id: number;
+    code: string;
+    label: string;
+    currency: string;
+    version: number;
+  } | null;
+  periods: Array<{
+    id: number;
+    label: string;
+    date_debut: string;
+    date_fin: string;
+    status: 'ouverte' | 'cloturee';
+    conversion_count: number;
+    version: number;
+  }>;
+  selected_period: {
+    id: number;
+    label: string;
+    date_debut: string;
+    date_fin: string;
+    statut: 'ouverte' | 'cloturee';
+    version: number;
+    cloturee_le: string | null;
+  } | null;
+  members: ConsolidationMember[];
+  mappings: Array<{
+    id: number;
+    member_id: number;
+    source_account_id: number;
+    source_account: string;
+    source_label: string;
+    target_account: string;
+    target_label: string;
+    target_type: string;
+    version: number;
+  }>;
+  intercompany_pairs: Array<Record<string, string | number>>;
+  legal_histories: Array<{
+    id: number;
+    organisation_id: number;
+    valid_from: string;
+    valid_until: string | null;
+    legal_name: string;
+    legal_form: string;
+    uid: string;
+    source: string;
+  }>;
+  balance: null | {
+    currency: string;
+    source_total_cents: number;
+    elimination_total_cents: number;
+    consolidated_total_cents: number;
+    formula_verified: boolean;
+    unmapped_accounts: Array<{
+      member_id: number;
+      organisation_id: number;
+      dossier_id: number;
+      account_id: number;
+      account: string;
+      label: string;
+      debit_cents: number;
+      credit_cents: number;
+    }>;
+    rows: Array<{
+      account: string;
+      label: string;
+      type: string;
+      source_cents: number;
+      elimination_cents: number;
+      consolidated_cents: number;
+      sources: Array<{
+        member_id: number;
+        organisation_id: number;
+        dossier_id: number;
+        organisation: string;
+        dossier: string;
+        source_account_id: number;
+        source_account: string;
+        source_label: string;
+        debit_cents: number;
+        credit_cents: number;
+        source_cents: number;
+        converted_cents: number;
+        conversion: {
+          source_currency: string;
+          target_currency: string;
+          numerator: number;
+          denominator: number;
+          rate_date: string;
+          source: string;
+        };
+      }>;
+    }>;
+  };
+  reconciliation: Array<Record<string, string | number | boolean>>;
+  eliminations: Array<{
+    id: number;
+    reference: string;
+    label: string;
+    justification: string;
+    status: string;
+    validated_at: string;
+    lines: Array<{
+      target_account: string;
+      label: string;
+      debit_cents: number;
+      credit_cents: number;
+      position: number;
+    }>;
+  }>;
+  capabilities: {
+    setup: boolean;
+    validate: boolean;
+    export: boolean;
+    create_group: boolean;
+  };
+};

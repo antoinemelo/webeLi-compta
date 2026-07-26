@@ -402,6 +402,63 @@ test('registre, plan et dotation des immobilisations utilisent le grand livre un
   await expect(page.getByText(/corrige par contre-passation/i)).toBeVisible();
 });
 
+test('balance consolidée drillable et refus de mutation sans droit sur chaque membre', async ({
+  page
+}) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
+  await page.getByRole('link', { name: 'Consolidation', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Consolidation', exact: true })).toBeVisible();
+  await expect(page.getByText('Formule vérifiée', { exact: true })).toBeVisible();
+  const revenueRow = page.getByRole('row').filter({ hasText: '3400 — Produits' });
+  await expect(revenueRow).toContainText(/CHF.*1.*200\.00/);
+  await revenueRow.getByText('1 balance(s) source(s)').click();
+  await expect(revenueRow.getByText(/Entreprise Alpha SA.*Comptabilité principale/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Exporter la piste JSON' })).toBeEnabled();
+
+  await page.getByRole('button', { name: 'Groupe et mappings' }).click();
+  await expect(page.getByRole('heading', { name: 'Membres du groupe' })).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: 'Entreprise Alpha SA' })).toContainText(
+    'CHF'
+  );
+
+  await page.getByRole('button', { name: 'Déconnexion' }).click();
+  await page.getByRole('button', { name: 'Se déconnecter' }).click();
+  await login(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.goto('/e2e/app/compta/consolidation');
+  await page.getByRole('button', { name: 'Groupe et mappings' }).click();
+  await expect(page.getByRole('button', { name: 'Créer', exact: true })).toBeDisabled();
+
+  const refusal = await page.evaluate(async () => {
+    const context = await fetch('/e2e/api/v1/context').then((response) => response.json());
+    return fetch('/e2e/api/v1/consolidation/groups', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': context.data.csrf_token,
+        'X-Contract-Version': 'compta-api-v1'
+      },
+      body: JSON.stringify({
+        data: {
+          code: 'REFUSE',
+          label: 'Refusé',
+          currency: 'CHF',
+          valid_from: '2026-01-01'
+        }
+      })
+    }).then((response) => response.status);
+  });
+  expect(refusal).toBe(403);
+});
+
 test('facturation client, contact 360 et aging utilisent le parcours Vue unique', async ({ page }) => {
   await loginAsAdministrator(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({

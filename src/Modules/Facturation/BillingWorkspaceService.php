@@ -666,6 +666,8 @@ final class BillingWorkspaceService
                 'code' => (string) $row['code'],
                 'label' => (string) $row['libelle'],
             ], $catalog['journals']),
+            'currencies' => $catalog['currencies'],
+            'exchange_rates' => $catalog['exchange_rates'],
         ];
     }
 

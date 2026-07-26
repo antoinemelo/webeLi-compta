@@ -201,6 +201,15 @@ Le périmètre actuel est Genève uniquement. Voir
 [le guide des salaires genevois](docs/salaires-geneve.md) et la
 [correspondance OCAS](docs/ocas-salaires-correspondance.md).
 
+## Multi-entités
+
+Les organisations sont les entités légales et peuvent conserver des attributs
+juridiques datés. L’onglet **Comptabilité > Consolidation** gère groupes,
+membres, périodes, ratios entiers, mappings, réconciliation inter-entités et
+éliminations séparées des grands livres. Un groupe n’accorde aucun droit sur
+ses membres et l’export JSON autonome conserve toute la piste de calcul. Voir
+[le guide multi-entités et consolidation](docs/multientites-consolidation.md).
+
 ## Enseignement
 
 Le module `Pedagogie` versionne des modèles avec plan, données initiales,

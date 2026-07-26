@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import AssetsPanel from '@/components/accounting/AssetsPanel.vue';
+import ConsolidationPanel from '@/components/accounting/ConsolidationPanel.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
@@ -1074,6 +1075,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         :exercise-id="exerciseId"
         :currency="currency"
       />
+      <ConsolidationPanel v-else-if="currentTab === 'consolidation'" />
       <EmptyState v-else title="Section inconnue" description="Choisissez un onglet comptable disponible." />
     </template>
   </template>

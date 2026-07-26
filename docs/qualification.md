@@ -61,6 +61,11 @@ Elle couvre également une facture EUR réglée en deux fois à des taux distinc
 les gains et pertes de change réalisés, la réévaluation latente contre-passable,
 la traçabilité des taux et l’absence de régression du parcours mono-CHF.
 
+La recette multi-entités additionne deux balances dans des devises différentes,
+réconcilie une créance et une dette réciproques, valide une élimination hors des
+livres statutaires, vérifie son immutabilité, son export autonome et masque le
+groupe tant que les droits ne couvrent pas chacun de ses membres.
+
 Les données publiques BNS/OFDF sont testées avec des réponses locales
 déterministes : aucune qualification ne dépend du réseau. Le test vérifie le
 cache global entre deux organisations, les deux conventions mensuelles, le

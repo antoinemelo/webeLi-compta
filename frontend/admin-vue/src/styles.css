@@ -508,15 +508,22 @@ h3,
   border-radius: 0.6rem;
 }
 
-.compact-tabs a {
+.compact-tabs a,
+.compact-tabs button {
   flex: 0 0 auto;
   padding: 0.55rem 0.8rem;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
   border-radius: 0.4rem;
+  font: inherit;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .compact-tabs a.router-link-exact-active,
-.compact-tabs a.active {
+.compact-tabs a.active,
+.compact-tabs button.active {
   color: white;
   background: var(--ink);
 }

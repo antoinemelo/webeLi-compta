@@ -30,6 +30,9 @@ use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\FinancialReportingService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Consolidation\ConsolidationApiController;
+use Compta\Modules\Consolidation\ConsolidationInputValidator;
+use Compta\Modules\Consolidation\ConsolidationService;
 use Compta\Modules\Configuration\Application\ConfigurationService;
 use Compta\Modules\Configuration\Application\ManagedReferencesService;
 use Compta\Modules\Configuration\Application\ModuleAccessService;
@@ -113,7 +116,7 @@ final class Tests
     /** @var list<string> */
     private array $temporaryDirectories = [];
 
-    public function run(string $suite = 'all'): int
+    public function run(string $suite = 'all', string $caseFilter = ''): int
     {
         if (!in_array($suite, ['quick', 'integration', 'all'], true)) {
             fwrite(STDERR, "Suite inconnue : {$suite}\n");
@@ -177,6 +180,10 @@ final class Tests
                 'integration',
                 fn () => $this->multiCurrencyTests(),
             ],
+            'multi-entités, consolidation et isolation' => [
+                'integration',
+                fn () => $this->consolidationTests(),
+            ],
             'dépenses, approbation et récurrences' => [
                 'integration',
                 fn () => $this->expenseTests(),
@@ -196,6 +203,9 @@ final class Tests
             ],
         ];
         foreach ($cases as $name => [$caseSuite, $case]) {
+            if ($caseFilter !== '' && !str_contains($name, $caseFilter)) {
+                continue;
+            }
             if ($suite !== 'all' && $suite !== $caseSuite) {
                 continue;
             }
@@ -1752,6 +1762,13 @@ final class Tests
                 $httpAccess,
                 $httpPedagogy,
                 new PedagogyInputValidator()
+            ),
+            new ConsolidationApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new ConsolidationService($pdo, $httpAudit),
+                new ConsolidationInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -2064,6 +2081,11 @@ final class Tests
             'contrat facturation complet et stable'
         );
         $this->same(
+            'CHF',
+            $apiBillingJson['data']['catalog']['currencies'][0]['code'] ?? '',
+            'devise de base disponible pour créer un document'
+        );
+        $this->same(
             '2026-06-30',
             $apiBillingJson['data']['reference_date'] ?? '',
             'date de référence visible dans le contrat facturation'
@@ -2098,6 +2120,20 @@ final class Tests
             200,
             $apiConfiguration->status,
             'configuration centralisée exposée en API'
+        );
+        $apiConsolidation = $app->handle(new Request(
+            'GET',
+            '/api/v1/consolidation'
+        ));
+        $this->same(
+            200,
+            $apiConsolidation->status,
+            'consolidation isolée exposée en API'
+        );
+        $this->same(
+            [],
+            $this->responseJson($apiConsolidation)['data']['groups'] ?? null,
+            'contrat consolidation explicite sans groupe'
         );
         $this->false(
             array_key_exists('references', $apiConfigurationJson['data'] ?? []),
@@ -2857,6 +2893,7 @@ final class Tests
             'configuration.success.json',
             'accounting.success.json',
             'assets.success.json',
+            'consolidation.success.json',
             'managed-references.success.json',
             'treasury.success.json',
             'market-data.success.json',
@@ -6694,6 +6731,327 @@ final class Tests
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après opérations multidevises');
     }
 
+    private function consolidationTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $ids = $this->seedScopes($pdo);
+        $audit = new AuditLogger($pdo);
+        $scope = new ScopeManager($pdo, $audit);
+        $setup = new AccountingSetupService($pdo, $audit);
+        $entries = new EntryService($pdo, $audit);
+        $seeder = new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds');
+        $pdo->prepare('UPDATE dossiers SET monnaie = ? WHERE id = ?')
+            ->execute(['EUR', $ids['dossier_b']]);
+
+        $exerciseA = $scope->createExercise(
+            $ids['dossier_a'],
+            'Exercice A 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $exerciseB = $scope->createExercise(
+            $ids['dossier_b'],
+            'Exercice B 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $setup->createPeriod(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseA,
+            '2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $setup->createPeriod(
+            $ids['organisation_b'],
+            $ids['dossier_b'],
+            $exerciseB,
+            '2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $journalA = $setup->createJournal(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'OD',
+            'Opérations diverses'
+        );
+        $journalB = $setup->createJournal(
+            $ids['organisation_b'],
+            $ids['dossier_b'],
+            'OD',
+            'Opérations diverses'
+        );
+        $seeder->installForDossier(
+            $ids['organisation_a'], $ids['dossier_a'], 'personne_morale'
+        );
+        $seeder->installForDossier(
+            $ids['organisation_b'], $ids['dossier_b'], 'personne_morale'
+        );
+        $receivableA = $this->accountId($pdo, $ids['dossier_a'], '1100');
+        $salesA = $this->accountId($pdo, $ids['dossier_a'], '3000');
+        $payableB = $this->accountId($pdo, $ids['dossier_b'], '2000');
+        $expenseB = $this->accountId($pdo, $ids['dossier_b'], '4000');
+        $entries->postGenerated([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'exercice_id' => $exerciseA,
+            'journal_id' => $journalA,
+            'date_comptable' => '2026-06-30',
+            'libelle' => 'Vente inter-entités',
+            'source_type' => 'test',
+            'source_id' => 'interco-a',
+            'source_action' => 'vente',
+            'lignes' => [
+                ['compte_id' => $receivableA, 'debit_centimes' => 10000],
+                ['compte_id' => $salesA, 'credit_centimes' => 10000],
+            ],
+        ], 'test-consolidation:a');
+        $entries->postGenerated([
+            'organisation_id' => $ids['organisation_b'],
+            'dossier_id' => $ids['dossier_b'],
+            'exercice_id' => $exerciseB,
+            'journal_id' => $journalB,
+            'date_comptable' => '2026-06-30',
+            'libelle' => 'Achat inter-entités',
+            'source_type' => 'test',
+            'source_id' => 'interco-b',
+            'source_action' => 'achat',
+            'lignes' => [
+                ['compte_id' => $expenseB, 'debit_centimes' => 8000],
+                ['compte_id' => $payableB, 'credit_centimes' => 8000],
+            ],
+        ], 'test-consolidation:b');
+
+        $pdo->prepare(
+            'INSERT INTO utilisateurs (email, mot_de_passe) VALUES (?, ?)'
+        )->execute([
+            'administrateur-consolidation@example.test',
+            password_hash('secret', PASSWORD_DEFAULT),
+        ]);
+        $service = new ConsolidationService($pdo, $audit);
+        $legalA1 = $service->saveLegalAttributes(
+            $ids['organisation_a'],
+            '2025-01-01',
+            'Organisation A SA',
+            'SA',
+            'CHE-111.111.111',
+            ['city' => 'Genève', 'country' => 'CH'],
+            'Registre test 2025',
+            1
+        );
+        $legalA2 = $service->saveLegalAttributes(
+            $ids['organisation_a'],
+            '2026-01-01',
+            'Organisation A Groupe SA',
+            'SA',
+            'CHE-111.111.111',
+            ['city' => 'Genève', 'country' => 'CH'],
+            'Registre test 2026',
+            1
+        );
+        $this->true($legalA2 > $legalA1, 'attributs juridiques versionnés sans changer l’organisation');
+        $this->same(
+            '2025-12-31',
+            (string) $pdo->query(
+                "SELECT date_fin FROM attributs_juridiques_organisation
+                 WHERE id = {$legalA1}"
+            )->fetchColumn(),
+            'ancienne identité juridique fermée à la veille'
+        );
+
+        $group = $service->createGroup(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'GROUPE',
+            'Groupe de test',
+            'CHF',
+            '2026-01-01',
+            1
+        );
+        $memberA = (int) $pdo->query(
+            "SELECT id FROM membres_groupe_consolidation
+             WHERE groupe_id = {$group} AND dossier_id = {$ids['dossier_a']}"
+        )->fetchColumn();
+        $memberB = $service->addMember(
+            $group,
+            $ids['organisation_b'],
+            $ids['dossier_b'],
+            '2026-01-01',
+            null,
+            1
+        );
+        $period = $service->createPeriod(
+            $group,
+            'Semestre 1 2026',
+            '2026-01-01',
+            '2026-06-30',
+            [
+                [
+                    'member_id' => $memberA,
+                    'numerator' => 1,
+                    'denominator' => 1,
+                    'rate_date' => '2026-06-30',
+                    'source' => 'Devise de consolidation',
+                ],
+                [
+                    'member_id' => $memberB,
+                    'numerator' => 5,
+                    'denominator' => 4,
+                    'rate_date' => '2026-06-30',
+                    'source' => 'Taux de clôture contrôlé',
+                ],
+            ],
+            1
+        );
+        foreach ([
+            [$memberA, $receivableA, '1300', 'Créances inter-entités', 'actif'],
+            [$memberA, $salesA, '3000', 'Produits consolidés', 'produit'],
+            [$memberB, $payableB, '2300', 'Dettes inter-entités', 'passif'],
+            [$memberB, $expenseB, '4000', 'Charges consolidées', 'charge'],
+        ] as [$member, $account, $target, $label, $type]) {
+            $service->saveMapping(
+                $group, $member, $account, $target, $label, $type, 0, 1
+            );
+        }
+        $service->saveIntercompanyPair(
+            $group,
+            'Créance / dette réciproque',
+            $memberA,
+            $receivableA,
+            $memberB,
+            $payableB,
+            1
+        );
+        $statutoryEntries = (int) $pdo->query(
+            'SELECT COUNT(*) FROM ecritures'
+        )->fetchColumn();
+        $elimination = $service->createElimination(
+            $group,
+            $period,
+            'ELIM-001',
+            'Élimination des soldes réciproques',
+            'Créance et dette confirmées par les deux entités.',
+            [
+                [
+                    'target_account' => '2300',
+                    'label' => 'Extourne de la dette',
+                    'debit_cents' => 10000,
+                    'credit_cents' => 0,
+                ],
+                [
+                    'target_account' => '1300',
+                    'label' => 'Extourne de la créance',
+                    'debit_cents' => 0,
+                    'credit_cents' => 10000,
+                ],
+            ],
+            1
+        );
+        $this->same(
+            $statutoryEntries,
+            (int) $pdo->query('SELECT COUNT(*) FROM ecritures')->fetchColumn(),
+            'élimination absente des grands livres statutaires'
+        );
+        $workspace = $service->read([$group], $group, $period);
+        $this->true(
+            (bool) $workspace['balance']['formula_verified'],
+            'somme des balances et éliminations égale la consolidation'
+        );
+        $receivableRow = array_values(array_filter(
+            $workspace['balance']['rows'],
+            static fn (array $row): bool => $row['account'] === '1300'
+        ))[0];
+        $this->same(0, $receivableRow['consolidated_cents'], 'créance inter-entités éliminée');
+        $this->same(
+            $ids['dossier_a'],
+            $receivableRow['sources'][0]['dossier_id'],
+            'montant consolidé drillable jusqu’à la balance source'
+        );
+        $this->same(
+            0,
+            $workspace['reconciliation'][0]['difference_cents'],
+            'comptes inter-entités réconciliés après conversion'
+        );
+        $this->same(
+            [],
+            $workspace['balance']['unmapped_accounts'],
+            'tous les comptes mouvementés sont explicitement mappés'
+        );
+        $export = $service->export($group, $period);
+        $exported = json_decode($export['content'], true, 512, JSON_THROW_ON_ERROR);
+        $this->same(
+            $export['hash'],
+            $exported['sha256'],
+            'export autonome muni de son empreinte SHA-256'
+        );
+        $this->same(2, count($exported['members']), 'export contient les deux entités sources');
+        $this->throws(
+            fn () => $pdo->exec(
+                "UPDATE lignes_elimination_consolidation
+                 SET debit_centimes = 1 WHERE elimination_id = {$elimination}"
+            ),
+            'élimination validée immuable'
+        );
+
+        $pdo->prepare(
+            'INSERT INTO utilisateurs (email, mot_de_passe) VALUES (?, ?)'
+        )->execute(['auditeur-consolidation@example.test', password_hash('secret', PASSWORD_DEFAULT)]);
+        $userId = (int) $pdo->lastInsertId();
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_organisation
+             (utilisateur_id, organisation_id, role_id) VALUES (?, ?, 6)'
+        )->execute([$userId, $ids['organisation_a']]);
+        $session = new ArraySessionStore([
+            'user_id' => $userId,
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+        ]);
+        $auth = new AuthService(
+            new UserRepository($pdo),
+            new LoginThrottle($pdo, 5, 900),
+            $audit,
+            $session
+        );
+        $controller = new ConsolidationApiController(
+            $session,
+            $auth,
+            new AccessControl($pdo),
+            $service,
+            new ConsolidationInputValidator()
+        );
+        $hidden = $controller->show(new Request('GET', '/api/v1/consolidation'));
+        $this->same(
+            [],
+            $this->responseJson($hidden)['data']['groups'],
+            'groupe entièrement masqué sans droit sur chaque entité'
+        );
+        $this->throws(
+            fn () => $controller->show(new Request(
+                'GET',
+                '/api/v1/consolidation',
+                query: ['group_id' => (string) $group]
+            )),
+            'accès direct au groupe refusé sans fuite horizontale'
+        );
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_organisation
+             (utilisateur_id, organisation_id, role_id) VALUES (?, ?, 6)'
+        )->execute([$userId, $ids['organisation_b']]);
+        $visible = $controller->show(new Request(
+            'GET',
+            '/api/v1/consolidation',
+            query: [
+                'group_id' => (string) $group,
+                'period_id' => (string) $period,
+            ]
+        ));
+        $this->same(200, $visible->status, 'lecture autorisée après droit explicite sur chaque entité');
+        $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après consolidation');
+    }
+
     private function billingTests(): void
     {
         [$pdo, $runner] = $this->database();
@@ -9637,9 +9995,12 @@ XML;
 }
 
 $suite = 'all';
+$caseFilter = '';
 foreach (array_slice($argv, 1) as $argument) {
     if (str_starts_with($argument, '--suite=')) {
         $suite = substr($argument, strlen('--suite='));
+    } elseif (str_starts_with($argument, '--case=')) {
+        $caseFilter = substr($argument, strlen('--case='));
     }
 }
-exit((new Tests())->run($suite));
+exit((new Tests())->run($suite, $caseFilter));

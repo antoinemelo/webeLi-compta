@@ -3420,6 +3420,269 @@ CREATE TRIGGER trg_version_modele_immuable_delete
 BEFORE DELETE ON versions_modeles_exercice WHEN OLD.statut = 'publie'
 BEGIN SELECT RAISE(ABORT, 'version de modèle publiée non supprimable'); END;
 
+-- ENTITÉS LÉGALES ET CONSOLIDATION
+
+CREATE TABLE attributs_juridiques_organisation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    date_debut TEXT NOT NULL,
+    date_fin TEXT,
+    raison_sociale TEXT NOT NULL,
+    forme_juridique TEXT NOT NULL DEFAULT '',
+    numero_ide TEXT NOT NULL DEFAULT '',
+    adresse_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(adresse_json)),
+    source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    CHECK (date_fin IS NULL OR date_fin >= date_debut),
+    UNIQUE (organisation_id, date_debut)
+);
+
+CREATE TABLE groupes_consolidation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_pilote_id INTEGER NOT NULL
+        REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_pilote_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    code TEXT NOT NULL COLLATE NOCASE,
+    libelle TEXT NOT NULL,
+    devise TEXT NOT NULL CHECK (length(devise) = 3),
+    actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (organisation_pilote_id, code)
+);
+
+CREATE TABLE membres_groupe_consolidation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    groupe_id INTEGER NOT NULL REFERENCES groupes_consolidation(id) ON DELETE RESTRICT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    date_debut TEXT NOT NULL,
+    date_fin TEXT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    CHECK (date_fin IS NULL OR date_fin >= date_debut),
+    UNIQUE (groupe_id, dossier_id)
+);
+
+CREATE TABLE periodes_consolidation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    groupe_id INTEGER NOT NULL REFERENCES groupes_consolidation(id) ON DELETE RESTRICT,
+    libelle TEXT NOT NULL,
+    date_debut TEXT NOT NULL,
+    date_fin TEXT NOT NULL,
+    statut TEXT NOT NULL DEFAULT 'ouverte'
+        CHECK (statut IN ('ouverte', 'cloturee')),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    cloturee_le TEXT,
+    cloturee_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    CHECK (date_fin >= date_debut),
+    UNIQUE (groupe_id, date_debut, date_fin)
+);
+
+CREATE TABLE conversions_membres_consolidation (
+    periode_id INTEGER NOT NULL
+        REFERENCES periodes_consolidation(id) ON DELETE RESTRICT,
+    membre_id INTEGER NOT NULL
+        REFERENCES membres_groupe_consolidation(id) ON DELETE RESTRICT,
+    devise_source TEXT NOT NULL CHECK (length(devise_source) = 3),
+    devise_cible TEXT NOT NULL CHECK (length(devise_cible) = 3),
+    numerateur INTEGER NOT NULL CHECK (numerateur > 0),
+    denominateur INTEGER NOT NULL CHECK (denominateur > 0),
+    date_taux TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    PRIMARY KEY (periode_id, membre_id)
+);
+
+CREATE TABLE mappings_comptes_consolidation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    groupe_id INTEGER NOT NULL REFERENCES groupes_consolidation(id) ON DELETE RESTRICT,
+    membre_id INTEGER NOT NULL
+        REFERENCES membres_groupe_consolidation(id) ON DELETE RESTRICT,
+    compte_source_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_cible TEXT NOT NULL COLLATE NOCASE,
+    libelle_cible TEXT NOT NULL,
+    type_cible TEXT NOT NULL CHECK (
+        type_cible IN ('actif', 'passif', 'fonds_propres', 'produit', 'charge', 'hors_bilan')
+    ),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (groupe_id, membre_id, compte_source_id)
+);
+
+CREATE TABLE paires_comptes_interentites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    groupe_id INTEGER NOT NULL REFERENCES groupes_consolidation(id) ON DELETE RESTRICT,
+    libelle TEXT NOT NULL,
+    membre_gauche_id INTEGER NOT NULL
+        REFERENCES membres_groupe_consolidation(id) ON DELETE RESTRICT,
+    compte_gauche_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    membre_droite_id INTEGER NOT NULL
+        REFERENCES membres_groupe_consolidation(id) ON DELETE RESTRICT,
+    compte_droite_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    CHECK (membre_gauche_id <> membre_droite_id),
+    UNIQUE (
+        groupe_id, membre_gauche_id, compte_gauche_id,
+        membre_droite_id, compte_droite_id
+    )
+);
+
+CREATE TABLE eliminations_consolidation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    periode_id INTEGER NOT NULL
+        REFERENCES periodes_consolidation(id) ON DELETE RESTRICT,
+    reference TEXT NOT NULL,
+    libelle TEXT NOT NULL,
+    justification TEXT NOT NULL CHECK (length(trim(justification)) > 0),
+    statut TEXT NOT NULL DEFAULT 'brouillon'
+        CHECK (statut IN ('brouillon', 'validee')),
+    validee_le TEXT,
+    validee_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    UNIQUE (periode_id, reference)
+);
+
+CREATE TABLE lignes_elimination_consolidation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    elimination_id INTEGER NOT NULL
+        REFERENCES eliminations_consolidation(id) ON DELETE RESTRICT,
+    compte_cible TEXT NOT NULL COLLATE NOCASE,
+    libelle TEXT NOT NULL DEFAULT '',
+    debit_centimes INTEGER NOT NULL DEFAULT 0 CHECK (debit_centimes >= 0),
+    credit_centimes INTEGER NOT NULL DEFAULT 0 CHECK (credit_centimes >= 0),
+    ordre INTEGER NOT NULL CHECK (ordre > 0),
+    CHECK (
+        (debit_centimes > 0 AND credit_centimes = 0)
+        OR (credit_centimes > 0 AND debit_centimes = 0)
+    ),
+    UNIQUE (elimination_id, ordre)
+);
+
+CREATE INDEX idx_membres_consolidation_scope
+    ON membres_groupe_consolidation (groupe_id, organisation_id, dossier_id);
+CREATE INDEX idx_mappings_consolidation_cible
+    ON mappings_comptes_consolidation (groupe_id, compte_cible);
+CREATE INDEX idx_eliminations_consolidation_periode
+    ON eliminations_consolidation (periode_id);
+
+CREATE TRIGGER trg_attributs_juridiques_chevauchement
+BEFORE INSERT ON attributs_juridiques_organisation
+BEGIN
+    SELECT CASE WHEN EXISTS (
+        SELECT 1 FROM attributs_juridiques_organisation a
+        WHERE a.organisation_id = NEW.organisation_id
+          AND COALESCE(a.date_fin, '9999-12-31') >= NEW.date_debut
+          AND COALESCE(NEW.date_fin, '9999-12-31') >= a.date_debut
+    ) THEN RAISE(ABORT, 'chevauchement d’attributs juridiques') END;
+END;
+
+CREATE TRIGGER trg_attributs_juridiques_immuables
+BEFORE UPDATE ON attributs_juridiques_organisation
+WHEN
+    NEW.organisation_id <> OLD.organisation_id
+    OR NEW.date_debut <> OLD.date_debut
+    OR OLD.date_fin IS NOT NULL
+    OR NEW.date_fin IS NULL
+    OR NEW.date_fin < NEW.date_debut
+    OR NEW.raison_sociale <> OLD.raison_sociale
+    OR NEW.forme_juridique <> OLD.forme_juridique
+    OR NEW.numero_ide <> OLD.numero_ide
+    OR NEW.adresse_json <> OLD.adresse_json
+    OR NEW.source <> OLD.source
+BEGIN SELECT RAISE(ABORT, 'attribut juridique daté immuable'); END;
+
+CREATE TRIGGER trg_attributs_juridiques_non_supprimables
+BEFORE DELETE ON attributs_juridiques_organisation
+BEGIN SELECT RAISE(ABORT, 'attribut juridique daté non supprimable'); END;
+
+CREATE TRIGGER trg_groupe_consolidation_scope
+BEFORE INSERT ON groupes_consolidation
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM dossiers d
+        WHERE d.id = NEW.dossier_pilote_id
+          AND d.organisation_id = NEW.organisation_pilote_id
+    ) THEN RAISE(ABORT, 'scope du groupe de consolidation invalide') END;
+END;
+
+CREATE TRIGGER trg_membre_consolidation_scope
+BEFORE INSERT ON membres_groupe_consolidation
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM dossiers d
+        WHERE d.id = NEW.dossier_id AND d.organisation_id = NEW.organisation_id
+    ) THEN RAISE(ABORT, 'scope du membre de consolidation invalide') END;
+END;
+
+CREATE TRIGGER trg_conversion_consolidation_scope
+BEFORE INSERT ON conversions_membres_consolidation
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM periodes_consolidation p
+        JOIN groupes_consolidation g ON g.id = p.groupe_id
+        JOIN membres_groupe_consolidation m
+          ON m.id = NEW.membre_id AND m.groupe_id = g.id
+        JOIN dossiers d ON d.id = m.dossier_id
+        WHERE p.id = NEW.periode_id
+          AND d.monnaie = NEW.devise_source
+          AND g.devise = NEW.devise_cible
+    ) THEN RAISE(ABORT, 'conversion de consolidation hors scope') END;
+END;
+
+CREATE TRIGGER trg_mapping_consolidation_scope
+BEFORE INSERT ON mappings_comptes_consolidation
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1
+        FROM membres_groupe_consolidation m
+        JOIN comptes c ON c.id = NEW.compte_source_id
+        WHERE m.id = NEW.membre_id AND m.groupe_id = NEW.groupe_id
+          AND c.organisation_id = m.organisation_id
+          AND c.dossier_id = m.dossier_id
+    ) THEN RAISE(ABORT, 'mapping de consolidation hors scope') END;
+END;
+
+CREATE TRIGGER trg_elimination_consolidation_immuable
+BEFORE UPDATE ON eliminations_consolidation WHEN OLD.statut = 'validee'
+BEGIN SELECT RAISE(ABORT, 'élimination validée immuable'); END;
+
+CREATE TRIGGER trg_elimination_consolidation_non_supprimable
+BEFORE DELETE ON eliminations_consolidation
+BEGIN SELECT RAISE(ABORT, 'élimination validée non supprimable'); END;
+
+CREATE TRIGGER trg_ligne_elimination_consolidation_immuable
+BEFORE UPDATE ON lignes_elimination_consolidation WHEN EXISTS (
+    SELECT 1 FROM eliminations_consolidation e
+    WHERE e.id = OLD.elimination_id AND e.statut = 'validee'
+)
+BEGIN SELECT RAISE(ABORT, 'ligne d’élimination validée immuable'); END;
+
+CREATE TRIGGER trg_ligne_elimination_consolidation_non_supprimable
+BEFORE DELETE ON lignes_elimination_consolidation WHEN EXISTS (
+    SELECT 1 FROM eliminations_consolidation e
+    WHERE e.id = OLD.elimination_id AND e.statut = 'validee'
+)
+BEGIN SELECT RAISE(ABORT, 'ligne d’élimination validée non supprimable'); END;
+
+CREATE TRIGGER trg_ligne_elimination_consolidation_non_ajoutable
+BEFORE INSERT ON lignes_elimination_consolidation WHEN EXISTS (
+    SELECT 1 FROM eliminations_consolidation e
+    WHERE e.id = NEW.elimination_id AND e.statut = 'validee'
+)
+BEGIN SELECT RAISE(ABORT, 'élimination validée non extensible'); END;
+
 -- RÉFÉRENTIELS INITIAUX
 
 INSERT INTO "roles" ("id", "code", "libelle") VALUES (1, 'administrateur', 'Administrateur');

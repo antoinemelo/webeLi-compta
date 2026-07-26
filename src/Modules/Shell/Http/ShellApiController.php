@@ -269,6 +269,7 @@ final class ShellApiController
                     ['key' => 'configuration', 'method' => 'GET', 'path' => '/configuration'],
                     ['key' => 'liquidities', 'method' => 'GET', 'path' => '/liquidites'],
                     ['key' => 'assets', 'method' => 'GET', 'path' => '/accounting/assets'],
+                    ['key' => 'consolidation', 'method' => 'GET', 'path' => '/consolidation'],
                 ],
             ],
             'instance' => $this->config->string('instance_id'),

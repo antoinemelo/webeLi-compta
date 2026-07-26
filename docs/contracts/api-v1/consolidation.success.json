@@ -1,0 +1,40 @@
+{
+  "data": {
+    "groups": [
+      {
+        "id": 1,
+        "code": "GROUPE",
+        "label": "Groupe exemple",
+        "currency": "CHF",
+        "version": 1
+      }
+    ],
+    "selected_group": {
+      "id": 1,
+      "code": "GROUPE",
+      "label": "Groupe exemple",
+      "currency": "CHF",
+      "version": 1
+    },
+    "periods": [],
+    "selected_period": null,
+    "members": [],
+    "mappings": [],
+    "intercompany_pairs": [],
+    "legal_histories": [],
+    "balance": null,
+    "reconciliation": [],
+    "eliminations": [],
+    "capabilities": {
+      "setup": true,
+      "validate": true,
+      "export": true,
+      "create_group": true
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "contract-example-consolidation"
+  },
+  "errors": []
+}

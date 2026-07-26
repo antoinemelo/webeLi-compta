@@ -9,6 +9,7 @@ use Compta\Core\Database\MigrationRunner;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
+use Compta\Modules\Consolidation\ConsolidationService;
 use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Pedagogie\PedagogyService;
@@ -117,6 +118,69 @@ $post('expense', 'Charge administrative', [
     ['compte_id' => $accountId('6500'), 'debit_centimes' => 30000],
     ['compte_id' => $accountId('2000'), 'credit_centimes' => 30000],
 ]);
+$consolidation = new ConsolidationService($pdo, $audit);
+$groupId = $consolidation->createGroup(
+    $organisationA,
+    $dossierA,
+    'ALPHA',
+    'Groupe Alpha',
+    'CHF',
+    '2026-01-01',
+    $administratorId
+);
+$memberId = (int) $pdo->query(
+    "SELECT id FROM membres_groupe_consolidation
+     WHERE groupe_id = {$groupId} AND dossier_id = {$dossierA}"
+)->fetchColumn();
+$periodId = $consolidation->createPeriod(
+    $groupId,
+    'Exercice 2026',
+    '2026-01-01',
+    '2026-12-31',
+    [[
+        'member_id' => $memberId,
+        'numerator' => 1,
+        'denominator' => 1,
+        'rate_date' => '2026-12-31',
+        'source' => 'Devise de consolidation',
+    ]],
+    $administratorId
+);
+foreach ([
+    ['1020', '1020', 'Liquidités', 'actif'],
+    ['1100', '1100', 'Créances', 'actif'],
+    ['2000', '2000', 'Dettes', 'passif'],
+    ['2800', '2800', 'Capital', 'fonds_propres'],
+    ['3400', '3400', 'Produits', 'produit'],
+    ['6500', '6500', 'Charges administratives', 'charge'],
+] as [$source, $target, $label, $type]) {
+    $consolidation->saveMapping(
+        $groupId,
+        $memberId,
+        $accountId($source),
+        $target,
+        $label,
+        $type,
+        0,
+        $administratorId
+    );
+}
+$consolidation->saveLegalAttributes(
+    $organisationA,
+    '2026-01-01',
+    'Entreprise Alpha SA',
+    'SA',
+    'CHE-123.456.789',
+    [
+        'line1' => 'Rue du Test 1',
+        'postal_code' => '1200',
+        'city' => 'Genève',
+        'canton' => 'GE',
+        'country' => 'CH',
+    ],
+    'Registre du commerce — fixture E2E',
+    $administratorId
+);
 (new TreasuryAccountService($pdo, $audit))->create([
     'organisation_id' => $organisationA,
     'dossier_id' => $dossierA,

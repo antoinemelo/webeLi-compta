@@ -23,6 +23,9 @@ use Compta\Modules\Compta\ClosingAndTaxService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\FinancialReportingService;
 use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Consolidation\ConsolidationApiController;
+use Compta\Modules\Consolidation\ConsolidationInputValidator;
+use Compta\Modules\Consolidation\ConsolidationService;
 use Compta\Modules\Configuration\Application\ConfigurationService;
 use Compta\Modules\Configuration\Application\ManagedReferencesService;
 use Compta\Modules\Configuration\Application\ModuleAccessService;
@@ -264,6 +267,13 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         $pedagogy,
         new PedagogyInputValidator()
+    ),
+    new ConsolidationApiController(
+        $session,
+        $auth,
+        $access,
+        new ConsolidationService($pdo, $audit),
+        new ConsolidationInputValidator()
     )
 );
 $shellPage = new ShellPageController(

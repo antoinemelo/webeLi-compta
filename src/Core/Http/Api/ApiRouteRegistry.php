@@ -8,6 +8,7 @@ use Compta\Core\Http\Response;
 use Compta\Core\Http\Router;
 use Compta\Core\Security\Csrf;
 use Compta\Modules\Compta\AccountingApiController;
+use Compta\Modules\Consolidation\ConsolidationApiController;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Facturation\Http\BillingApiController;
@@ -33,6 +34,7 @@ final class ApiRouteRegistry
         private readonly ?AssetApiController $assets = null,
         private readonly ?PayrollApiController $payroll = null,
         private readonly ?PedagogyApiController $pedagogy = null,
+        private readonly ?ConsolidationApiController $consolidation = null,
     ) {
     }
 
@@ -236,6 +238,18 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/accounting/tax-file/adjustments/status', $this->accounting->setTaxAdjustmentStatus(...));
             $this->add($router, 'POST', '/api/v1/accounting/archives', $this->accounting->archive(...));
             $this->add($router, 'GET', '/api/v1/accounting/archives/download', $this->accounting->downloadArchive(...));
+        }
+        if ($this->consolidation !== null) {
+            $this->add($router, 'GET', '/api/v1/consolidation', $this->consolidation->show(...));
+            $this->add($router, 'GET', '/api/v1/consolidation/export', $this->consolidation->export(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/groups', $this->consolidation->createGroup(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/groups/members', $this->consolidation->addMember(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/legal-attributes', $this->consolidation->saveLegalAttributes(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/periods', $this->consolidation->createPeriod(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/periods/close', $this->consolidation->closePeriod(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/mappings', $this->consolidation->saveMapping(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/intercompany-pairs', $this->consolidation->savePair(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/eliminations', $this->consolidation->createElimination(...));
         }
         if ($this->assets !== null) {
             $this->add(
