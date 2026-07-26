@@ -65,7 +65,7 @@ final class ShellApiController
         $userId = $this->requireUser();
         $scope = $this->optionalScope($userId);
         $permissions = $scope === null
-            ? []
+            ? $this->reads->installationPermissions($userId)
             : $this->reads->permissions($userId, $scope[0], $scope[1]);
         $enabledModules = $scope === null
             ? []
@@ -211,7 +211,7 @@ final class ShellApiController
         }
         $scope = $this->optionalScope($userId);
         $selection = null;
-        $permissions = [];
+        $permissions = $this->reads->installationPermissions($userId);
         $enabledModules = [];
         if ($scope !== null) {
             [$organisationId, $dossierId] = $scope;
@@ -267,6 +267,7 @@ final class ShellApiController
                     ['key' => 'references', 'method' => 'GET', 'path' => '/references'],
                     ['key' => 'dashboard', 'method' => 'GET', 'path' => '/dashboard'],
                     ['key' => 'configuration', 'method' => 'GET', 'path' => '/configuration'],
+                    ['key' => 'organisations', 'method' => 'GET', 'path' => '/structures/organisations'],
                     ['key' => 'liquidities', 'method' => 'GET', 'path' => '/liquidites'],
                     ['key' => 'assets', 'method' => 'GET', 'path' => '/accounting/assets'],
                     ['key' => 'consolidation', 'method' => 'GET', 'path' => '/consolidation'],

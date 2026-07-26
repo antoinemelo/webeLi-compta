@@ -41,25 +41,33 @@ final class ShellReadService
     public function permissions(int $userId, int $organisationId, int $dossierId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT DISTINCT p.code
-             FROM permissions p
-             JOIN role_permissions rp ON rp.permission_id = p.id
-             JOIN (
-                 SELECT role_id
-                 FROM utilisateur_roles_installation
-                 WHERE utilisateur_id = :installation_user
+            'SELECT code FROM (
+                 SELECT DISTINCT p.code
+                 FROM permissions p
+                 JOIN role_permissions rp ON rp.permission_id = p.id
+                 JOIN utilisateur_roles_installation ur ON ur.role_id = rp.role_id
+                 WHERE ur.utilisateur_id = :installation_user
                  UNION
-                 SELECT role_id
-                 FROM utilisateur_roles_organisation
-                 WHERE utilisateur_id = :organisation_user
-                   AND organisation_id = :organisation
+                 SELECT DISTINCT p.code
+                 FROM permissions p
+                 JOIN role_permissions rp ON rp.permission_id = p.id
+                 JOIN utilisateur_roles_organisation ur ON ur.role_id = rp.role_id
+                 WHERE ur.utilisateur_id = :organisation_user
+                   AND ur.organisation_id = :organisation
+                   AND p.code <> \'installation.admin\'
                  UNION
-                 SELECT role_id
-                 FROM utilisateur_roles_dossier
-                 WHERE utilisateur_id = :dossier_user
-                   AND dossier_id = :dossier
-             ) assigned ON assigned.role_id = rp.role_id
-             ORDER BY p.code'
+                 SELECT DISTINCT p.code
+                 FROM permissions p
+                 JOIN role_permissions rp ON rp.permission_id = p.id
+                 JOIN utilisateur_roles_dossier ur ON ur.role_id = rp.role_id
+                 WHERE ur.utilisateur_id = :dossier_user
+                   AND ur.dossier_id = :dossier
+                   AND p.code NOT IN (
+                       \'installation.admin\',
+                       \'organisation.view\',
+                       \'organisation.manage\'
+                   )
+             ) ORDER BY code'
         );
         $stmt->execute([
             'installation_user' => $userId,
@@ -67,6 +75,32 @@ final class ShellReadService
             'organisation' => $organisationId,
             'dossier_user' => $userId,
             'dossier' => $dossierId,
+        ]);
+        return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /** @return list<string> */
+    public function installationPermissions(int $userId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT code FROM (
+                 SELECT DISTINCT p.code
+                 FROM permissions p
+                 JOIN role_permissions rp ON rp.permission_id = p.id
+                 JOIN utilisateur_roles_installation ur ON ur.role_id = rp.role_id
+                 WHERE ur.utilisateur_id = :installation_user
+                 UNION
+                 SELECT DISTINCT p.code
+                 FROM permissions p
+                 JOIN role_permissions rp ON rp.permission_id = p.id
+                 JOIN utilisateur_roles_organisation ur ON ur.role_id = rp.role_id
+                 WHERE ur.utilisateur_id = :organisation_user
+                   AND p.code = \'organisation.manage\'
+             ) ORDER BY code'
+        );
+        $stmt->execute([
+            'installation_user' => $userId,
+            'organisation_user' => $userId,
         ]);
         return array_map('strval', $stmt->fetchAll(PDO::FETCH_COLUMN));
     }
@@ -257,6 +291,11 @@ final class ShellReadService
             $definitions,
             static fn (array $item): bool => (
                 $item['permission'] === null
+                || ($item['key'] === 'settings'
+                    && (
+                        in_array('installation.admin', $permissions, true)
+                        || in_array('organisation.manage', $permissions, true)
+                    ))
                 || ($hasDossier && in_array($item['permission'], $permissions, true))
             ) && (
                 $item['module'] === null

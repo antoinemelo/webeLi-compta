@@ -261,7 +261,14 @@ test('configuration des modules et référentiels', async ({ page }) => {
 
   const configurationNavigation = page.getByLabel('Navigation Configuration');
   expect(await configurationNavigation.getByRole('link').allTextContents()).toEqual([
-    'Entité', 'Modules', 'Paiements', 'Référentiels', 'Salaires', 'Accès', 'Audit'
+    'Organisations et dossiers',
+    'Entité',
+    'Modules',
+    'Paiements',
+    'Référentiels',
+    'Salaires',
+    'Accès',
+    'Audit'
   ]);
   await configurationNavigation.getByRole('link', { name: 'Salaires', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Paramètres salariaux' })).toBeVisible();
@@ -284,6 +291,73 @@ test('configuration des modules et référentiels', async ({ page }) => {
 
   await page.getByRole('link', { name: 'Accès', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Rôles du dossier' })).toBeVisible();
+});
+
+test('registre des organisations : création, historique et cycle de vie', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 900 });
+  await loginAsAdministrator(page);
+  await page.goto('/e2e/app/configuration/structures');
+  await expect(page.getByRole('heading', {
+    name: 'Organisations et dossiers',
+    exact: true
+  })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Créer une organisation' }).click();
+  const creation = page.locator('form').filter({
+    has: page.getByRole('heading', { name: 'Créer une organisation' })
+  });
+  await creation.getByLabel('Nom usuel').fill('Coopérative E2E');
+  await creation.getByLabel('Raison sociale').fill('Coopérative E2E SA');
+  await creation.getByLabel('Source').fill('Extrait RC E2E');
+  await creation.getByLabel('Forme juridique').fill('SA');
+  await creation.getByLabel('IDE / UID').fill('CHE-555.444.333');
+  await creation.getByRole('button', { name: 'Créer', exact: true }).click();
+
+  await expect(page.getByRole('heading', {
+    name: 'Coopérative E2E',
+    exact: true
+  })).toBeVisible();
+  await expect(page.getByText('Extrait RC E2E', { exact: false })).toBeVisible();
+
+  await page.getByLabel('Nom usuel').last().fill('Coopérative E2E Groupe');
+  await page.getByRole('button', { name: 'Enregistrer', exact: true }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Coopérative E2E Groupe',
+    exact: true
+  })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Archiver', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Réactiver', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Réactiver', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Archiver', exact: true })).toBeVisible();
+  await expect(page.getByText('Suppression protégée')).toBeVisible();
+  await expect(page.getByRole('button', {
+    name: 'Supprimer définitivement'
+  })).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Créer une organisation' }).click();
+  const emptyCreation = page.locator('form').filter({
+    has: page.getByRole('heading', { name: 'Créer une organisation' })
+  });
+  await emptyCreation.getByLabel('Nom usuel').fill('Bac à sable E2E');
+  await emptyCreation.getByLabel('Nature').selectOption('pedagogique');
+  await emptyCreation.getByRole('button', { name: 'Créer', exact: true }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Bac à sable E2E',
+    exact: true
+  })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Supprimer définitivement' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('organisations vides');
+  await dialog.getByRole('button', { name: 'Supprimer', exact: true }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Bac à sable E2E',
+    exact: true
+  })).toHaveCount(0);
+  await expect(page.getByText(
+    'Organisation vide supprimée. Son audit est conservé.'
+  )).toBeVisible();
 });
 
 test('journal, extrait et plan comptable de Configuration utilisent le parcours Vue unique', async ({

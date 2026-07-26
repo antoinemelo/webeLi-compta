@@ -53,6 +53,11 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
     { key: 'annual', label: 'Annuels', path: '/salaires/annuels' }
   ],
   settings: [
+    {
+      key: 'structures',
+      label: 'Organisations et dossiers',
+      path: '/configuration/structures'
+    },
     { key: 'entity', label: 'Entité', path: '/configuration' },
     { key: 'modules', label: 'Modules', path: '/configuration/modules' },
     { key: 'payments', label: 'Paiements', path: '/configuration/paiements' },

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
+import OrganisationRegistryPanel from '@/components/configuration/OrganisationRegistryPanel.vue';
 import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
@@ -26,6 +27,9 @@ const activeTab = computed(() => (
 const configuration = computed(() => store.configuration);
 const managedReferences = computed(() => store.managedReferences);
 const canManage = computed(() => context.can('dossier.manage'));
+const canManageRegistry = computed(() => (
+  context.can('installation.admin') || context.can('organisation.manage')
+));
 const currentUserId = computed(() => context.context?.user.id ?? 0);
 const today = new Date().toISOString().slice(0, 10);
 type ReferenceSection =
@@ -722,9 +726,24 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
     </div>
   </header>
 
-  <CompactTabs v-if="context.selection && canManage" :items="tabs" label="Navigation Configuration" />
+  <CompactTabs
+    v-if="(context.selection && canManage) || canManageRegistry"
+    :items="tabs"
+    label="Navigation Configuration"
+  />
 
-  <section v-if="!context.selection" class="access-message" role="status">
+  <OrganisationRegistryPanel
+    v-if="activeTab === 'structures' && canManageRegistry"
+  />
+  <section
+    v-else-if="activeTab === 'structures'"
+    class="access-message denied"
+    role="alert"
+  >
+    <strong>Accès refusé</strong>
+    <p>La gestion d’une organisation ou de l’installation est requise.</p>
+  </section>
+  <section v-else-if="!context.selection" class="access-message" role="status">
     <strong>Contexte requis</strong>
     <p>Sélectionnez un dossier avant d’ouvrir sa configuration.</p>
   </section>
@@ -750,6 +769,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           </div>
           <span class="status-badge status-ouverte">Version {{ identity.organization_version }}</span>
         </div>
+        <p class="help-text">
+          La raison sociale, la forme, l’IDE et l’adresse sont pilotés par
+          <RouterLink to="/configuration/structures">
+            l’historique daté du registre des organisations
+          </RouterLink>.
+        </p>
         <div class="configuration-grid">
           <FormField id="organization-name" label="Nom usuel">
             <template #default="{ describedBy }">
@@ -758,47 +783,47 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           </FormField>
           <FormField id="legal-name" label="Raison sociale">
             <template #default="{ describedBy }">
-              <input id="legal-name" v-model="identity.legal_name" :aria-describedby="describedBy">
+              <input id="legal-name" v-model="identity.legal_name" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="legal-form" label="Forme juridique">
             <template #default="{ describedBy }">
-              <input id="legal-form" v-model="identity.legal_form" :aria-describedby="describedBy">
+              <input id="legal-form" v-model="identity.legal_form" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="uid" label="Numéro IDE / UID">
             <template #default="{ describedBy }">
-              <input id="uid" v-model="identity.uid" :aria-describedby="describedBy">
+              <input id="uid" v-model="identity.uid" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="address-line1" label="Adresse">
             <template #default="{ describedBy }">
-              <input id="address-line1" v-model="identity.address_line1" :aria-describedby="describedBy">
+              <input id="address-line1" v-model="identity.address_line1" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="address-line2" label="Complément">
             <template #default="{ describedBy }">
-              <input id="address-line2" v-model="identity.address_line2" :aria-describedby="describedBy">
+              <input id="address-line2" v-model="identity.address_line2" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="postal-code" label="NPA">
             <template #default="{ describedBy }">
-              <input id="postal-code" v-model="identity.postal_code" :aria-describedby="describedBy">
+              <input id="postal-code" v-model="identity.postal_code" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="city" label="Localité">
             <template #default="{ describedBy }">
-              <input id="city" v-model="identity.city" :aria-describedby="describedBy">
+              <input id="city" v-model="identity.city" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="canton" label="Canton">
             <template #default="{ describedBy }">
-              <input id="canton" v-model="identity.canton" maxlength="2" :aria-describedby="describedBy">
+              <input id="canton" v-model="identity.canton" maxlength="2" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="country" label="Pays ISO">
             <template #default="{ describedBy }">
-              <input id="country" v-model="identity.country" maxlength="2" :aria-describedby="describedBy">
+              <input id="country" v-model="identity.country" maxlength="2" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="phone" label="Téléphone">

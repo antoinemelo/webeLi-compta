@@ -116,6 +116,61 @@ final class AccessControl
         return $stmt->fetchColumn() !== false;
     }
 
+    public function hasInstallationPermission(
+        int $userId,
+        string $permission,
+    ): bool {
+        $stmt = $this->pdo->prepare(
+            'SELECT 1
+             FROM utilisateur_roles_installation ur
+             JOIN role_permissions rp ON rp.role_id = ur.role_id
+             JOIN permissions p ON p.id = rp.permission_id
+             WHERE ur.utilisateur_id = ? AND p.code = ?
+             LIMIT 1'
+        );
+        $stmt->execute([$userId, $permission]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    public function hasOrganisationPermission(
+        int $userId,
+        int $organisationId,
+        string $permission,
+    ): bool {
+        if ($this->hasInstallationPermission($userId, $permission)) {
+            return true;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT 1
+             FROM utilisateur_roles_organisation ur
+             JOIN role_permissions rp ON rp.role_id = ur.role_id
+             JOIN permissions p ON p.id = rp.permission_id
+             WHERE ur.utilisateur_id = ?
+               AND ur.organisation_id = ?
+               AND p.code = ?
+             LIMIT 1'
+        );
+        $stmt->execute([$userId, $organisationId, $permission]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /** @return list<int> */
+    public function organisationIdsForPermission(
+        int $userId,
+        string $permission,
+    ): array {
+        $stmt = $this->pdo->prepare(
+            'SELECT DISTINCT ur.organisation_id
+             FROM utilisateur_roles_organisation ur
+             JOIN role_permissions rp ON rp.role_id = ur.role_id
+             JOIN permissions p ON p.id = rp.permission_id
+             WHERE ur.utilisateur_id = ? AND p.code = ?
+             ORDER BY ur.organisation_id'
+        );
+        $stmt->execute([$userId, $permission]);
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
     /** @return list<array<string, mixed>> */
     public function dossiersForUser(int $userId): array
     {

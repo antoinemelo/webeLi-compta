@@ -435,6 +435,7 @@ $scopes->grantRole($userId, 'lecteur', 'dossier', $dossierA);
 $scopes->grantRole($userId, 'lecteur', 'dossier', $dossierC);
 $scopes->grantRole($userId, 'apprenant', 'dossier', $dossierC);
 $scopes->grantRole($administratorId, 'administrateur', 'dossier', $dossierA);
+$scopes->grantRole($administratorId, 'administrateur', 'installation');
 $scopes->grantRole($administratorId, 'formateur', 'dossier', $dossierC);
 
 $pedagogy = new PedagogyService($pdo, $audit, $entries);

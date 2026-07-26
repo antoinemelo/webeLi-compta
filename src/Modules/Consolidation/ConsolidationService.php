@@ -5,6 +5,7 @@ namespace Compta\Modules\Consolidation;
 
 use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Devises\ExchangeRateService;
+use Compta\Modules\Dossiers\OrganisationRegistryService;
 use DateTimeImmutable;
 use PDO;
 use Throwable;
@@ -165,90 +166,32 @@ final class ConsolidationService
         string $source,
         int $actorId,
     ): int {
-        $this->date($validFrom);
-        $legalName = trim($legalName);
-        $source = trim($source);
-        if ($legalName === '' || $source === '') {
-            throw new ConsolidationException(
-                'Raison sociale et source des attributs juridiques requises.'
-            );
+        $stmt = $this->pdo->prepare(
+            'SELECT version FROM organisations WHERE id = ?'
+        );
+        $stmt->execute([$organisationId]);
+        $version = $stmt->fetchColumn();
+        if ($version === false) {
+            throw new ConsolidationException('Organisation introuvable.');
         }
-        if (
-            trim($uid) !== ''
-            && (int) $this->scalar(
-                'SELECT COUNT(*) FROM organisations
-                 WHERE numero_ide = ? AND id <> ?',
-                [trim($uid), $organisationId]
-            ) > 0
-        ) {
-            throw new ConsolidationException(
-                'Ce numéro IDE est déjà attribué à une autre entité.'
-            );
+        try {
+            return (new OrganisationRegistryService($this->pdo, $this->audit))
+                ->saveLegalIdentity(
+                    $organisationId,
+                    (int) $version,
+                    [
+                        'valid_from' => $validFrom,
+                        'legal_name' => $legalName,
+                        'legal_form' => $legalForm,
+                        'uid' => $uid,
+                        'address' => $address,
+                        'source' => $source,
+                    ],
+                    $actorId
+                );
+        } catch (\Compta\Modules\Dossiers\OrganisationRegistryException $exception) {
+            throw new ConsolidationException($exception->getMessage());
         }
-        return $this->transaction(function () use (
-            $organisationId, $validFrom, $legalName, $legalForm, $uid,
-            $address, $source, $actorId
-        ): int {
-            $previous = $this->pdo->prepare(
-                'SELECT id, date_debut
-                 FROM attributs_juridiques_organisation
-                 WHERE organisation_id = ? AND date_fin IS NULL
-                 ORDER BY date_debut DESC LIMIT 1'
-            );
-            $previous->execute([$organisationId]);
-            $open = $previous->fetch();
-            if ($open !== false) {
-                if ((string) $open['date_debut'] >= $validFrom) {
-                    throw new ConsolidationException(
-                        'La nouvelle version doit commencer après la version courante.'
-                    );
-                }
-                $end = (new DateTimeImmutable($validFrom))
-                    ->modify('-1 day')->format('Y-m-d');
-                $this->pdo->prepare(
-                    'UPDATE attributs_juridiques_organisation
-                     SET date_fin = ? WHERE id = ?'
-                )->execute([$end, (int) $open['id']]);
-            }
-            $addressJson = json_encode(
-                $address,
-                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
-            );
-            $this->pdo->prepare(
-                'INSERT INTO attributs_juridiques_organisation
-                 (organisation_id, date_debut, raison_sociale, forme_juridique,
-                  numero_ide, adresse_json, source, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-            )->execute([
-                $organisationId, $validFrom, $legalName, trim($legalForm),
-                trim($uid), $addressJson, $source, $actorId,
-            ]);
-            $id = (int) $this->pdo->lastInsertId();
-            $this->pdo->prepare(
-                'UPDATE organisations
-                 SET raison_sociale = ?, forme_juridique = ?, numero_ide = ?,
-                     adresse_ligne1 = ?, adresse_ligne2 = ?, code_postal = ?,
-                     localite = ?, canton = ?, pays = ?,
-                     modifie_le = datetime(\'now\'), version = version + 1
-                 WHERE id = ?'
-            )->execute([
-                $legalName, trim($legalForm), trim($uid),
-                $address['line1'] ?? '', $address['line2'] ?? '',
-                $address['postal_code'] ?? '', $address['city'] ?? '',
-                $address['canton'] ?? '', $address['country'] ?? 'CH',
-                $organisationId,
-            ]);
-            $this->audit->log(
-                'consolidation.attributs_juridiques_dates',
-                $actorId,
-                $organisationId,
-                null,
-                'attribut_juridique',
-                (string) $id,
-                ['date_debut' => $validFrom, 'source' => $source]
-            );
-            return $id;
-        });
     }
 
     /**

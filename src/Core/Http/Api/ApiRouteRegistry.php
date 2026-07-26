@@ -11,6 +11,7 @@ use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Consolidation\ConsolidationApiController;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
+use Compta\Modules\Dossiers\Http\OrganisationApiController;
 use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Immobilisations\AssetApiController;
 use Compta\Modules\Pedagogie\PedagogyApiController;
@@ -35,6 +36,7 @@ final class ApiRouteRegistry
         private readonly ?PayrollApiController $payroll = null,
         private readonly ?PedagogyApiController $pedagogy = null,
         private readonly ?ConsolidationApiController $consolidation = null,
+        private readonly ?OrganisationApiController $organisations = null,
     ) {
     }
 
@@ -48,6 +50,40 @@ final class ApiRouteRegistry
         $this->add($router, 'GET', '/api/v1/exercises', $this->shell->exercises(...));
         $this->add($router, 'GET', '/api/v1/references', $this->shell->references(...));
         $this->add($router, 'GET', '/api/v1/dashboard', $this->dashboard->show(...));
+        if ($this->organisations !== null) {
+            $this->add(
+                $router, 'GET', '/api/v1/structures/organisations',
+                $this->organisations->list(...)
+            );
+            $this->add(
+                $router, 'GET', '/api/v1/structures/organisations/detail',
+                $this->organisations->detail(...)
+            );
+            $this->add(
+                $router, 'POST', '/api/v1/structures/organisations',
+                $this->organisations->create(...)
+            );
+            $this->add(
+                $router, 'POST', '/api/v1/structures/organisations/update',
+                $this->organisations->update(...)
+            );
+            $this->add(
+                $router, 'POST', '/api/v1/structures/organisations/legal-identities',
+                $this->organisations->saveLegalIdentity(...)
+            );
+            $this->add(
+                $router, 'POST', '/api/v1/structures/organisations/archive',
+                $this->organisations->archive(...)
+            );
+            $this->add(
+                $router, 'POST', '/api/v1/structures/organisations/reactivate',
+                $this->organisations->reactivate(...)
+            );
+            $this->add(
+                $router, 'POST', '/api/v1/structures/organisations/delete',
+                $this->organisations->delete(...)
+            );
+        }
         if ($this->configuration !== null) {
             $this->add(
                 $router,

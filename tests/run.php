@@ -43,6 +43,10 @@ use Compta\Modules\Dashboard\Application\DashboardReadService;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
 use Compta\Modules\Dossiers\ScopeManager;
+use Compta\Modules\Dossiers\OrganisationRegistryException;
+use Compta\Modules\Dossiers\OrganisationRegistryService;
+use Compta\Modules\Dossiers\Http\OrganisationApiController;
+use Compta\Modules\Dossiers\Http\OrganisationInputValidator;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
@@ -147,6 +151,10 @@ final class Tests
             'authentification et isolation des scopes' => [
                 'integration',
                 fn () => $this->authAndScopeTests(),
+            ],
+            'registre des organisations et cycle de vie' => [
+                'integration',
+                fn () => $this->organisationRegistryTests(),
             ],
             'comptabilité générale et rapports' => [
                 'integration',
@@ -763,6 +771,243 @@ final class Tests
         );
     }
 
+    private function organisationRegistryTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $audit = new AuditLogger($pdo);
+        $users = new UserRepository($pdo);
+        $actorId = $users->create(
+            'registre-admin@example.test',
+            'mot-de-passe-registre'
+        );
+        $managerId = $users->create(
+            'registre-manager@example.test',
+            'mot-de-passe-registre'
+        );
+        $administratorRole = (int) $pdo->query(
+            "SELECT id FROM roles WHERE code = 'administrateur'"
+        )->fetchColumn();
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_installation
+             (utilisateur_id, role_id) VALUES (?, ?)'
+        )->execute([$actorId, $administratorRole]);
+        $registry = new OrganisationRegistryService($pdo, $audit);
+        $rolesBefore = (int) $pdo->query(
+            'SELECT COUNT(*) FROM utilisateur_roles_organisation'
+        )->fetchColumn();
+        $organisationId = $registry->create(
+            'Atelier Registre',
+            'reelle',
+            [
+                'valid_from' => '2025-01-01',
+                'legal_name' => 'Atelier Registre SA',
+                'legal_form' => 'SA',
+                'uid' => 'CHE-999.888.777',
+                'source' => 'Extrait RC du 01.01.2025',
+                'address' => [
+                    'line1' => 'Rue du Test 1',
+                    'postal_code' => '1200',
+                    'city' => 'Genève',
+                    'country' => 'CH',
+                ],
+            ],
+            $actorId
+        );
+        $this->same(
+            $rolesBefore,
+            (int) $pdo->query(
+                'SELECT COUNT(*) FROM utilisateur_roles_organisation'
+            )->fetchColumn(),
+            'création sans attribution implicite de rôle'
+        );
+        $detail = $registry->detail($organisationId);
+        $this->same(
+            'Atelier Registre SA',
+            $detail['legal_history'][0]['raison_sociale'] ?? '',
+            'identité juridique initiale historisée'
+        );
+        $this->same(
+            'Extrait RC du 01.01.2025',
+            $detail['legal_history'][0]['source'] ?? '',
+            'source juridique obligatoire conservée'
+        );
+        $listed = $registry->list('CHE-999', 'all', 1, 10);
+        $this->same(1, $listed['pagination']['total'], 'recherche serveur sur le numéro IDE');
+
+        $registry->updateName(
+            $organisationId,
+            'Atelier Registre Groupe',
+            (int) $detail['version'],
+            $actorId
+        );
+        $this->throws(
+            fn () => $registry->updateName(
+                $organisationId,
+                'Écrasement interdit',
+                (int) $detail['version'],
+                $actorId
+            ),
+            'conflit de version empêche un écrasement concurrent'
+        );
+        $afterName = $registry->detail($organisationId);
+        $registry->saveLegalIdentity(
+            $organisationId,
+            (int) $afterName['version'],
+            [
+                'valid_from' => '2026-01-01',
+                'legal_name' => 'Atelier Registre Groupe SA',
+                'legal_form' => 'SA',
+                'uid' => 'CHE-999.888.777',
+                'source' => 'Extrait RC du 01.01.2026',
+                'address' => [
+                    'line1' => 'Rue du Test 2',
+                    'postal_code' => '1201',
+                    'city' => 'Genève',
+                    'country' => 'CH',
+                ],
+            ],
+            $actorId
+        );
+        $history = $registry->detail($organisationId)['legal_history'];
+        $this->same(2, count($history), 'identités juridiques successives conservées');
+        $this->same(
+            '2025-12-31',
+            $history[1]['date_fin'] ?? '',
+            'ancienne identité juridique fermée à la veille'
+        );
+
+        $scope = new ScopeManager($pdo, $audit);
+        $dossierId = $scope->createDossier(
+            $organisationId,
+            'Dossier actif',
+            'dossier-actif',
+            'reel'
+        );
+        $withDossier = $registry->detail($organisationId);
+        try {
+            $registry->archive(
+                $organisationId,
+                (int) $withDossier['version'],
+                $actorId
+            );
+            $this->true(false, 'organisation avec dossier actif non archivable');
+        } catch (OrganisationRegistryException $exception) {
+            $this->same(
+                'ORGANISATION_HAS_ACTIVE_DOSSIERS',
+                $exception->errorCode,
+                'organisation avec dossier actif non archivable'
+            );
+        }
+        $this->throws(
+            fn () => $registry->delete(
+                $organisationId,
+                (int) $withDossier['version'],
+                $actorId
+            ),
+            'suppression refusée tant qu’un dossier subsiste'
+        );
+        $this->true(
+            isset($registry->deletionDependencies($organisationId)['dossiers']),
+            'refus de suppression énumère les dossiers dépendants'
+        );
+        $this->true(
+            isset(
+                $registry->deletionDependencies($organisationId)[
+                    'attributs_juridiques_organisation'
+                ]
+            ),
+            'historique juridique immuable bloque la suppression physique'
+        );
+        $pdo->prepare('UPDATE dossiers SET actif = 0 WHERE id = ?')
+            ->execute([$dossierId]);
+        $registry->archive(
+            $organisationId,
+            (int) $registry->detail($organisationId)['version'],
+            $actorId
+        );
+        $archived = $registry->detail($organisationId);
+        $this->false((bool) $archived['active'], 'organisation archivée après ses dossiers');
+        $registry->reactivate(
+            $organisationId,
+            (int) $archived['version'],
+            $actorId
+        );
+        $this->true(
+            (bool) $registry->detail($organisationId)['active'],
+            'organisation réactivée sans effet sur les rôles'
+        );
+
+        $emptyId = $registry->create(
+            'Bac à sable vide',
+            'pedagogique',
+            null,
+            $actorId
+        );
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_organisation
+             (utilisateur_id, organisation_id, role_id) VALUES (?, ?, ?)'
+        )->execute([$managerId, $emptyId, $administratorRole]);
+        $access = new AccessControl($pdo);
+        $this->true(
+            $access->hasOrganisationPermission(
+                $managerId, $emptyId, 'organisation.manage'
+            ),
+            'gestionnaire limité autorisé sur son organisation'
+        );
+        $this->false(
+            $access->hasOrganisationPermission(
+                $managerId, $organisationId, 'organisation.manage'
+            ),
+            'gestionnaire limité sans découverte d’une autre organisation'
+        );
+        $this->false(
+            $access->hasInstallationPermission($managerId, 'installation.admin'),
+            'rôle organisation ne devient pas administrateur installation'
+        );
+        $this->same(
+            ['organisation.manage'],
+            (new ShellReadService($pdo))->installationPermissions($managerId),
+            'shell n’élève pas un rôle organisation au niveau installation'
+        );
+        $listedForManager = $registry->list(
+            '', 'all', 1, 20,
+            $access->organisationIdsForPermission(
+                $managerId, 'organisation.manage'
+            )
+        );
+        $this->same(
+            [$emptyId],
+            array_column($listedForManager['items'], 'id'),
+            'liste du gestionnaire strictement limitée à son organisation'
+        );
+        $pdo->prepare(
+            'DELETE FROM utilisateur_roles_organisation
+             WHERE utilisateur_id = ? AND organisation_id = ?'
+        )->execute([$managerId, $emptyId]);
+        $emptyVersion = (int) $registry->detail($emptyId)['version'];
+        $registry->delete($emptyId, $emptyVersion, $actorId);
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM organisations WHERE id = {$emptyId}"
+            )->fetchColumn(),
+            'organisation réellement vide supprimée'
+        );
+        $auditDelete = $pdo->query(
+            "SELECT organisation_id, cible_id, resume_json
+             FROM audit_events
+             WHERE action = 'organisation.supprimee'
+             ORDER BY id DESC LIMIT 1"
+        )->fetch();
+        $this->same(null, $auditDelete['organisation_id'], 'audit conservé après suppression');
+        $this->same((string) $emptyId, (string) $auditDelete['cible_id'], 'cible supprimée traçable');
+        $this->true(
+            IntegrityChecker::check($pdo)['ok'],
+            'intégrité après cycle de vie des organisations'
+        );
+    }
+
     private function dashboardTests(): void
     {
         [$pdo, $runner] = $this->database();
@@ -1298,6 +1543,27 @@ final class Tests
             'réactivation retrouve les données intactes'
         );
 
+        $beforeLegalIdentity = $configuration->read($organisationId, $dossierId);
+        (new OrganisationRegistryService($pdo, $audit))->saveLegalIdentity(
+            $organisationId,
+            (int) $beforeLegalIdentity['identity']['organization']['version'],
+            [
+                'valid_from' => '2026-01-01',
+                'legal_name' => 'Atelier Configuration SA',
+                'legal_form' => 'Société anonyme',
+                'uid' => 'CHE-123.456.789',
+                'source' => 'Extrait RC de test',
+                'address' => [
+                    'line1' => 'Rue des Tests 5',
+                    'line2' => '',
+                    'postal_code' => '1201',
+                    'city' => 'Genève',
+                    'canton' => 'GE',
+                    'country' => 'CH',
+                ],
+            ],
+            $userId
+        );
         $initial = $configuration->read($organisationId, $dossierId);
         $updatedIdentity = $configuration->updateIdentity(
             $organisationId,
@@ -1328,6 +1594,14 @@ final class Tests
             $updatedIdentity['organization']['legal_name']
                 . '|' . $updatedIdentity['dossier']['base_currency'],
             'identité légale et devise de base enregistrées'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM attributs_juridiques_organisation
+                 WHERE organisation_id = {$organisationId}"
+            )->fetchColumn(),
+            'identité légale modifiée uniquement par le registre historique'
         );
         $this->same(
             'CH9300762011623852957',
@@ -1519,6 +1793,29 @@ final class Tests
             'access-http@example.test',
             'mot-de-passe-tres-long'
         );
+        $registryAdminId = $users->create(
+            'registry-admin-http@example.test',
+            'mot-de-passe-tres-long'
+        );
+        $registryManagerId = $users->create(
+            'registry-manager-http@example.test',
+            'mot-de-passe-tres-long'
+        );
+        $administratorRoleId = (int) $pdo->query(
+            "SELECT id FROM roles WHERE code = 'administrateur'"
+        )->fetchColumn();
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_installation
+             (utilisateur_id, role_id) VALUES (?, ?)'
+        )->execute([$registryAdminId, $administratorRoleId]);
+        $pdo->prepare(
+            'INSERT INTO utilisateur_roles_organisation
+             (utilisateur_id, organisation_id, role_id) VALUES (?, ?, ?)'
+        )->execute([
+            $registryManagerId,
+            $ids['organisation_a'],
+            $administratorRoleId,
+        ]);
         (new ScopeManager($pdo, new AuditLogger($pdo)))->grantRole(
             $accessUserId,
             'lecteur',
@@ -1769,6 +2066,12 @@ final class Tests
                 $httpAccess,
                 new ConsolidationService($pdo, $httpAudit),
                 new ConsolidationInputValidator()
+            ),
+            new OrganisationApiController(
+                $httpAuth,
+                $httpAccess,
+                new OrganisationRegistryService($pdo, $httpAudit),
+                new OrganisationInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -2900,6 +3203,7 @@ final class Tests
             'billing.success.json',
             'payroll.success.json',
             'pedagogy.success.json',
+            'organisations.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(
@@ -3748,6 +4052,70 @@ final class Tests
             ]]
         ));
         $this->same(422, $scopeInjection->status, 'API comptable refuse un scope injecté');
+
+        $session->set('user_id', $registryAdminId);
+        $registryList = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/organisations',
+            query: ['status' => 'all', 'page' => '1', 'per_page' => '20']
+        ));
+        $this->same(200, $registryList->status, 'registre des organisations accessible par API');
+        $registryNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/organisations',
+            json: ['data' => [
+                'name' => 'Sans jeton',
+                'nature' => 'pedagogique',
+            ]]
+        ));
+        $this->same(403, $registryNoCsrf->status, 'création d’organisation protégée par CSRF');
+        $registryInvalid = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/organisations',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'name' => 'Réelle incomplète',
+                'nature' => 'reelle',
+            ]]
+        ));
+        $this->same(422, $registryInvalid->status, 'organisation réelle exige une identité sourcée');
+        $registryCreate = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/organisations',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'name' => 'Organisation HTTP vide',
+                'nature' => 'pedagogique',
+            ]]
+        ));
+        $this->same(201, $registryCreate->status, 'organisation créée par API versionnée');
+        $createdRegistryId = (int) (
+            $this->responseJson($registryCreate)['data']['id'] ?? 0
+        );
+        $this->true($createdRegistryId > 0, 'identifiant de registre retourné');
+
+        $session->set('user_id', $registryManagerId);
+        $managerRegistryList = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/organisations',
+            query: ['status' => 'all']
+        ));
+        $managerItems = $this->responseJson($managerRegistryList)['data']['items'] ?? [];
+        $this->same(
+            [$ids['organisation_a']],
+            array_column($managerItems, 'id'),
+            'API limite un gestionnaire aux organisations attribuées'
+        );
+        $registryIdor = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/organisations/detail',
+            query: ['id' => (string) $ids['organisation_b']]
+        ));
+        $this->same(404, $registryIdor->status, 'IDOR organisation refusée sans découverte');
+        $this->false(
+            str_contains($registryIdor->body, 'Organisation B'),
+            'refus IDOR sans fuite du nom de l’organisation'
+        );
     }
     private function assetTests(): void
     {

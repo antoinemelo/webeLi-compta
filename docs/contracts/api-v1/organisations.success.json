@@ -1,0 +1,31 @@
+{
+  "data": {
+    "items": [
+      {
+        "id": 12,
+        "nom": "Association Exemple",
+        "nature": "reelle",
+        "active": true,
+        "version": 3,
+        "raison_sociale": "Association Exemple",
+        "forme_juridique": "Association",
+        "numero_ide": "CHE-123.456.789",
+        "dossier_count": 2,
+        "active_dossier_count": 1,
+        "cree_le": "2026-07-26 09:00:00",
+        "modifie_le": "2026-07-26 10:00:00"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "per_page": 20,
+      "total": 1,
+      "pages": 1
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "4b5d2fa95e374f2896b7eb9c4d8afb62"
+  },
+  "errors": []
+}

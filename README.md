@@ -62,6 +62,11 @@ référentiels existants. Une désactivation est appliquée dans la navigation e
 côté serveur sans supprimer les données. Voir
 [le guide de configuration](docs/configuration.md).
 
+L’espace `/app/configuration/structures` fournit le registre paginé des
+organisations, leurs identités juridiques datées, l’archivage, la réactivation
+et la suppression protégée des seules organisations vides. Voir
+[le guide Organisations et dossiers](docs/organisations-dossiers.md).
+
 ## Initialiser la comptabilité
 
 Après création de l’organisation, du dossier et de l’exercice :

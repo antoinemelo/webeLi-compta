@@ -55,6 +55,20 @@ final class ConfigurationService
             );
         }
         $organization = $this->validateIdentity($data);
+        foreach ([
+            'legal_name', 'legal_form', 'uid', 'address_line1', 'address_line2',
+            'postal_code', 'city', 'canton', 'country',
+        ] as $historicalField) {
+            if (
+                $organization[$historicalField]
+                !== (string) $identity['organization'][$historicalField]
+            ) {
+                throw new ConfigurationException(
+                    'Modifiez l’identité juridique dans le registre des organisations '
+                    . 'afin de conserver son historique daté et sa source.'
+                );
+            }
+        }
         $billingIban = BankCoordinates::normalizeIban(
             (string) ($data['billing_iban'] ?? '')
         );
@@ -78,18 +92,6 @@ final class ConfigurationService
         if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
             throw new ConfigurationException('La devise doit être un code ISO de trois lettres.');
         }
-        if (
-            $organization['uid'] !== ''
-            && (int) $this->scalar(
-                'SELECT COUNT(*) FROM organisations
-                 WHERE numero_ide = ? AND id <> ?',
-                [$organization['uid'], $organisationId]
-            ) > 0
-        ) {
-            throw new ConfigurationException(
-                'Ce numéro IDE est déjà attribué à une autre organisation.'
-            );
-        }
         $this->transaction(function () use (
             $organisationId,
             $dossierId,
@@ -103,24 +105,12 @@ final class ConfigurationService
         ): void {
             $updateOrganization = $this->pdo->prepare(
                 'UPDATE organisations
-                 SET nom = ?, raison_sociale = ?, forme_juridique = ?,
-                     numero_ide = ?, adresse_ligne1 = ?, adresse_ligne2 = ?,
-                     code_postal = ?, localite = ?, canton = ?, pays = ?,
-                     telephone = ?, email = ?, site_web = ?,
+                 SET nom = ?, telephone = ?, email = ?, site_web = ?,
                      modifie_le = datetime(\'now\'), version = version + 1
                  WHERE id = ? AND version = ?'
             );
             $updateOrganization->execute([
                 $organization['name'],
-                $organization['legal_name'],
-                $organization['legal_form'],
-                $organization['uid'],
-                $organization['address_line1'],
-                $organization['address_line2'],
-                $organization['postal_code'],
-                $organization['city'],
-                $organization['canton'],
-                $organization['country'],
                 $organization['phone'],
                 $organization['email'],
                 $organization['website'],

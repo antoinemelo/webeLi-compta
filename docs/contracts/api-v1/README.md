@@ -38,6 +38,7 @@ Les exemples versionnés sont :
 - `billing.success.json` ;
 - `payroll.success.json` ;
 - `pedagogy.success.json` ;
+- `organisations.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -53,6 +54,14 @@ Les exemples versionnés sont :
 | GET | `/api/v1/references` | types, statuts et devise de base |
 | GET | `/api/v1/dashboard` | projection comptable à une date et pour un exercice |
 | GET | `/api/v1/configuration` | identité, modules, paiements et audit |
+| GET | `/api/v1/structures/organisations` | registre paginé limité aux organisations autorisées |
+| GET | `/api/v1/structures/organisations/detail` | organisation, historique juridique et dépendances |
+| POST | `/api/v1/structures/organisations` | création par `installation.admin`, sans rôle implicite |
+| POST | `/api/v1/structures/organisations/update` | modification optimiste du nom usuel |
+| POST | `/api/v1/structures/organisations/legal-identities` | nouvelle identité juridique datée et sourcée |
+| POST | `/api/v1/structures/organisations/archive` | archivage après les dossiers actifs |
+| POST | `/api/v1/structures/organisations/reactivate` | réactivation sans attribution de droit |
+| POST | `/api/v1/structures/organisations/delete` | suppression par `installation.admin` si aucune dépendance |
 | POST | `/api/v1/configuration/identity` | identité légale et devise de base |
 | POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
 | POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
@@ -178,6 +187,14 @@ Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
 `409 CONTRACT_VERSION_UNSUPPORTED`.
 
+Le registre des organisations ne dépend pas du dossier de session.
+`installation.admin` voit tout et reste seul autorisé à créer ou supprimer.
+`organisation.manage` limite la liste et chaque mutation aux organisations
+explicitement attribuées. Un identifiant hors périmètre est renvoyé en 404.
+L’archivage avec dossier actif, une version obsolète ou une suppression avec
+dépendances renvoient un conflit 409 typé. Le détail expose les dépendances de
+suppression avant confirmation.
+
 ## Listes
 
 Les paramètres communs sont `page`, `per_page` (maximum 100), `sort` et
@@ -187,6 +204,8 @@ Les paramètres communs sont `page`, `per_page` (maximum 100), `sort` et
   `search` ;
 - exercices : tris `id`, `label`, `start_date`, `end_date`, `status`; filtres
   `status`, `search`.
+- organisations : filtres `status=active|archived|all` et `search` sur le nom,
+  la raison sociale ou l’IDE ; `page` et `per_page` avec un maximum de 100.
 
 Tout paramètre inconnu ou valeur hors liste blanche produit une erreur 422.
 La pagination est renvoyée sous `meta.pagination`.

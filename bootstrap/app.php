@@ -34,6 +34,9 @@ use Compta\Modules\Configuration\Http\ConfigurationInputValidator;
 use Compta\Modules\Dashboard\Application\DashboardReadService;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
+use Compta\Modules\Dossiers\Http\OrganisationApiController;
+use Compta\Modules\Dossiers\Http\OrganisationInputValidator;
+use Compta\Modules\Dossiers\OrganisationRegistryService;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
@@ -140,6 +143,7 @@ $closingAndTax = new ClosingAndTaxService(
 );
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
+$organisationRegistry = new OrganisationRegistryService($pdo, $audit);
 $pedagogy = new PedagogyService($pdo, $audit, $entries);
 $apiRoutes = new ApiRouteRegistry(
     new ShellApiController(
@@ -274,6 +278,12 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         new ConsolidationService($pdo, $audit),
         new ConsolidationInputValidator()
+    ),
+    new OrganisationApiController(
+        $auth,
+        $access,
+        $organisationRegistry,
+        new OrganisationInputValidator()
     )
 );
 $shellPage = new ShellPageController(

@@ -84,6 +84,55 @@ export type ShellContext = {
   csrf_token: string;
 };
 
+export type OrganisationLegalIdentity = {
+  id: number;
+  date_debut: string;
+  date_fin: string | null;
+  raison_sociale: string;
+  forme_juridique: string;
+  numero_ide: string;
+  adresse: Record<string, string>;
+  source: string;
+  cree_le: string;
+  cree_par: number | null;
+};
+
+export type OrganisationRegistryItem = {
+  id: number;
+  nom: string;
+  nature: 'reelle' | 'pedagogique';
+  active: boolean;
+  version: number;
+  raison_sociale: string;
+  forme_juridique: string;
+  numero_ide: string;
+  dossier_count: number;
+  active_dossier_count: number;
+  cree_le: string;
+  modifie_le: string | null;
+};
+
+export type OrganisationRegistryDetail = OrganisationRegistryItem & {
+  adresse_ligne1: string;
+  adresse_ligne2: string;
+  code_postal: string;
+  localite: string;
+  canton: string;
+  pays: string;
+  legal_history: OrganisationLegalIdentity[];
+  deletion_dependencies: Record<string, number>;
+};
+
+export type OrganisationRegistryPayload = {
+  items: OrganisationRegistryItem[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total: number;
+    pages: number;
+  };
+};
+
 export type ConfigurationModule = {
   code: 'apprentissage' | 'liquidites' | 'facturation' | 'comptabilite' | 'salaires';
   label: string;
