@@ -39,6 +39,7 @@ Les exemples versionnés sont :
 - `payroll.success.json` ;
 - `pedagogy.success.json` ;
 - `organisations.success.json` ;
+- `dossiers.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -62,6 +63,13 @@ Les exemples versionnés sont :
 | POST | `/api/v1/structures/organisations/archive` | archivage après les dossiers actifs |
 | POST | `/api/v1/structures/organisations/reactivate` | réactivation sans attribution de droit |
 | POST | `/api/v1/structures/organisations/delete` | suppression par `installation.admin` si aucune dépendance |
+| GET | `/api/v1/structures/dossiers` | dossiers actifs et archivés d’une organisation administrée |
+| GET | `/api/v1/structures/dossiers/detail` | dossier, résumé d’initialisation et dépendances |
+| POST | `/api/v1/structures/dossiers` | création et initialisation atomiques par le gestionnaire de l’organisation |
+| POST | `/api/v1/structures/dossiers/update` | nom et paramètres encore mutables, avec version optimiste |
+| POST | `/api/v1/structures/dossiers/archive` | archivage sans suppression de l’historique |
+| POST | `/api/v1/structures/dossiers/reactivate` | réactivation si l’organisation est active |
+| POST | `/api/v1/structures/dossiers/delete` | suppression d’un dossier sans donnée métier |
 | POST | `/api/v1/configuration/identity` | identité légale et devise de base |
 | POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
 | POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
@@ -194,6 +202,14 @@ explicitement attribuées. Un identifiant hors périmètre est renvoyé en 404.
 L’archivage avec dossier actif, une version obsolète ou une suppression avec
 dépendances renvoient un conflit 409 typé. Le détail expose les dépendances de
 suppression avant confirmation.
+
+Les routes de structure des dossiers ne dépendent pas du dossier de session.
+`installation.admin` et `organisation.manage` peuvent créer un dossier dans
+leur organisation. `dossier.manage` autorise seulement la gestion du dossier
+déjà attribué, jamais la création d’un frère. L’assistant répond uniquement
+après l’installation transactionnelle du plan, de l’exercice, de la période,
+du journal et des références. L’archivage du dossier courant efface sa
+sélection de session ; `/api/v1/dossiers` reflète aussitôt le nouvel état.
 
 ## Listes
 

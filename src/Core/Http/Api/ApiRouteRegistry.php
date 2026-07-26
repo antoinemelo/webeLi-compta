@@ -12,6 +12,7 @@ use Compta\Modules\Consolidation\ConsolidationApiController;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dossiers\Http\OrganisationApiController;
+use Compta\Modules\Dossiers\Http\DossierApiController;
 use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Immobilisations\AssetApiController;
 use Compta\Modules\Pedagogie\PedagogyApiController;
@@ -37,6 +38,7 @@ final class ApiRouteRegistry
         private readonly ?PedagogyApiController $pedagogy = null,
         private readonly ?ConsolidationApiController $consolidation = null,
         private readonly ?OrganisationApiController $organisations = null,
+        private readonly ?DossierApiController $dossiers = null,
     ) {
     }
 
@@ -83,6 +85,15 @@ final class ApiRouteRegistry
                 $router, 'POST', '/api/v1/structures/organisations/delete',
                 $this->organisations->delete(...)
             );
+        }
+        if ($this->dossiers !== null) {
+            $this->add($router, 'GET', '/api/v1/structures/dossiers', $this->dossiers->list(...));
+            $this->add($router, 'GET', '/api/v1/structures/dossiers/detail', $this->dossiers->detail(...));
+            $this->add($router, 'POST', '/api/v1/structures/dossiers', $this->dossiers->create(...));
+            $this->add($router, 'POST', '/api/v1/structures/dossiers/update', $this->dossiers->update(...));
+            $this->add($router, 'POST', '/api/v1/structures/dossiers/archive', $this->dossiers->archive(...));
+            $this->add($router, 'POST', '/api/v1/structures/dossiers/reactivate', $this->dossiers->reactivate(...));
+            $this->add($router, 'POST', '/api/v1/structures/dossiers/delete', $this->dossiers->delete(...));
         }
         if ($this->configuration !== null) {
             $this->add(

@@ -13,9 +13,15 @@ const context = useContextStore();
 const notifications = useNotificationStore();
 const store = useOrganisationRegistryStore();
 const canAdminister = computed(() => context.can('installation.admin'));
+const canManageDossiers = computed(() =>
+  canAdminister.value || context.can('organisation.manage')
+);
 const creating = ref(false);
+const creatingDossier = ref(false);
 const deleteDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const deleteDossierDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const today = new Date().toISOString().slice(0, 10);
+const currentYear = new Date().getFullYear();
 const createDraft = reactive({
   name: '',
   nature: 'reelle' as 'reelle' | 'pedagogique',
@@ -43,6 +49,27 @@ const legalDraft = reactive({
   canton: '',
   country: 'CH'
 });
+const dossierDraft = reactive({
+  name: '',
+  slug: '',
+  type: 'reel' as 'reel' | 'demo' | 'exercice',
+  currency: 'CHF',
+  modules: ['comptabilite', 'facturation'] as string[],
+  plan_variant: 'personne_morale',
+  association: false,
+  projects: false,
+  restricted_funds: false,
+  exercise_label: `Exercice ${currentYear}`,
+  exercise_start: `${currentYear}-01-01`,
+  exercise_end: `${currentYear}-12-31`,
+  journal_code: 'OD',
+  journal_label: 'Opérations diverses'
+});
+const dossierEdit = reactive({
+  name: '',
+  type: 'reel' as 'reel' | 'demo' | 'exercice',
+  currency: 'CHF'
+});
 const dependencies = computed(() => Object.entries(
   store.selected?.deletion_dependencies ?? {}
 ));
@@ -62,6 +89,17 @@ watch(
     legalDraft.country = selected.pays || 'CH';
     legalDraft.valid_from = today;
     legalDraft.source = '';
+  },
+  { immediate: true }
+);
+
+watch(
+  () => store.selectedDossier,
+  (selected) => {
+    if (!selected) return;
+    dossierEdit.name = selected.nom;
+    dossierEdit.type = selected.type;
+    dossierEdit.currency = selected.monnaie;
   },
   { immediate: true }
 );
@@ -168,6 +206,83 @@ async function removeOrganisation(): Promise<void> {
       'Organisation vide supprimée. Son audit est conservé.',
       'success'
     );
+  } catch {
+    // Le résumé d’erreur du registre reste visible.
+  }
+}
+
+async function createDossier(): Promise<void> {
+  if (!store.selected) return;
+  try {
+    await store.createDossier({
+      organisation_id: store.selected.id,
+      name: dossierDraft.name,
+      slug: dossierDraft.slug,
+      type: dossierDraft.type,
+      currency: dossierDraft.currency,
+      modules: dossierDraft.modules,
+      plan_variant: dossierDraft.plan_variant,
+      association: {
+        enabled: dossierDraft.association,
+        projects: dossierDraft.projects,
+        restricted_funds: dossierDraft.restricted_funds
+      },
+      exercise: {
+        label: dossierDraft.exercise_label,
+        start: dossierDraft.exercise_start,
+        end: dossierDraft.exercise_end
+      },
+      journal: {
+        code: dossierDraft.journal_code,
+        label: dossierDraft.journal_label
+      }
+    });
+    creatingDossier.value = false;
+    await context.load();
+    notifications.push('Dossier créé et initialisé atomiquement.', 'success');
+  } catch {
+    // Le résumé d’erreur du registre reste visible.
+  }
+}
+
+async function updateDossier(): Promise<void> {
+  if (!store.selectedDossier) return;
+  try {
+    await store.updateDossier({
+      id: store.selectedDossier.id,
+      version: store.selectedDossier.version,
+      name: dossierEdit.name,
+      type: dossierEdit.type,
+      currency: dossierEdit.currency
+    });
+    await context.load();
+    notifications.push('Dossier mis à jour.', 'success');
+  } catch {
+    // Le résumé d’erreur du registre reste visible.
+  }
+}
+
+async function toggleDossierStatus(): Promise<void> {
+  if (!store.selectedDossier) return;
+  try {
+    const wasActive = store.selectedDossier.active;
+    if (wasActive) await store.archiveDossier();
+    else await store.reactivateDossier();
+    await context.load();
+    notifications.push(
+      wasActive ? 'Dossier archivé.' : 'Dossier réactivé.',
+      'success'
+    );
+  } catch {
+    // Le résumé d’erreur du registre reste visible.
+  }
+}
+
+async function removeDossier(): Promise<void> {
+  try {
+    await store.removeDossier();
+    await context.load();
+    notifications.push('Dossier vide supprimé.', 'success');
   } catch {
     // Le résumé d’erreur du registre reste visible.
   }
@@ -364,6 +479,166 @@ async function removeOrganisation(): Promise<void> {
         <ul><li v-for="[table, count] in dependencies" :key="table">{{ table }} : {{ count }}</li></ul>
       </div>
 
+      <section class="dossier-tree" aria-labelledby="dossier-tree-title">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Arborescence</p>
+            <h3 id="dossier-tree-title">Dossiers de {{ store.selected.nom }}</h3>
+          </div>
+          <button
+            v-if="canManageDossiers && store.selected.active"
+            type="button"
+            class="button"
+            @click="creatingDossier = !creatingDossier"
+          >
+            {{ creatingDossier ? 'Fermer l’assistant' : 'Créer un dossier' }}
+          </button>
+        </div>
+
+        <EmptyState
+          v-if="store.dossiers.length === 0"
+          title="Aucun dossier"
+          description="Lancez l’assistant pour créer le premier dossier exploitable."
+        />
+        <ul v-else class="dossier-list">
+          <li v-for="dossier in store.dossiers" :key="dossier.id">
+            <button
+              type="button"
+              class="dossier-node"
+              :aria-current="store.selectedDossier?.id === dossier.id ? 'true' : undefined"
+              @click="store.selectDossier(dossier.id)"
+            >
+              <span>
+                <strong>{{ dossier.nom }}</strong>
+                <small>{{ dossier.slug }} · {{ dossier.type }} · {{ dossier.monnaie }}</small>
+              </span>
+              <span class="status-badge" :class="dossier.active ? 'status-ouverte' : 'status-fermee'">
+                {{ dossier.active ? 'Actif' : 'Archivé' }}
+              </span>
+            </button>
+          </li>
+        </ul>
+
+        <form
+          v-if="creatingDossier && canManageDossiers"
+          class="registry-form wizard"
+          @submit.prevent="createDossier"
+        >
+          <div><p class="eyebrow">Assistant transactionnel</p><h3>Initialiser un dossier</h3></div>
+          <div class="registry-grid">
+            <FormField id="dossier-create-name" label="Nom">
+              <template #default="{ describedBy }"><input id="dossier-create-name" v-model="dossierDraft.name" required :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-create-slug" label="Slug unique">
+              <template #default="{ describedBy }"><input id="dossier-create-slug" v-model="dossierDraft.slug" required pattern="[a-z0-9][a-z0-9-]{1,62}" placeholder="comptabilite-2026" :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-create-type" label="Type">
+              <template #default="{ describedBy }">
+                <select id="dossier-create-type" v-model="dossierDraft.type" :aria-describedby="describedBy">
+                  <option value="reel">Réel</option><option value="demo">Démonstration</option><option value="exercice">Exercice pédagogique</option>
+                </select>
+              </template>
+            </FormField>
+            <FormField id="dossier-create-currency" label="Devise de base">
+              <template #default="{ describedBy }"><input id="dossier-create-currency" v-model="dossierDraft.currency" required maxlength="3" pattern="[A-Za-z]{3}" :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-create-plan" label="Variante du plan VEB">
+              <template #default="{ describedBy }">
+                <select id="dossier-create-plan" v-model="dossierDraft.plan_variant" :aria-describedby="describedBy">
+                  <option value="personne_morale">Personne morale</option>
+                  <option value="raison_individuelle">Raison individuelle</option>
+                  <option value="societe_personnes">Société de personnes</option>
+                </select>
+              </template>
+            </FormField>
+            <fieldset class="choice-field">
+              <legend>Modules actifs</legend>
+              <label v-for="module in ['comptabilite', 'facturation', 'liquidites', 'salaires', 'apprentissage']" :key="module">
+                <input v-model="dossierDraft.modules" type="checkbox" :value="module"> {{ module }}
+              </label>
+            </fieldset>
+            <fieldset class="choice-field">
+              <legend>Association</legend>
+              <label><input v-model="dossierDraft.association" type="checkbox"> Installer l’overlay association</label>
+              <label><input v-model="dossierDraft.projects" type="checkbox" :disabled="!dossierDraft.association"> Comptes de projets</label>
+              <label><input v-model="dossierDraft.restricted_funds" type="checkbox" :disabled="!dossierDraft.association"> Fonds affectés</label>
+            </fieldset>
+            <FormField id="dossier-exercise-label" label="Premier exercice">
+              <template #default="{ describedBy }"><input id="dossier-exercise-label" v-model="dossierDraft.exercise_label" required :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-exercise-start" label="Début">
+              <template #default="{ describedBy }"><input id="dossier-exercise-start" v-model="dossierDraft.exercise_start" type="date" required :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-exercise-end" label="Fin">
+              <template #default="{ describedBy }"><input id="dossier-exercise-end" v-model="dossierDraft.exercise_end" type="date" required :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-journal-code" label="Code du journal général">
+              <template #default="{ describedBy }"><input id="dossier-journal-code" v-model="dossierDraft.journal_code" required maxlength="12" :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-journal-label" label="Libellé du journal">
+              <template #default="{ describedBy }"><input id="dossier-journal-label" v-model="dossierDraft.journal_label" required :aria-describedby="describedBy"></template>
+            </FormField>
+          </div>
+          <p class="help-text">Le dossier, le plan, l’exercice, la période, le journal et les références sont créés dans une seule transaction.</p>
+          <button type="submit" class="button" :disabled="store.saving">Créer et initialiser</button>
+        </form>
+
+        <div v-if="store.creationSummary" class="initialization-summary" role="status">
+          <strong>Initialisation terminée</strong>
+          <span>{{ store.creationSummary.account_count }} comptes</span>
+          <span>{{ store.creationSummary.exercise_count }} exercice</span>
+          <span>{{ store.creationSummary.period_count }} période</span>
+          <span>{{ store.creationSummary.journal_count }} journal</span>
+          <span>{{ store.creationSummary.currency }}</span>
+          <span>{{ store.creationSummary.modules.join(', ') }}</span>
+        </div>
+
+        <article v-if="store.selectedDossier" class="dossier-detail">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Dossier #{{ store.selectedDossier.id }}</p><h3>{{ store.selectedDossier.nom }}</h3></div>
+            <span class="status-badge" :class="store.selectedDossier.active ? 'status-ouverte' : 'status-fermee'">
+              {{ store.selectedDossier.active ? 'Actif' : 'Archivé' }} · v{{ store.selectedDossier.version }}
+            </span>
+          </div>
+          <form class="registry-grid" @submit.prevent="updateDossier">
+            <FormField id="dossier-edit-name" label="Nom">
+              <template #default="{ describedBy }"><input id="dossier-edit-name" v-model="dossierEdit.name" required :aria-describedby="describedBy"></template>
+            </FormField>
+            <FormField id="dossier-edit-type" label="Type">
+              <template #default="{ describedBy }">
+                <select id="dossier-edit-type" v-model="dossierEdit.type" :disabled="store.selectedDossier.historical_data" :aria-describedby="describedBy">
+                  <option value="reel">Réel</option><option value="demo">Démonstration</option><option value="exercice">Exercice pédagogique</option>
+                </select>
+              </template>
+            </FormField>
+            <FormField id="dossier-edit-currency" label="Devise">
+              <template #default="{ describedBy }"><input id="dossier-edit-currency" v-model="dossierEdit.currency" maxlength="3" :disabled="store.selectedDossier.historical_data" :aria-describedby="describedBy"></template>
+            </FormField>
+            <button type="submit" class="button secondary" :disabled="store.saving">Enregistrer</button>
+          </form>
+          <p v-if="store.selectedDossier.historical_data" class="help-text">Le type et la devise sont verrouillés par les données historiques ; le nom reste modifiable.</p>
+          <div class="initialization-summary">
+            <span>{{ store.selectedDossier.summary.account_count }} comptes</span>
+            <span>{{ store.selectedDossier.summary.exercise_count }} exercice(s)</span>
+            <span>{{ store.selectedDossier.summary.period_count }} période(s)</span>
+            <span>{{ store.selectedDossier.summary.journal_count }} journal(aux)</span>
+          </div>
+          <div class="registry-actions">
+            <button type="button" class="button secondary" :disabled="store.saving" @click="toggleDossierStatus">
+              {{ store.selectedDossier.active ? 'Archiver le dossier' : 'Réactiver le dossier' }}
+            </button>
+            <button
+              type="button"
+              class="button danger"
+              :disabled="store.selectedDossier.historical_data || store.saving"
+              @click="deleteDossierDialog?.open()"
+            >
+              Supprimer le dossier vide
+            </button>
+          </div>
+        </article>
+      </section>
+
       <form class="registry-form" @submit.prevent="saveLegalIdentity">
         <div class="panel-heading">
           <div><p class="eyebrow">Historique immuable</p><h3>Ajouter une identité juridique datée</h3></div>
@@ -429,6 +704,15 @@ async function removeOrganisation(): Promise<void> {
     >
       Cette action est réservée aux organisations vides. L’événement d’audit restera conservé.
     </ConfirmDialog>
+    <ConfirmDialog
+      ref="deleteDossierDialog"
+      title="Supprimer définitivement ce dossier vide ?"
+      confirm-label="Supprimer"
+      tone="danger"
+      @confirm="removeDossier"
+    >
+      Seules les données techniques produites par l’assistant seront retirées. Toute donnée métier bloque cette action.
+    </ConfirmDialog>
   </section>
 </template>
 
@@ -447,6 +731,13 @@ async function removeOrganisation(): Promise<void> {
 .history-list li { display: grid; gap: .2rem; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; }
 .dependency-note { padding: .75rem; border-left: .25rem solid var(--color-warning, #9b6a00); background: var(--color-surface-muted); }
 .help-text { color: var(--color-text-muted); }
+.dossier-tree, .dossier-detail { display: grid; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.dossier-list { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+.dossier-node { width: 100%; display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; background: var(--color-surface); color: inherit; text-align: left; }
+.dossier-node[aria-current="true"] { border-color: var(--color-primary); }
+.dossier-node span:first-child { display: grid; gap: .2rem; }
+.choice-field { display: grid; gap: .45rem; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; }
+.initialization-summary { display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding: .75rem; border-radius: .5rem; background: var(--color-surface-muted); }
 @media (max-width: 720px) {
   .registry-grid { grid-template-columns: 1fr; }
   .registry-heading, .panel-heading, .registry-actions, .inline-editor, .registry-filters {

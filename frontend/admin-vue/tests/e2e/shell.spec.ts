@@ -360,6 +360,72 @@ test('registre des organisations : création, historique et cycle de vie', async
   )).toBeVisible();
 });
 
+test('deux dossiers réels sont créés, sélectionnés et archivés depuis Vue', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 900 });
+  await loginAsAdministrator(page);
+  await page.goto('/e2e/app/configuration/structures');
+
+  await page.getByRole('button', { name: 'Créer une organisation' }).click();
+  const organizationForm = page.locator('form').filter({
+    has: page.getByRole('heading', { name: 'Créer une organisation' })
+  });
+  await organizationForm.getByLabel('Nom usuel').fill('Multi-dossiers E2E');
+  await organizationForm.getByLabel('Nature').selectOption('pedagogique');
+  await organizationForm.getByRole('button', { name: 'Créer', exact: true }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Dossiers de Multi-dossiers E2E'
+  })).toBeVisible();
+
+  const createDossier = async (
+    name: string,
+    slug: string,
+    currency: string,
+    journalCode: string
+  ): Promise<void> => {
+    await page.getByRole('button', { name: 'Créer un dossier' }).click();
+    const wizard = page.locator('form').filter({
+      has: page.getByRole('heading', { name: 'Initialiser un dossier' })
+    });
+    await wizard.getByLabel('Nom').fill(name);
+    await wizard.getByLabel('Slug unique').fill(slug);
+    await wizard.getByLabel('Devise de base').fill(currency);
+    await wizard.getByLabel('Code du journal général').fill(journalCode);
+    await wizard.getByRole('button', { name: 'Créer et initialiser' }).click();
+    await expect(page.getByText('Dossier créé et initialisé atomiquement.')).toBeVisible();
+    await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
+  };
+
+  await createDossier('Comptabilité A E2E', 'comptabilite-a-e2e', 'CHF', 'ODA');
+  await expect(page.getByText(/comptes/).last()).toBeVisible();
+  await expect(page.getByLabel('Dossier', { exact: true })).toContainText(
+    'Comptabilité A E2E'
+  );
+
+  await createDossier('Comptabilité B E2E', 'comptabilite-b-e2e', 'EUR', 'ODB');
+  await expect(page.getByLabel('Dossier', { exact: true })).toContainText(
+    'Comptabilité B E2E'
+  );
+  await expect(page.getByRole('button', { name: /Comptabilité A E2E/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Comptabilité B E2E/ })).toBeVisible();
+
+  await page.getByRole('button', { name: /Comptabilité A E2E/ }).click();
+  await page.getByRole('button', { name: 'Ouvrir la navigation' }).click();
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité A E2E'
+  });
+  await page.getByRole('button', { name: 'Ouvrir la navigation' }).click();
+  await page.getByRole('button', { name: 'Archiver le dossier' }).click();
+  await expect(page.getByRole('button', { name: 'Réactiver le dossier' })).toBeVisible();
+  await expect(page.getByLabel('Dossier', { exact: true })).not.toContainText(
+    'Comptabilité A E2E'
+  );
+
+  await page.getByRole('button', { name: 'Supprimer le dossier vide' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Supprimer', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Comptabilité A E2E/ })).toHaveCount(0);
+});
+
 test('journal, extrait et plan comptable de Configuration utilisent le parcours Vue unique', async ({
   page
 }) => {

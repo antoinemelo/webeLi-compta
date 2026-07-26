@@ -22,6 +22,7 @@ use Compta\Modules\Compta\AccountingWorkspaceService;
 use Compta\Modules\Compta\ClosingAndTaxService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\FinancialReportingService;
+use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Compta\ReportingService;
 use Compta\Modules\Consolidation\ConsolidationApiController;
 use Compta\Modules\Consolidation\ConsolidationInputValidator;
@@ -36,7 +37,11 @@ use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
 use Compta\Modules\Dossiers\Http\OrganisationApiController;
 use Compta\Modules\Dossiers\Http\OrganisationInputValidator;
+use Compta\Modules\Dossiers\Http\DossierApiController;
+use Compta\Modules\Dossiers\Http\DossierInputValidator;
+use Compta\Modules\Dossiers\DossierRegistryService;
 use Compta\Modules\Dossiers\OrganisationRegistryService;
+use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
@@ -67,6 +72,7 @@ use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Shell\Http\ShellInputValidator;
 use Compta\Modules\Shell\Http\ShellPageController;
 use Compta\Modules\Tva\VatConfigurationService;
+use Compta\Modules\Tva\DefaultVatCodeInstaller;
 use Compta\Modules\Tva\Ech0217ExportService;
 use Compta\Modules\Tva\Ech0217Validator;
 use Compta\Modules\Tva\VatStatementService;
@@ -144,6 +150,15 @@ $closingAndTax = new ClosingAndTaxService(
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
 $organisationRegistry = new OrganisationRegistryService($pdo, $audit);
+$dossierRegistry = new DossierRegistryService(
+    $pdo,
+    $audit,
+    new ScopeManager($pdo, $audit),
+    new PlanSeeder($pdo, $root . '/database/seeds'),
+    $accountingSetup,
+    new DefaultVatCodeInstaller($pdo, $audit),
+    $moduleAccess
+);
 $pedagogy = new PedagogyService($pdo, $audit, $entries);
 $apiRoutes = new ApiRouteRegistry(
     new ShellApiController(
@@ -284,6 +299,13 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         $organisationRegistry,
         new OrganisationInputValidator()
+    ),
+    new DossierApiController(
+        $session,
+        $auth,
+        $access,
+        $dossierRegistry,
+        new DossierInputValidator()
     )
 );
 $shellPage = new ShellPageController(

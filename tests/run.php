@@ -43,10 +43,14 @@ use Compta\Modules\Dashboard\Application\DashboardReadService;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
 use Compta\Modules\Dossiers\ScopeManager;
+use Compta\Modules\Dossiers\DossierRegistryException;
+use Compta\Modules\Dossiers\DossierRegistryService;
 use Compta\Modules\Dossiers\OrganisationRegistryException;
 use Compta\Modules\Dossiers\OrganisationRegistryService;
 use Compta\Modules\Dossiers\Http\OrganisationApiController;
 use Compta\Modules\Dossiers\Http\OrganisationInputValidator;
+use Compta\Modules\Dossiers\Http\DossierApiController;
+use Compta\Modules\Dossiers\Http\DossierInputValidator;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
 use Compta\Modules\Facturation\ContactService;
@@ -155,6 +159,10 @@ final class Tests
             'registre des organisations et cycle de vie' => [
                 'integration',
                 fn () => $this->organisationRegistryTests(),
+            ],
+            'dossiers multiples et initialisation atomique' => [
+                'integration',
+                fn () => $this->dossierRegistryTests(),
             ],
             'comptabilité générale et rapports' => [
                 'integration',
@@ -1006,6 +1014,247 @@ final class Tests
             IntegrityChecker::check($pdo)['ok'],
             'intégrité après cycle de vie des organisations'
         );
+    }
+
+    private function dossierRegistryTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $audit = new AuditLogger($pdo);
+        $actorId = (new UserRepository($pdo))->create(
+            'dossiers-admin@example.test',
+            'mot-de-passe-dossiers'
+        );
+        $organisationId = (new ScopeManager($pdo, $audit))->createOrganisation(
+            'Groupe multi-dossiers',
+            'reelle',
+            $actorId
+        );
+        $factory = static function (
+            ?callable $checkpoint = null
+        ) use ($pdo, $audit): DossierRegistryService {
+            return new DossierRegistryService(
+                $pdo,
+                $audit,
+                new ScopeManager($pdo, $audit),
+                new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'),
+                new AccountingSetupService($pdo, $audit),
+                new DefaultVatCodeInstaller($pdo, $audit),
+                new ModuleAccessService($pdo),
+                $checkpoint
+            );
+        };
+        $registry = $factory();
+        $rolesBefore = (int) $pdo->query(
+            'SELECT COUNT(*) FROM utilisateur_roles_dossier'
+        )->fetchColumn();
+        $first = $registry->createInitialized(
+            $organisationId,
+            'Association principale',
+            'association-principale',
+            'reel',
+            'CHF',
+            ['comptabilite', 'facturation'],
+            'personne_morale',
+            true,
+            ['projets' => true, 'fonds_affectes' => true],
+            'Exercice 2026',
+            '2026-01-01',
+            '2026-12-31',
+            'OD',
+            'Opérations diverses',
+            $actorId
+        );
+        $firstId = (int) $first['id'];
+        $this->true(
+            (int) $first['summary']['account_count'] > 0,
+            'plan comptable installé dans le premier dossier'
+        );
+        $this->same(1, $first['summary']['exercise_count'], 'premier exercice créé');
+        $this->same(1, $first['summary']['period_count'], 'première période créée');
+        $this->same(1, $first['summary']['journal_count'], 'journal général créé');
+        $this->same(
+            ['facturation', 'comptabilite'],
+            $first['summary']['modules'],
+            'sélection de modules appliquée'
+        );
+        $this->same('CHF', $first['summary']['currency'], 'devise de base appliquée');
+        $this->same(
+            $rolesBefore,
+            (int) $pdo->query(
+                'SELECT COUNT(*) FROM utilisateur_roles_dossier'
+            )->fetchColumn(),
+            'création sans attribution implicite de droits'
+        );
+
+        $second = $registry->createInitialized(
+            $organisationId,
+            'Succursale',
+            'succursale',
+            'reel',
+            'EUR',
+            ['comptabilite'],
+            'raison_individuelle',
+            false,
+            [],
+            'Exercice 2026',
+            '2026-01-01',
+            '2026-12-31',
+            'GEN',
+            'Journal général',
+            $actorId
+        );
+        $secondId = (int) $second['id'];
+        $this->same(2, count($registry->listForOrganisation($organisationId)), 'deux dossiers réels dans une organisation');
+        $this->same('EUR', $registry->detail($secondId)['monnaie'], 'devise propre au second dossier');
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM comptes a
+                 JOIN comptes b ON b.id = a.id
+                 WHERE a.dossier_id = {$firstId} AND b.dossier_id = {$secondId}"
+            )->fetchColumn(),
+            'plans comptables isolés entre dossiers'
+        );
+
+        $beforeFailure = count($registry->listForOrganisation($organisationId));
+        $failing = $factory(static function (string $step): void {
+            if ($step === 'plan') {
+                throw new RuntimeException('Panne simulée après le plan.');
+            }
+        });
+        $this->throws(
+            fn () => $failing->createInitialized(
+                $organisationId,
+                'Dossier incomplet',
+                'dossier-incomplet',
+                'reel',
+                'CHF',
+                ['comptabilite'],
+                'personne_morale',
+                false,
+                [],
+                'Exercice 2026',
+                '2026-01-01',
+                '2026-12-31',
+                'OD',
+                'Journal général',
+                $actorId
+            ),
+            'échec simulé de l’assistant propagé'
+        );
+        $this->same(
+            $beforeFailure,
+            count($registry->listForOrganisation($organisationId)),
+            'échec d’initialisation sans dossier partiel'
+        );
+
+        $secondDetail = $registry->detail($secondId);
+        $registry->update(
+            $secondId,
+            (int) $secondDetail['version'],
+            'Succursale romande',
+            'demo',
+            'USD',
+            $actorId
+        );
+        $this->throws(
+            fn () => $registry->update(
+                $secondId,
+                (int) $secondDetail['version'],
+                'Écrasement',
+                'demo',
+                'USD',
+                $actorId
+            ),
+            'conflit optimiste de dossier détecté'
+        );
+        $this->throws(
+            fn () => $registry->createInitialized(
+                $organisationId,
+                'Slug dupliqué',
+                'association-principale',
+                'reel',
+                'CHF',
+                ['comptabilite'],
+                'personne_morale',
+                false,
+                [],
+                'Exercice 2026',
+                '2026-01-01',
+                '2026-12-31',
+                'OD',
+                'Journal général',
+                $actorId
+            ),
+            'slug unique par organisation'
+        );
+
+        $this->pdoInsertBusinessContact(
+            $pdo,
+            $organisationId,
+            $firstId,
+            $actorId
+        );
+        $firstDetail = $registry->detail($firstId);
+        try {
+            $registry->update(
+                $firstId,
+                (int) $firstDetail['version'],
+                'Association renommée',
+                'demo',
+                'EUR',
+                $actorId
+            );
+            $this->true(false, 'champs historiques verrouillés');
+        } catch (DossierRegistryException $exception) {
+            $this->same(
+                'DOSSIER_HISTORICAL_FIELDS_LOCKED',
+                $exception->errorCode,
+                'type et devise verrouillés après donnée métier'
+            );
+        }
+        try {
+            $registry->delete(
+                $firstId,
+                (int) $firstDetail['version'],
+                $actorId
+            );
+            $this->true(false, 'suppression métier protégée');
+        } catch (DossierRegistryException $exception) {
+            $this->same(
+                'DOSSIER_HAS_DEPENDENCIES',
+                $exception->errorCode,
+                'dossier utilisé uniquement archivable'
+            );
+        }
+        $registry->archive($firstId, (int) $firstDetail['version'], $actorId);
+        $this->false($registry->detail($firstId)['active'], 'dossier utilisé archivé');
+
+        $secondAfterUpdate = $registry->detail($secondId);
+        $registry->delete(
+            $secondId,
+            (int) $secondAfterUpdate['version'],
+            $actorId
+        );
+        $this->throws(
+            fn () => $registry->detail($secondId),
+            'dossier initialisé mais vide supprimable'
+        );
+        $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après cycle de vie des dossiers');
+    }
+
+    private function pdoInsertBusinessContact(
+        PDO $pdo,
+        int $organisationId,
+        int $dossierId,
+        int $actorId,
+    ): void {
+        $pdo->prepare(
+            "INSERT INTO contacts
+             (organisation_id, dossier_id, type_personne, raison_sociale, cree_par)
+             VALUES (?, ?, 'entreprise', 'Client historique', ?)"
+        )->execute([$organisationId, $dossierId, $actorId]);
     }
 
     private function dashboardTests(): void
@@ -2072,6 +2321,21 @@ final class Tests
                 $httpAccess,
                 new OrganisationRegistryService($pdo, $httpAudit),
                 new OrganisationInputValidator()
+            ),
+            new DossierApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new DossierRegistryService(
+                    $pdo,
+                    $httpAudit,
+                    new ScopeManager($pdo, $httpAudit),
+                    new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'),
+                    $httpAccountingSetup,
+                    new DefaultVatCodeInstaller($pdo, $httpAudit),
+                    $httpModuleAccess
+                ),
+                new DossierInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -3204,6 +3468,7 @@ final class Tests
             'payroll.success.json',
             'pedagogy.success.json',
             'organisations.success.json',
+            'dossiers.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(
@@ -4116,6 +4381,142 @@ final class Tests
             str_contains($registryIdor->body, 'Organisation B'),
             'refus IDOR sans fuite du nom de l’organisation'
         );
+
+        $dossierPayload = [
+            'organisation_id' => $createdRegistryId,
+            'name' => 'Dossier HTTP initialisé',
+            'slug' => 'dossier-http-initialise',
+            'type' => 'demo',
+            'currency' => 'CHF',
+            'modules' => ['comptabilite', 'facturation'],
+            'plan_variant' => 'personne_morale',
+            'association' => [
+                'enabled' => false,
+                'projects' => false,
+                'restricted_funds' => false,
+            ],
+            'exercise' => [
+                'label' => 'Exercice 2027',
+                'start' => '2027-01-01',
+                'end' => '2027-12-31',
+            ],
+            'journal' => ['code' => 'OD', 'label' => 'Opérations diverses'],
+        ];
+        $dossierIdor = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/dossiers',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => array_replace($dossierPayload, [
+                'organisation_id' => $ids['organisation_b'],
+            ])]
+        ));
+        $this->same(404, $dossierIdor->status, 'IDOR de création de dossier refusée');
+
+        $session->set('user_id', $userId);
+        $siblingDenied = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/dossiers',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => array_replace($dossierPayload, [
+                'organisation_id' => $ids['organisation_a'],
+                'slug' => 'frere-interdit',
+            ])]
+        ));
+        $this->same(
+            404,
+            $siblingDenied->status,
+            'dossier.manage ne permet pas de créer un dossier frère'
+        );
+
+        $session->set('user_id', $registryAdminId);
+        $dossierNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/dossiers',
+            json: ['data' => $dossierPayload]
+        ));
+        $this->same(403, $dossierNoCsrf->status, 'assistant dossier protégé par CSRF');
+        $dossierCreate = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/dossiers',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $dossierPayload]
+        ));
+        $this->same(201, $dossierCreate->status, 'dossier initialisé par API');
+        $createdDossier = $this->responseJson($dossierCreate)['data'] ?? [];
+        $createdDossierId = (int) ($createdDossier['id'] ?? 0);
+        $this->true(
+            $createdDossierId > 0
+            && (int) ($createdDossier['summary']['account_count'] ?? 0) > 0,
+            'résumé d’initialisation retourné'
+        );
+        $selector = $app->handle(new Request('GET', '/api/v1/dossiers'));
+        $selectorIds = array_column(
+            $this->responseJson($selector)['data'] ?? [],
+            'id'
+        );
+        $this->true(
+            in_array($createdDossierId, $selectorIds, true),
+            'nouveau dossier visible dans le sélecteur sans reconnexion'
+        );
+        $selectCreated = $app->handle(new Request(
+            'POST',
+            '/api/v1/context/dossier',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'organisation_id' => $createdRegistryId,
+                'dossier_id' => $createdDossierId,
+            ]]
+        ));
+        $this->same(200, $selectCreated->status, 'nouveau dossier immédiatement sélectionnable');
+        $createdDetail = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/dossiers/detail',
+            query: ['id' => (string) $createdDossierId]
+        ));
+        $createdVersion = (int) (
+            $this->responseJson($createdDetail)['data']['version'] ?? 0
+        );
+        $archiveCreated = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/dossiers/archive',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $createdDossierId,
+                'version' => $createdVersion,
+            ]]
+        ));
+        $this->same(200, $archiveCreated->status, 'dossier archivé par API');
+        $archivedVersion = (int) (
+            $this->responseJson($archiveCreated)['data']['version'] ?? 0
+        );
+        $contextAfterArchive = $app->handle(new Request('GET', '/api/v1/context'));
+        $this->same(
+            null,
+            $this->responseJson($contextAfterArchive)['data']['selection'] ?? null,
+            'archivage du dossier courant retire le contexte de session'
+        );
+        $selectorAfterArchive = $app->handle(new Request('GET', '/api/v1/dossiers'));
+        $this->false(
+            in_array(
+                $createdDossierId,
+                array_column(
+                    $this->responseJson($selectorAfterArchive)['data'] ?? [],
+                    'id'
+                ),
+                true
+            ),
+            'dossier archivé retiré des nouvelles sélections'
+        );
+        $deleteCreated = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/dossiers/delete',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $createdDossierId,
+                'version' => $archivedVersion,
+            ]]
+        ));
+        $this->same(200, $deleteCreated->status, 'dossier initialisé vide supprimé par API');
     }
     private function assetTests(): void
     {

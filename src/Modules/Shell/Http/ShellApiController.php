@@ -197,6 +197,10 @@ final class ShellApiController
             || $dossierId < 1
             || !$this->access->canViewDossier($userId, $organisationId, $dossierId)
         ) {
+            if ($organisationId > 0 || $dossierId > 0) {
+                $this->session->remove('organisation_id');
+                $this->session->remove('dossier_id');
+            }
             return null;
         }
         return [$organisationId, $dossierId];
@@ -268,6 +272,7 @@ final class ShellApiController
                     ['key' => 'dashboard', 'method' => 'GET', 'path' => '/dashboard'],
                     ['key' => 'configuration', 'method' => 'GET', 'path' => '/configuration'],
                     ['key' => 'organisations', 'method' => 'GET', 'path' => '/structures/organisations'],
+                    ['key' => 'structure_dossiers', 'method' => 'GET', 'path' => '/structures/dossiers'],
                     ['key' => 'liquidities', 'method' => 'GET', 'path' => '/liquidites'],
                     ['key' => 'assets', 'method' => 'GET', 'path' => '/accounting/assets'],
                     ['key' => 'consolidation', 'method' => 'GET', 'path' => '/consolidation'],

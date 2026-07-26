@@ -133,6 +133,41 @@ export type OrganisationRegistryPayload = {
   };
 };
 
+export type DossierRegistryItem = {
+  id: number;
+  organisation_id: number;
+  nom: string;
+  slug: string;
+  type: 'reel' | 'demo' | 'exercice';
+  monnaie: string;
+  active: boolean;
+  version: number;
+  cree_le: string;
+  account_count: number;
+  exercise_count: number;
+  period_count: number;
+  journal_count: number;
+};
+
+export type DossierInitializationSummary = {
+  account_count: number;
+  exercise_count: number;
+  period_count: number;
+  journal_count: number;
+  currency: string;
+  modules: string[];
+  exercise_id: number;
+  period_id: number;
+  journal_id: number;
+  vat_code_count: number;
+};
+
+export type DossierRegistryDetail = DossierRegistryItem & {
+  summary: DossierInitializationSummary;
+  deletion_dependencies: Record<string, number>;
+  historical_data: boolean;
+};
+
 export type ConfigurationModule = {
   code: 'apprentissage' | 'liquidites' | 'facturation' | 'comptabilite' | 'salaires';
   label: string;

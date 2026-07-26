@@ -12,7 +12,10 @@ dossier sélectionné.
 
 L’onglet **Organisations et dossiers** est utilisable sans dossier sélectionné
 par un administrateur d’installation. Il centralise le registre des
-organisations et l’historique daté de leur identité juridique. La raison
+organisations, leurs dossiers actifs ou archivés et l’historique daté de leur
+identité juridique. Son assistant initialise atomiquement le plan, les modules,
+le premier exercice, la première période, le journal général et les références
+requises. La raison
 sociale, la forme, l’IDE et l’adresse de l’onglet **Entité** sont donc en lecture
 seule ; leurs changements passent par ce registre afin d’exiger une date et une
 source. Le cycle de vie et les règles de suppression sont détaillés dans

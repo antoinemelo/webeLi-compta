@@ -50,7 +50,10 @@ final class DefaultVatCodeInstaller
         $configuration = new VatConfigurationService($this->pdo, $this->audit);
         $inserted = 0;
 
-        $this->pdo->beginTransaction();
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) {
+            $this->pdo->beginTransaction();
+        }
         try {
             foreach ($definitions as $definition) {
                 [$code, $label, $treatment, $nature, $rateId, $deductible,
@@ -75,9 +78,11 @@ final class DefaultVatCodeInstaller
                 ], $actorId);
                 $inserted++;
             }
-            $this->pdo->commit();
+            if ($ownsTransaction) {
+                $this->pdo->commit();
+            }
         } catch (Throwable $exception) {
-            if ($this->pdo->inTransaction()) {
+            if ($ownsTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
             throw $exception;

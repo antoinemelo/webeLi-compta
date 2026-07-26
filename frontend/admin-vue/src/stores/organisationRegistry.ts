@@ -1,6 +1,9 @@
 import { defineStore } from 'pinia';
 import { api, errorMessage } from '@/api/client';
 import type {
+  DossierInitializationSummary,
+  DossierRegistryDetail,
+  DossierRegistryItem,
   OrganisationRegistryDetail,
   OrganisationRegistryPayload
 } from '@/api/contracts';
@@ -9,6 +12,9 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
   state: () => ({
     payload: null as OrganisationRegistryPayload | null,
     selected: null as OrganisationRegistryDetail | null,
+    dossiers: [] as DossierRegistryItem[],
+    selectedDossier: null as DossierRegistryDetail | null,
+    creationSummary: null as DossierInitializationSummary | null,
     loading: false,
     saving: false,
     error: '',
@@ -45,10 +51,102 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
           '/structures/organisations/detail',
           { id }
         )).data;
+        await this.loadDossiers();
       } catch (error) {
         this.error = errorMessage(error);
       } finally {
         this.loading = false;
+      }
+    },
+    async loadDossiers(): Promise<void> {
+      if (!this.selected) {
+        this.dossiers = [];
+        return;
+      }
+      const response = await api.get<{ items: DossierRegistryItem[] }>(
+        '/structures/dossiers',
+        { organisation_id: this.selected.id, status: 'all' }
+      );
+      this.dossiers = response.data.items;
+    },
+    async selectDossier(id: number): Promise<void> {
+      this.loading = true;
+      this.error = '';
+      try {
+        this.selectedDossier = (await api.get<DossierRegistryDetail>(
+          '/structures/dossiers/detail',
+          { id }
+        )).data;
+      } catch (error) {
+        this.error = errorMessage(error);
+      } finally {
+        this.loading = false;
+      }
+    },
+    async createDossier(data: Record<string, unknown>): Promise<void> {
+      this.saving = true;
+      this.error = '';
+      this.creationSummary = null;
+      try {
+        const response = await api.post<{
+          id: number;
+          summary: DossierInitializationSummary;
+        }>('/structures/dossiers', data);
+        this.creationSummary = response.data.summary;
+        await this.load();
+        if (this.selected) await this.select(this.selected.id);
+        await this.selectDossier(response.data.id);
+      } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    },
+    async updateDossier(data: Record<string, unknown>): Promise<void> {
+      await this.mutateDossier('/structures/dossiers/update', data);
+    },
+    async archiveDossier(): Promise<void> {
+      if (!this.selectedDossier) return;
+      await this.mutateDossier('/structures/dossiers/archive', {
+        id: this.selectedDossier.id,
+        version: this.selectedDossier.version
+      });
+    },
+    async reactivateDossier(): Promise<void> {
+      if (!this.selectedDossier) return;
+      await this.mutateDossier('/structures/dossiers/reactivate', {
+        id: this.selectedDossier.id,
+        version: this.selectedDossier.version
+      });
+    },
+    async removeDossier(): Promise<void> {
+      if (!this.selectedDossier) return;
+      await this.mutateDossier('/structures/dossiers/delete', {
+        id: this.selectedDossier.id,
+        version: this.selectedDossier.version
+      }, false);
+      this.selectedDossier = null;
+    },
+    async mutateDossier(
+      path: string,
+      data: Record<string, unknown>,
+      reloadSelected = true
+    ): Promise<void> {
+      this.saving = true;
+      this.error = '';
+      try {
+        await api.post<unknown>(path, data);
+        await this.load();
+        if (this.selected) await this.select(this.selected.id);
+        if (reloadSelected && this.selectedDossier) {
+          await this.selectDossier(this.selectedDossier.id);
+        }
+      } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
       }
     },
     async create(data: Record<string, unknown>): Promise<number> {
@@ -74,6 +172,8 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
         version: this.selected.version
       }, false);
       this.selected = null;
+      this.dossiers = [];
+      this.selectedDossier = null;
     },
     async selectedAction(path: string): Promise<void> {
       if (!this.selected) return;

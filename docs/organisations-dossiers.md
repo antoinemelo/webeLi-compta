@@ -1,21 +1,43 @@
 # Organisations et dossiers
 
-Le registre Vue est disponible sous `/app/configuration/structures`. Le lot
-14b couvre le cycle de vie des organisations ; le cycle de vie détaillé des
-dossiers sera ajouté au lot 14c.
+Le registre Vue est disponible sous `/app/configuration/structures`. Il expose
+une arborescence organisation → dossiers actifs ou archivés et permet de créer
+plusieurs dossiers réellement exploitables dans la même organisation.
 
 ## Droits
 
 - `installation.admin` voit toutes les organisations et peut en créer ou en
   supprimer une réellement vide ;
 - `organisation.manage` voit et modifie uniquement les organisations qui lui
-  sont attribuées ;
+  sont attribuées et peut y créer ou administrer des dossiers ;
+- `dossier.manage` permet d’administrer le dossier attribué, mais jamais de
+  créer un dossier frère ni d’élargir son propre périmètre ;
 - une création ou une réactivation n’accorde jamais de rôle implicitement ;
 - un identifiant hors périmètre répond comme une ressource introuvable, sans
   divulguer son nom.
 
 Les mutations exigent le jeton CSRF. Le nom usuel, le statut et l’identité
 juridique utilisent la version optimiste de l’organisation.
+
+## Assistant de création d’un dossier
+
+L’assistant demande le nom, le slug unique dans l’organisation, le type, la
+devise de base, les modules, la variante du plan VEB, les options association,
+le premier exercice, sa première période et le journal général.
+
+Une seule transaction crée le dossier et initialise les modules, le plan
+comptable, l’exercice, sa période, le journal général et les codes TVA lorsque
+Comptabilité est activée. Une panne à n’importe quelle étape annule l’ensemble :
+aucun dossier partiel ne reste visible.
+
+Le résumé final indique les nombres de comptes, exercices, périodes et
+journaux, la devise et les modules actifs. Le sélecteur global est rechargé
+immédiatement, sans reconnexion.
+
+Le nom reste modifiable avec contrôle de version. Le type et la devise peuvent
+encore changer tant que le dossier ne contient que les lignes techniques de
+l’assistant ; dès qu’une donnée métier existe, ils deviennent historiques et
+le refus énumère les dépendances.
 
 ## Identité juridique
 
@@ -48,6 +70,18 @@ de cible et son instantané `before`.
 Il n’existe aucune suppression en cascade des dossiers, écritures, documents
 financiers, consolidations ou événements d’audit.
 
+Pour un dossier, l’archivage est également la sortie normale : il le retire des
+nouvelles sélections et mutations sans toucher à son historique. S’il était
+courant, le contexte de session est vidé. La réactivation exige une
+organisation active.
+
+Un dossier initialisé mais sans donnée métier peut être supprimé. Ses seules
+lignes techniques (plan, rubriques, exercice, période, journal, modules et
+codes TVA) sont retirées dans la même transaction. Toute écriture, document,
+contact, consolidation ou autre donnée métier bloque la suppression et impose
+l’archivage. Un dossier utilisé n’est jamais déplacé : un dossier vide doit
+être recréé dans la bonne organisation.
+
 ## API et preuves
 
 Les routes sont détaillées dans
@@ -59,4 +93,8 @@ création sans droit implicite, la recherche, les conflits de version,
 l’historique daté, les refus d’archivage et de suppression, la réactivation,
 l’isolation d’un gestionnaire, la suppression vide et la conservation de
 l’audit. La suite HTTP ajoute CSRF, validation d’une organisation réelle et
-IDOR. Playwright couvre le parcours opérateur complet.
+IDOR. Le cas « dossiers multiples et initialisation atomique » couvre deux
+dossiers réels, leur isolation, le rollback simulé, les conflits de version,
+les champs historiques et les suppressions sûre/refusée. Playwright crée deux
+dossiers à 360 px, vérifie leur présence immédiate dans le sélecteur puis
+archive et supprime le dossier vide.

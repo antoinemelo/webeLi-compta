@@ -116,6 +116,55 @@ final class AccessControl
         return $stmt->fetchColumn() !== false;
     }
 
+    /**
+     * Vérifie une permission d'administration même sur un dossier archivé.
+     * L'organisation, le dossier et leur couple restent strictement contrôlés.
+     */
+    public function hasDossierPermissionIncludingArchived(
+        int $userId,
+        int $organisationId,
+        int $dossierId,
+        string $permission,
+    ): bool {
+        $stmt = $this->pdo->prepare(
+            'SELECT 1
+             FROM dossiers d
+             WHERE d.id = :dossier AND d.organisation_id = :organisation
+               AND (
+                 EXISTS (
+                   SELECT 1 FROM utilisateur_roles_installation ur
+                   JOIN role_permissions rp ON rp.role_id = ur.role_id
+                   JOIN permissions p ON p.id = rp.permission_id
+                   WHERE ur.utilisateur_id = :user AND p.code = :permission
+                 )
+                 OR EXISTS (
+                   SELECT 1 FROM utilisateur_roles_organisation ur
+                   JOIN role_permissions rp ON rp.role_id = ur.role_id
+                   JOIN permissions p ON p.id = rp.permission_id
+                   WHERE ur.utilisateur_id = :user
+                     AND ur.organisation_id = d.organisation_id
+                     AND p.code = :permission
+                 )
+                 OR EXISTS (
+                   SELECT 1 FROM utilisateur_roles_dossier ur
+                   JOIN role_permissions rp ON rp.role_id = ur.role_id
+                   JOIN permissions p ON p.id = rp.permission_id
+                   WHERE ur.utilisateur_id = :user
+                     AND ur.dossier_id = d.id
+                     AND p.code = :permission
+                 )
+               )
+             LIMIT 1'
+        );
+        $stmt->execute([
+            'user' => $userId,
+            'organisation' => $organisationId,
+            'dossier' => $dossierId,
+            'permission' => $permission,
+        ]);
+        return $stmt->fetchColumn() !== false;
+    }
+
     public function hasInstallationPermission(
         int $userId,
         string $permission,

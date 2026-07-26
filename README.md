@@ -63,8 +63,11 @@ côté serveur sans supprimer les données. Voir
 [le guide de configuration](docs/configuration.md).
 
 L’espace `/app/configuration/structures` fournit le registre paginé des
-organisations, leurs identités juridiques datées, l’archivage, la réactivation
-et la suppression protégée des seules organisations vides. Voir
+organisations, leurs identités juridiques datées et une arborescence de
+dossiers. L’assistant Vue crée un dossier complet (modules, plan, exercice,
+période, journal et références) dans une seule transaction, puis rafraîchit le
+sélecteur sans reconnexion. L’archivage, la réactivation et la suppression
+protégée des seules structures vides y sont également disponibles. Voir
 [le guide Organisations et dossiers](docs/organisations-dossiers.md).
 
 ## Initialiser la comptabilité

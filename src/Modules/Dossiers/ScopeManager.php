@@ -254,6 +254,9 @@ final class ScopeManager
 
     private function transaction(callable $callback): mixed
     {
+        if ($this->pdo->inTransaction()) {
+            return $callback();
+        }
         $this->pdo->beginTransaction();
         try {
             $result = $callback();

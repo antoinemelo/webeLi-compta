@@ -1,0 +1,25 @@
+{
+  "data": {
+    "id": 24,
+    "summary": {
+      "account_count": 214,
+      "exercise_count": 1,
+      "period_count": 1,
+      "journal_count": 1,
+      "currency": "CHF",
+      "modules": [
+        "facturation",
+        "comptabilite"
+      ],
+      "exercise_id": 31,
+      "period_id": 42,
+      "journal_id": 18,
+      "vat_code_count": 10
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "4b5d2fa95e374f2896b7eb9c4d8afb62"
+  },
+  "errors": []
+}

@@ -75,6 +75,42 @@ final class ModuleAccessService
         return (int) $stmt->fetchColumn() === 1;
     }
 
+    /**
+     * Configure en une passe le périmètre fonctionnel d'un nouveau dossier.
+     *
+     * @param list<string> $enabledCodes
+     */
+    public function configureSelection(
+        int $organisationId,
+        int $dossierId,
+        array $enabledCodes,
+        ?int $actorId = null,
+    ): void {
+        $available = array_map(
+            static fn (array $module): string => (string) $module['code'],
+            $this->modules($organisationId, $dossierId)
+        );
+        $enabledCodes = array_values(array_unique($enabledCodes));
+        if (array_diff($enabledCodes, $available) !== []) {
+            throw new \RuntimeException('Sélection de modules invalide.');
+        }
+        $update = $this->pdo->prepare(
+            'UPDATE modules_dossier
+             SET actif = ?, modifie_le = datetime(\'now\'), modifie_par = ?,
+                 version = version + 1
+             WHERE organisation_id = ? AND dossier_id = ? AND module_code = ?'
+        );
+        foreach ($available as $code) {
+            $update->execute([
+                in_array($code, $enabledCodes, true) ? 1 : 0,
+                $actorId,
+                $organisationId,
+                $dossierId,
+                $code,
+            ]);
+        }
+    }
+
     public function moduleForPath(string $path): ?string
     {
         foreach (self::PATHS as $module => $prefixes) {
