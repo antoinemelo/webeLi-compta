@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 namespace Compta\Modules\Compta;
 
+use Compta\Core\Audit\AuditLogger;
 use Compta\Core\Auth\AccessControl;
 use Compta\Core\Auth\AuthService;
 use Compta\Core\Http\Api\ApiException;
@@ -10,6 +11,7 @@ use Compta\Core\Http\Api\ApiResponse;
 use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Security\SessionStore;
+use Compta\Modules\Tva\VatException;
 use PDOException;
 
 final class AccountingApiController
@@ -20,19 +22,388 @@ final class AccountingApiController
         private readonly AccessControl $access,
         private readonly AccountingWorkspaceService $workspace,
         private readonly AccountingInputValidator $validator,
+        private readonly AuditLogger $audit,
     ) {
     }
 
     public function show(Request $request): Response
     {
-        [, $organisationId, $dossierId] = $this->scope('compta.view');
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.view');
         $query = $this->validator->query($request);
-        return $this->execute($request, fn (): array => $this->workspace->read(
+        return $this->execute($request, function () use (
+            $userId,
             $organisationId,
             $dossierId,
-            $query['exercise_id'],
-            $query['account_id']
-        ));
+            $query
+        ): array {
+            $data = $this->workspace->read(
+                $organisationId,
+                $dossierId,
+                $query['exercise_id'],
+                $query['account_id'],
+                $query['date_start'],
+                $query['date_end'],
+                $query['vat_statement_id']
+            );
+            $data['capabilities'] = [
+                'edit' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'compta.edit'
+                ),
+                'validate' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'compta.validate'
+                ),
+                'setup' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'compta.setup'
+                ),
+                'export' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'compta.export'
+                ),
+                'vat_setup' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'tva.setup'
+                ),
+                'vat_prepare' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'tva.prepare'
+                ),
+                'vat_control' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'tva.control'
+                ),
+                'vat_export' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'tva.export'
+                ),
+                'vat_declare' => $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'tva.declare'
+                ),
+            ];
+            return $data;
+        });
+    }
+
+    public function exportReport(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.export');
+        $query = $this->validator->reportExport($request);
+        return $this->raw(function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $query,
+            $request
+        ): Response {
+            $export = $this->workspace->exportReport(
+                $organisationId,
+                $dossierId,
+                $query['exercise_id'],
+                $query['type'],
+                $query['date_start'],
+                $query['date_end']
+            );
+            $this->audit->log(
+                'compta.rapport_exporte',
+                $userId,
+                $organisationId,
+                $dossierId,
+                'rapport',
+                $query['type'],
+                [
+                    'date_debut' => $query['date_start'],
+                    'date_fin' => $query['date_end'],
+                ],
+                $request->ip()
+            );
+            return new Response($export['content'], 200, [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' =>
+                    'attachment; filename="' . $export['filename'] . '"',
+            ]);
+        });
+    }
+
+    public function createVatPeriod(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');
+        $data = $this->validator->vatPeriod($request);
+        return $this->execute($request, fn (): array => [
+            'id' => $this->workspace->createVatPeriod(
+                $organisationId,
+                $dossierId,
+                $data['start'],
+                $data['end'],
+                $userId
+            ),
+        ]);
+    }
+
+    public function prepareVatStatement(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.prepare');
+        $data = $this->validator->vatPreparation($request);
+        return $this->execute($request, fn (): array => [
+            'id' => $this->workspace->prepareVatStatement(
+                $organisationId,
+                $dossierId,
+                $data['period_id'],
+                $data['corrects_id'],
+                $userId
+            ),
+        ]);
+    }
+
+    public function controlVatStatement(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.control');
+        $data = $this->validator->vatStatement($request);
+        return $this->execute($request, function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $data
+        ): array {
+            $this->workspace->controlVatStatement(
+                $organisationId,
+                $dossierId,
+                $data['statement_id'],
+                $userId
+            );
+            return ['controlled' => true];
+        });
+    }
+
+    public function exportVatStatement(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.export');
+        $data = $this->validator->vatStatement($request);
+        return $this->execute($request, fn (): array =>
+            $this->workspace->exportVatStatement(
+                $organisationId,
+                $dossierId,
+                $data['statement_id'],
+                $userId
+            )
+        );
+    }
+
+    public function declareVatStatement(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.declare');
+        $data = $this->validator->vatStatement($request);
+        return $this->execute($request, function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $data
+        ): array {
+            $this->workspace->declareVatStatement(
+                $organisationId,
+                $dossierId,
+                $data['statement_id'],
+                $userId
+            );
+            return ['declared' => true, 'automatic_transmission' => false];
+        });
+    }
+
+    public function downloadVatExport(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.export');
+        $exportId = $this->validator->queryId($request, 'export_id');
+        return $this->raw(function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $exportId,
+            $request
+        ): Response {
+            $export = $this->workspace->vatExportContent(
+                $organisationId,
+                $dossierId,
+                $exportId
+            );
+            $this->audit->log(
+                'tva.export_telecharge',
+                $userId,
+                $organisationId,
+                $dossierId,
+                'tva_export',
+                (string) $exportId,
+                ['empreinte_sha256' => $export['hash']],
+                $request->ip()
+            );
+            return new Response($export['xml'], 200, [
+                'Content-Type' => 'application/xml; charset=UTF-8',
+                'Content-Disposition' =>
+                    'attachment; filename="tva-ech0217-'
+                    . $export['statement_id'] . '.xml"',
+                'X-Content-SHA256' => $export['hash'],
+            ]);
+        });
+    }
+
+    public function saveClosingControl(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->closingControl($request);
+        return $this->execute($request, function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $data
+        ): array {
+            $this->workspace->saveClosingControl(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['code'],
+                $data['status'],
+                $data['note'],
+                $data['version'],
+                $userId
+            );
+            return ['saved' => true];
+        });
+    }
+
+    public function setPeriodStatus(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->periodStatus($request);
+        return $this->execute($request, function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $data
+        ): array {
+            $this->workspace->setPeriodStatus(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['period_id'],
+                $data['status'],
+                $data['version'],
+                $userId
+            );
+            return ['saved' => true];
+        });
+    }
+
+    public function createTaxAdjustment(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->taxAdjustment($request);
+        return $this->execute($request, fn (): array => [
+            'id' => $this->workspace->createTaxAdjustment(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['label'],
+                $data['nature'],
+                $data['amount_cents'],
+                $data['note'],
+                $data['idempotency_key'],
+                $userId
+            ),
+        ]);
+    }
+
+    public function setTaxAdjustmentStatus(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->taxAdjustmentStatus($request);
+        return $this->execute($request, function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $data
+        ): array {
+            $this->workspace->setTaxAdjustmentStatus(
+                $organisationId,
+                $dossierId,
+                $data['adjustment_id'],
+                $data['status'],
+                $data['version'],
+                $userId
+            );
+            return ['saved' => true];
+        });
+    }
+
+    public function archive(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.export');
+        $data = $this->validator->archive($request);
+        return $this->execute($request, fn (): array => [
+            'id' => $this->workspace->archive(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['type'],
+                $data['date_start'],
+                $data['date_end'],
+                $userId
+            ),
+        ]);
+    }
+
+    public function downloadArchive(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.export');
+        $archiveId = $this->validator->queryId($request, 'archive_id');
+        return $this->raw(function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $archiveId,
+            $request
+        ): Response {
+            $archive = $this->workspace->archiveContent(
+                $organisationId,
+                $dossierId,
+                $archiveId
+            );
+            $this->audit->log(
+                'compta.archive_financiere_telechargee',
+                $userId,
+                $organisationId,
+                $dossierId,
+                'archive_rapport_financier',
+                (string) $archiveId,
+                ['empreinte_sha256' => $archive['hash']],
+                $request->ip()
+            );
+            return new Response($archive['content'], 200, [
+                'Content-Type' => 'application/json; charset=UTF-8',
+                'Content-Disposition' =>
+                    'attachment; filename="' . $archive['type']
+                    . '-' . $archiveId . '.json"',
+                'X-Content-SHA256' => $archive['hash'],
+            ]);
+        });
     }
 
     public function createEntry(Request $request): Response
@@ -186,12 +557,26 @@ final class AccountingApiController
         }
     }
 
+    private function has(
+        int $userId,
+        int $organisationId,
+        int $dossierId,
+        string $permission,
+    ): bool {
+        return $this->access->hasDossierPermission(
+            $userId,
+            $organisationId,
+            $dossierId,
+            $permission
+        );
+    }
+
     /** @param callable():array<string,mixed> $callback */
     private function execute(Request $request, callable $callback): Response
     {
         try {
             return ApiResponse::success($request, $callback());
-        } catch (AccountingException $exception) {
+        } catch (AccountingException|VatException $exception) {
             $message = $exception->getMessage();
             if (
                 str_contains($message, 'modifié')
@@ -205,6 +590,18 @@ final class AccountingApiController
                 'accounting' => [
                     'Ce numéro est déjà utilisé ou la donnée reste référencée.',
                 ],
+            ]);
+        }
+    }
+
+    /** @param callable():Response $callback */
+    private function raw(callable $callback): Response
+    {
+        try {
+            return $callback();
+        } catch (AccountingException|VatException $exception) {
+            throw ApiException::validation([
+                'accounting' => [$exception->getMessage()],
             ]);
         }
     }

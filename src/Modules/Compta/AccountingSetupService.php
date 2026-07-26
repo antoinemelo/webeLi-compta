@@ -354,6 +354,25 @@ final class AccountingSetupService
                     'Une période ne peut pas être ouverte dans un exercice fermé.'
                 );
             }
+        } else {
+            $drafts = $this->pdo->prepare(
+                "SELECT COUNT(*)
+                 FROM periodes p
+                 JOIN ecritures e
+                   ON e.exercice_id = p.exercice_id
+                  AND e.organisation_id = p.organisation_id
+                  AND e.dossier_id = p.dossier_id
+                  AND e.date_comptable BETWEEN p.date_debut AND p.date_fin
+                  AND e.statut = 'brouillon'
+                 WHERE p.id = ? AND p.organisation_id = ?
+                   AND p.dossier_id = ?"
+            );
+            $drafts->execute([$periodId, $organisationId, $dossierId]);
+            if ((int) $drafts->fetchColumn() > 0) {
+                throw new AccountingException(
+                    'Validez ou retirez les écritures brouillon avant la clôture.'
+                );
+            }
         }
         $stmt = $this->pdo->prepare(
             'UPDATE periodes

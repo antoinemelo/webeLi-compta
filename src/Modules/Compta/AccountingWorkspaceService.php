@@ -3,12 +3,17 @@ declare(strict_types=1);
 
 namespace Compta\Modules\Compta;
 
+use Compta\Modules\Tva\VatWorkspaceService;
+
 final class AccountingWorkspaceService
 {
     public function __construct(
         private readonly ChartOfAccountsService $chart,
         private readonly EntryService $entries,
         private readonly ReportingService $reports,
+        private readonly FinancialReportingService $financial,
+        private readonly VatWorkspaceService $vat,
+        private readonly ClosingAndTaxService $closing,
     ) {
     }
 
@@ -18,6 +23,9 @@ final class AccountingWorkspaceService
         int $dossierId,
         int $exerciseId,
         ?int $accountId = null,
+        ?string $dateStart = null,
+        ?string $dateEnd = null,
+        ?int $vatStatementId = null,
     ): array {
         $exercise = $this->reports->exercise(
             $organisationId,
@@ -25,6 +33,31 @@ final class AccountingWorkspaceService
             $exerciseId
         );
         $catalog = $this->entries->entryCatalog($organisationId, $dossierId);
+        $dateStart = $dateStart ?: $exercise['date_debut'];
+        $dateEnd = $dateEnd ?: $exercise['date_fin'];
+        $financial = $this->financial->read(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $dateStart,
+            $dateEnd
+        );
+        $vat = $this->vat->read(
+            $organisationId,
+            $dossierId,
+            $exercise['date_debut'],
+            $exercise['date_fin'],
+            $vatStatementId
+        );
+        $closing = $this->closing->read(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $dateStart,
+            $dateEnd,
+            $financial,
+            $vat
+        );
         return [
             'exercise' => [
                 'id' => $exercise['id'],
@@ -139,7 +172,404 @@ final class AccountingWorkspaceService
                         'par_page' => 100,
                     ]
                 ),
+            'reports' => $financial,
+            'vat' => $vat,
+            'closing' => $closing['closing'],
+            'tax_file' => $closing['tax_file'],
         ];
+    }
+
+    public function createVatPeriod(
+        int $organisationId,
+        int $dossierId,
+        string $start,
+        string $end,
+        int $actorId,
+    ): int {
+        return $this->vat->createPeriod(
+            $organisationId,
+            $dossierId,
+            $start,
+            $end,
+            $actorId
+        );
+    }
+
+    public function prepareVatStatement(
+        int $organisationId,
+        int $dossierId,
+        int $periodId,
+        ?int $correctsId,
+        int $actorId,
+    ): int {
+        return $this->vat->prepare(
+            $organisationId,
+            $dossierId,
+            $periodId,
+            $correctsId,
+            $actorId
+        );
+    }
+
+    public function controlVatStatement(
+        int $organisationId,
+        int $dossierId,
+        int $statementId,
+        int $actorId,
+    ): void {
+        $this->vat->control(
+            $organisationId,
+            $dossierId,
+            $statementId,
+            $actorId
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function exportVatStatement(
+        int $organisationId,
+        int $dossierId,
+        int $statementId,
+        int $actorId,
+    ): array {
+        return $this->vat->export(
+            $organisationId,
+            $dossierId,
+            $statementId,
+            $actorId
+        );
+    }
+
+    public function declareVatStatement(
+        int $organisationId,
+        int $dossierId,
+        int $statementId,
+        int $actorId,
+    ): void {
+        $this->vat->declare(
+            $organisationId,
+            $dossierId,
+            $statementId,
+            $actorId
+        );
+    }
+
+    /** @return array{xml:string,hash:string,statement_id:int} */
+    public function vatExportContent(
+        int $organisationId,
+        int $dossierId,
+        int $exportId,
+    ): array {
+        return $this->vat->exportContent(
+            $organisationId,
+            $dossierId,
+            $exportId
+        );
+    }
+
+    public function saveClosingControl(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $code,
+        string $status,
+        string $note,
+        int $expectedVersion,
+        int $actorId,
+    ): void {
+        $this->closing->saveManualControl(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $code,
+            $status,
+            $note,
+            $expectedVersion,
+            $actorId
+        );
+    }
+
+    public function setPeriodStatus(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        int $periodId,
+        string $status,
+        int $expectedVersion,
+        int $actorId,
+    ): void {
+        $this->closing->setPeriodStatus(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $periodId,
+            $status,
+            $expectedVersion,
+            $actorId
+        );
+    }
+
+    public function createTaxAdjustment(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $label,
+        string $nature,
+        int $amountCents,
+        string $note,
+        string $idempotencyKey,
+        int $actorId,
+    ): int {
+        return $this->closing->createAdjustment(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $label,
+            $nature,
+            $amountCents,
+            $note,
+            $idempotencyKey,
+            $actorId
+        );
+    }
+
+    public function setTaxAdjustmentStatus(
+        int $organisationId,
+        int $dossierId,
+        int $adjustmentId,
+        string $status,
+        int $expectedVersion,
+        int $actorId,
+    ): void {
+        $this->closing->setAdjustmentStatus(
+            $organisationId,
+            $dossierId,
+            $adjustmentId,
+            $status,
+            $expectedVersion,
+            $actorId
+        );
+    }
+
+    public function archive(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $type,
+        string $dateStart,
+        string $dateEnd,
+        int $actorId,
+    ): int {
+        $exercise = $this->reports->exercise(
+            $organisationId,
+            $dossierId,
+            $exerciseId
+        );
+        $reports = $this->financial->read(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $dateStart,
+            $dateEnd
+        );
+        $vat = $this->vat->read(
+            $organisationId,
+            $dossierId,
+            $exercise['date_debut'],
+            $exercise['date_fin']
+        );
+        $closing = $this->closing->read(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $dateStart,
+            $dateEnd,
+            $reports,
+            $vat
+        );
+        $closingSnapshot = $closing['closing'];
+        unset($closingSnapshot['archives']);
+        $payload = $type === 'cloture'
+            ? [
+                'reports' => $reports,
+                'vat' => $vat,
+                'closing' => $closingSnapshot,
+            ]
+            : [
+                'reports' => $reports,
+                'vat' => $vat,
+                'tax_file' => $closing['tax_file'],
+            ];
+        return $this->closing->archive(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $type,
+            $dateStart,
+            $dateEnd,
+            $payload,
+            $actorId
+        );
+    }
+
+    /** @return array{content:string,hash:string,type:string} */
+    public function archiveContent(
+        int $organisationId,
+        int $dossierId,
+        int $archiveId,
+    ): array {
+        return $this->closing->archiveContent(
+            $organisationId,
+            $dossierId,
+            $archiveId
+        );
+    }
+
+    /** @return array{content:string,filename:string} */
+    public function exportReport(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $type,
+        string $dateStart,
+        string $dateEnd,
+    ): array {
+        $financial = $this->financial->read(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $dateStart,
+            $dateEnd
+        );
+        [$rows, $columns] = match ($type) {
+            'journal' => [
+                $this->completeJournal(
+                    $organisationId,
+                    $dossierId,
+                    $exerciseId,
+                    $dateStart,
+                    $dateEnd
+                ),
+                [
+                    'date_comptable' => 'Date',
+                    'numero' => 'Numéro',
+                    'journal' => 'Journal',
+                    'libelle' => 'Libellé',
+                    'reference' => 'Référence',
+                    'debit_centimes' => 'Débit',
+                    'credit_centimes' => 'Crédit',
+                    'statut' => 'Statut',
+                ],
+            ],
+            'grand_livre' => [
+                $financial['general_ledger']['items'],
+                [
+                    'numero' => 'Compte',
+                    'libelle' => 'Libellé',
+                    'initial_centimes' => 'Solde initial',
+                    'debit_centimes' => 'Débit',
+                    'credit_centimes' => 'Crédit',
+                    'solde_centimes' => 'Solde final',
+                ],
+            ],
+            'balance' => [
+                $financial['trial_balance']['items'],
+                [
+                    'numero' => 'Compte',
+                    'libelle' => 'Libellé',
+                    'rubrique_chemin' => 'Rubrique',
+                    'debit_centimes' => 'Débit',
+                    'credit_centimes' => 'Crédit',
+                    'solde_centimes' => 'Solde',
+                ],
+            ],
+            'bilan' => [
+                $financial['balance_sheet']['items'],
+                [
+                    'numero' => 'Compte',
+                    'libelle' => 'Libellé',
+                    'type_libelle' => 'Type',
+                    'rubrique_chemin' => 'Rubrique',
+                    'solde_centimes' => 'Solde',
+                ],
+            ],
+            'resultat' => [
+                $financial['income_statement']['items'],
+                [
+                    'number' => 'Compte',
+                    'label' => 'Libellé',
+                    'type' => 'Type',
+                    'rubric_path' => 'Rubrique',
+                    'current_cents' => 'Exercice courant',
+                    'previous_cents' => 'Exercice précédent',
+                    'delta_cents' => 'Variation',
+                ],
+            ],
+            'flux_tresorerie' => [
+                $financial['cash_flow']['items'],
+                [
+                    'date' => 'Date',
+                    'number' => 'Écriture',
+                    'label' => 'Libellé',
+                    'category' => 'Catégorie',
+                    'source_type' => 'Source',
+                    'amount_cents' => 'Flux',
+                ],
+            ],
+            default => throw new AccountingException('Rapport inconnu.'),
+        };
+        $metadata = $this->reports->csv([
+            ['parameter' => 'type', 'value' => $type],
+            ['parameter' => 'exercise_id', 'value' => $exerciseId],
+            ['parameter' => 'date_start', 'value' => $dateStart],
+            ['parameter' => 'date_end', 'value' => $dateEnd],
+            [
+                'parameter' => 'ledger_hash',
+                'value' => $this->financial->ledgerFingerprint(
+                    $organisationId,
+                    $dossierId,
+                    $exerciseId,
+                    $dateEnd
+                ),
+            ],
+        ], ['parameter' => 'Paramètre', 'value' => 'Valeur']);
+        $body = $this->reports->csv($rows, $columns);
+        if (str_starts_with($body, "\xEF\xBB\xBF")) {
+            $body = substr($body, 3);
+        }
+        return [
+            'content' => $metadata . "\n" . $body,
+            'filename' => $type . '-' . $dateEnd . '.csv',
+        ];
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function completeJournal(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $dateStart,
+        string $dateEnd,
+    ): array {
+        $page = 1;
+        $items = [];
+        do {
+            $result = $this->reports->journal(
+                $organisationId,
+                $dossierId,
+                [
+                    'exercice_id' => $exerciseId,
+                    'date_debut' => $dateStart,
+                    'date_fin' => $dateEnd,
+                    'statut' => 'comptabilisee',
+                    'page' => $page,
+                    'par_page' => 200,
+                ]
+            );
+            array_push($items, ...$result['items']);
+            $page++;
+        } while ($page <= $result['pages']);
+        return $items;
     }
 
     /** @param array<string,mixed> $data @return array{id:int,number:string} */

@@ -227,26 +227,16 @@ final class WebApplication
             );
             return Response::redirect($this->config->url('/'));
         });
-        if ($this->reports !== null) {
-            foreach ([
-                '/compta/journal' => 'journal',
-                '/compta/grand-livre' => 'grand_livre',
-                '/compta/balance' => 'balance',
-                '/compta/bilan' => 'bilan',
-                '/compta/resultat' => 'resultat',
-            ] as $path => $report) {
-                $this->router->add(
-                    'GET',
-                    $path,
-                    fn (Request $request): Response => $this->accountingReport($request, $report)
-                );
-            }
-        }
         foreach ([
             '/compta' => '/app/compta',
             '/compta/saisie' => '/app/compta',
             '/compta/compte' => '/app/compta/extraits',
             '/compta/plan' => '/app/compta/plan',
+            '/compta/journal' => '/app/compta',
+            '/compta/grand-livre' => '/app/compta/etats',
+            '/compta/balance' => '/app/compta/etats',
+            '/compta/bilan' => '/app/compta/etats',
+            '/compta/resultat' => '/app/compta/etats',
         ] as $legacyPath => $vuePath) {
             $this->router->add(
                 'GET',
@@ -364,11 +354,6 @@ final class WebApplication
             )) {
                 $navigation[] = ['path' => '/compta/compte', 'label' => 'Extrait de compte'];
                 $navigation[] = ['path' => '/compta/plan', 'label' => 'Plan comptable'];
-                $navigation[] = ['path' => '/compta/journal', 'label' => 'Journal'];
-                $navigation[] = ['path' => '/compta/grand-livre', 'label' => 'Grand livre'];
-                $navigation[] = ['path' => '/compta/balance', 'label' => 'Balance'];
-                $navigation[] = ['path' => '/compta/bilan', 'label' => 'Bilan'];
-                $navigation[] = ['path' => '/compta/resultat', 'label' => 'Résultat'];
             }
             foreach ([
                 'facturation.view' => ['/facturation', 'Facturation'],
@@ -1593,207 +1578,6 @@ final class WebApplication
         $cents = ((int) $parts[2] * 100)
             + (int) str_pad((string) ($parts[3] ?? ''), 2, '0');
         return ($parts[1] ?? '') === '-' ? -$cents : $cents;
-    }
-
-    private function accountingReport(Request $request, string $report): Response
-    {
-        $userId = $this->auth->userId();
-        if ($userId === null) {
-            return Response::redirect($this->config->url('/login'), 302);
-        }
-        $organisationId = (int) $this->session->get('organisation_id', 0);
-        $dossierId = (int) $this->session->get('dossier_id', 0);
-        if (
-            $organisationId < 1
-            || $dossierId < 1
-            || !$this->access->canViewDossier($userId, $organisationId, $dossierId)
-            || !$this->access->hasDossierPermission(
-                $userId,
-                $organisationId,
-                $dossierId,
-                'compta.view'
-            )
-        ) {
-            return $this->error('Sélectionnez d’abord un dossier autorisé.', 403);
-        }
-        $exercise = $this->reports->exercise(
-            $organisationId,
-            $dossierId,
-            isset($request->query['exercice']) ? (int) $request->query['exercice'] : null
-        );
-        $filters = [
-            'exercice_id' => $exercise['id'],
-            'date_debut' => $request->query['date_debut'] ?? $exercise['date_debut'],
-            'date_fin' => $request->query['date_fin'] ?? $exercise['date_fin'],
-            'texte' => $request->query['texte'] ?? '',
-            'statut' => $request->query['statut'] ?? 'comptabilisee',
-            'journal_id' => (int) ($request->query['journal'] ?? 0),
-            'compte_id' => (int) ($request->query['compte'] ?? 0),
-            'page' => (int) ($request->query['page'] ?? 1),
-            'par_page' => (int) ($request->query['par_page'] ?? 50),
-        ];
-        [$title, $data, $columns] = match ($report) {
-            'journal' => [
-                'Journal',
-                $this->reports->journal($organisationId, $dossierId, $filters),
-                [
-                    'date_comptable' => 'Date',
-                    'numero' => 'N°',
-                    'journal' => 'Journal',
-                    'comptes_debit' => 'Compte(s) au débit',
-                    'comptes_credit' => 'Compte(s) au crédit',
-                    'libelle' => 'Libellé',
-                    'reference' => 'Référence',
-                    'debit_centimes' => 'Montant CHF',
-                    'statut' => 'Statut',
-                ],
-            ],
-            'grand_livre' => $this->ledgerReport(
-                $organisationId,
-                $dossierId,
-                $filters
-            ),
-            'balance' => [
-                'Balance',
-                $this->reports->trialBalance(
-                    $organisationId,
-                    $dossierId,
-                    $exercise['id'],
-                    $filters['date_fin']
-                ),
-                [
-                    'numero' => 'Compte',
-                    'libelle' => 'Libellé',
-                    'rubrique_chemin' => 'Structure',
-                    'type_libelle' => 'Type',
-                    'sens_normal' => 'Sens',
-                    'debit_centimes' => 'Débit CHF',
-                    'credit_centimes' => 'Crédit CHF',
-                    'solde_centimes' => 'Solde naturel CHF',
-                ],
-            ],
-            'bilan' => [
-                'Bilan',
-                $this->reports->balanceSheet(
-                    $organisationId,
-                    $dossierId,
-                    $exercise['id'],
-                    $filters['date_fin']
-                ),
-                [
-                    'numero' => 'Compte',
-                    'libelle' => 'Libellé',
-                    'rubrique_chemin' => 'Structure',
-                    'type_libelle' => 'Type',
-                    'solde_centimes' => 'Solde CHF',
-                ],
-            ],
-            'resultat' => [
-                'Compte de résultat',
-                $this->reports->incomeStatement(
-                    $organisationId,
-                    $dossierId,
-                    $exercise['id'],
-                    $filters['date_fin']
-                ),
-                [
-                    'numero' => 'Compte',
-                    'libelle' => 'Libellé',
-                    'rubrique_chemin' => 'Structure',
-                    'type_libelle' => 'Type',
-                    'solde_centimes' => 'Solde CHF',
-                ],
-            ],
-            default => throw new \RuntimeException('Rapport inconnu.'),
-        };
-        $items = $data['items'];
-        if (($request->query['format'] ?? '') === 'csv') {
-            if (!$this->access->hasDossierPermission(
-                $userId,
-                $organisationId,
-                $dossierId,
-                'compta.export'
-            )) {
-                return $this->error('Export comptable non autorisé.', 403);
-            }
-            $this->audit->log(
-                'compta.rapport_exporte',
-                $userId,
-                $organisationId,
-                $dossierId,
-                'rapport',
-                $report,
-                ['format' => 'csv'],
-                $request->ip()
-            );
-            return new Response(
-                $this->reports->csv($items, $columns),
-                200,
-                [
-                    'Content-Type' => 'text/csv; charset=UTF-8',
-                    'Content-Disposition' => 'attachment; filename="' . $report . '.csv"',
-                ]
-            );
-        }
-        return new Response($this->view->render('compta/report', [
-            'report' => $report,
-            'report_title' => $title,
-            'exercise' => $exercise,
-            'filters' => $filters,
-            'report_data' => $data,
-            'columns' => $columns,
-        ], $title));
-    }
-
-    /**
-     * @param array<string,mixed> $filters
-     * @return array{string,array<string,mixed>,array<string,string>}
-     */
-    private function ledgerReport(
-        int $organisationId,
-        int $dossierId,
-        array $filters,
-    ): array {
-        $accountId = (int) ($filters['compte_id'] ?? 0);
-        if ($accountId < 1) {
-            return [
-                'Grand livre',
-                $this->reports->generalLedger(
-                    $organisationId,
-                    $dossierId,
-                    (int) $filters['exercice_id'],
-                    (string) ($filters['date_debut'] ?? ''),
-                    (string) ($filters['date_fin'] ?? '')
-                ),
-                [
-                    'numero' => 'Compte',
-                    'libelle' => 'Libellé',
-                    'initial_centimes' => 'Solde initial CHF',
-                    'debit_centimes' => 'Débit CHF',
-                    'credit_centimes' => 'Crédit CHF',
-                    'solde_centimes' => 'Solde final CHF',
-                ],
-            ];
-        }
-        return [
-            'Grand livre',
-            $this->reports->ledger(
-                $organisationId,
-                $dossierId,
-                $accountId,
-                $filters
-            ),
-            [
-                'date_comptable' => 'Date',
-                'numero' => 'N°',
-                'journal' => 'Journal',
-                'libelle' => 'Libellé',
-                'reference' => 'Référence',
-                'debit_centimes' => 'Débit CHF',
-                'credit_centimes' => 'Crédit CHF',
-                'solde_centimes' => 'Solde CHF',
-            ],
-        ];
     }
 
     private function error(string $message, int $status): Response

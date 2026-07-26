@@ -16,13 +16,22 @@ export const useAccountingStore = defineStore('accounting', {
       this.error = '';
       this.notice = '';
     },
-    async load(exerciseId: number, accountId?: number): Promise<void> {
+    async load(
+      exerciseId: number,
+      accountId?: number,
+      dateStart?: string,
+      dateEnd?: string,
+      vatStatementId?: number
+    ): Promise<void> {
       this.loading = true;
       this.error = '';
       try {
         this.workspace = (await api.get<AccountingWorkspace>('/accounting', {
           exercise_id: exerciseId,
-          account_id: accountId
+          account_id: accountId,
+          date_start: dateStart,
+          date_end: dateEnd,
+          vat_statement_id: vatStatementId
         })).data;
       } catch (error) {
         this.error = errorMessage(error);

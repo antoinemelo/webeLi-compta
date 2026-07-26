@@ -19,7 +19,9 @@ use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Compta\AccountingInputValidator;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\AccountingWorkspaceService;
+use Compta\Modules\Compta\ClosingAndTaxService;
 use Compta\Modules\Compta\EntryService;
+use Compta\Modules\Compta\FinancialReportingService;
 use Compta\Modules\Compta\ReportingService;
 use Compta\Modules\Configuration\Application\ConfigurationService;
 use Compta\Modules\Configuration\Application\ManagedReferencesService;
@@ -49,6 +51,10 @@ use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Shell\Http\ShellInputValidator;
 use Compta\Modules\Shell\Http\ShellPageController;
 use Compta\Modules\Tva\VatConfigurationService;
+use Compta\Modules\Tva\Ech0217ExportService;
+use Compta\Modules\Tva\Ech0217Validator;
+use Compta\Modules\Tva\VatStatementService;
+use Compta\Modules\Tva\VatWorkspaceService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\OutgoingPaymentService;
@@ -96,6 +102,25 @@ $payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
 $vatConfiguration = new VatConfigurationService($pdo, $audit);
 $treasuryAccounts = new TreasuryAccountService($pdo, $audit);
 $accountingSetup = new AccountingSetupService($pdo, $audit);
+$financialReports = new FinancialReportingService($pdo, $reports);
+$vatWorkspace = new VatWorkspaceService(
+    $pdo,
+    new VatStatementService($pdo, $audit),
+    new Ech0217ExportService(
+        $pdo,
+        $audit,
+        new Ech0217Validator(
+            $root . '/resources/xsd/ech-0217-2-0-0-current-profile.xsd'
+        ),
+        trim((string) file_get_contents($root . '/VERSION'))
+    )
+);
+$closingAndTax = new ClosingAndTaxService(
+    $pdo,
+    $audit,
+    $accountingSetup,
+    $financialReports
+);
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
 $apiRoutes = new ApiRouteRegistry(
@@ -137,8 +162,16 @@ $apiRoutes = new ApiRouteRegistry(
         $session,
         $auth,
         $access,
-        new AccountingWorkspaceService($chart, $entries, $reports),
-        new AccountingInputValidator()
+        new AccountingWorkspaceService(
+            $chart,
+            $entries,
+            $reports,
+            $financialReports,
+            $vatWorkspace,
+            $closingAndTax
+        ),
+        new AccountingInputValidator(),
+        $audit
     ),
     new ExpenseApiController(
         $session,

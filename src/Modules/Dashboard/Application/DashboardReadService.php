@@ -595,7 +595,7 @@ final class DashboardReadService
             'paiement_salaire' => '/salaires/paiements?payment_id=' . $encoded,
             'ligne_bancaire' => '/liquidites/rapprochement?bank_line_id=' . $encoded,
             'decompte_tva' => '/compta/tva?statement_id=' . $encoded,
-            default => '/compta/journal?entry_id=' . $entryId,
+            default => '/compta',
         };
     }
 }

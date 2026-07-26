@@ -169,6 +169,19 @@ final class ApiRouteRegistry
                 '/api/v1/accounting/opening',
                 $this->accounting->saveOpening(...)
             );
+            $this->add($router, 'GET', '/api/v1/accounting/reports/export', $this->accounting->exportReport(...));
+            $this->add($router, 'POST', '/api/v1/accounting/vat/periods', $this->accounting->createVatPeriod(...));
+            $this->add($router, 'POST', '/api/v1/accounting/vat/statements/prepare', $this->accounting->prepareVatStatement(...));
+            $this->add($router, 'POST', '/api/v1/accounting/vat/statements/control', $this->accounting->controlVatStatement(...));
+            $this->add($router, 'POST', '/api/v1/accounting/vat/statements/export', $this->accounting->exportVatStatement(...));
+            $this->add($router, 'POST', '/api/v1/accounting/vat/statements/declare', $this->accounting->declareVatStatement(...));
+            $this->add($router, 'GET', '/api/v1/accounting/vat/exports/download', $this->accounting->downloadVatExport(...));
+            $this->add($router, 'POST', '/api/v1/accounting/closing/controls', $this->accounting->saveClosingControl(...));
+            $this->add($router, 'POST', '/api/v1/accounting/closing/periods', $this->accounting->setPeriodStatus(...));
+            $this->add($router, 'POST', '/api/v1/accounting/tax-file/adjustments', $this->accounting->createTaxAdjustment(...));
+            $this->add($router, 'POST', '/api/v1/accounting/tax-file/adjustments/status', $this->accounting->setTaxAdjustmentStatus(...));
+            $this->add($router, 'POST', '/api/v1/accounting/archives', $this->accounting->archive(...));
+            $this->add($router, 'GET', '/api/v1/accounting/archives/download', $this->accounting->downloadArchive(...));
         }
         if ($this->expenses !== null) {
             $this->add($router, 'GET', '/api/v1/liquidites', $this->expenses->show(...));

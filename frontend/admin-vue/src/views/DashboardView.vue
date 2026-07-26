@@ -338,7 +338,7 @@ async function refresh(): Promise<void> {
             <p class="eyebrow">Activité</p>
             <h2>Dernières écritures</h2>
           </div>
-          <RouterLink to="/compta/journal">Voir le journal</RouterLink>
+          <RouterLink to="/compta">Voir le journal</RouterLink>
         </div>
         <DataTable
           v-if="recentRows.length"

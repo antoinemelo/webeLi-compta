@@ -527,6 +527,158 @@ export type AccountingWorkspace = {
     total_credit_centimes: number;
     solde_centimes: number;
   };
+  reports: {
+    parameters: {
+      exercise_id: number; date_start: string; date_end: string;
+      ledger_statuses: string[];
+    };
+    general_ledger: {
+      items: Array<{
+        id: number; numero: string; libelle: string; sens_normal: string;
+        initial_centimes: number; debit_centimes: number;
+        credit_centimes: number; solde_centimes: number;
+      }>;
+    };
+    trial_balance: {
+      items: Array<{
+        id: number; numero: string; libelle: string; type: string;
+        rubrique_chemin: string; debit_centimes: number;
+        credit_centimes: number; solde_centimes: number;
+      }>;
+      total_debit_centimes: number; total_credit_centimes: number;
+      equilibree: boolean;
+    };
+    balance_sheet: {
+      items: Array<{
+        id: number; numero: string; libelle: string;
+        type: 'actif' | 'passif' | 'fonds_propres';
+        rubrique_chemin: string; solde_centimes: number;
+      }>;
+      total_actif_centimes: number; total_passif_centimes: number;
+      equilibre: boolean;
+    };
+    income_statement: {
+      items: Array<{
+        number: string; label: string; type: string; rubric_path: string;
+        current_cents: number; previous_cents: number; delta_cents: number;
+      }>;
+      current: {
+        label: string; products_cents: number; expenses_cents: number;
+        result_cents: number;
+      };
+      previous: {
+        exercise_id: number | null; label: string | null;
+        products_cents: number; expenses_cents: number; result_cents: number;
+      };
+      delta: {
+        products_cents: number; expenses_cents: number; result_cents: number;
+      };
+    };
+    cash_flow: {
+      method: string; method_label: string; date_start: string; date_end: string;
+      opening_cash_cents: number; inflows_cents: number; outflows_cents: number;
+      net_change_cents: number; closing_cash_cents: number;
+      reconciled_closing_cents: number; reconciliation_difference_cents: number;
+      classification_status: string;
+      accounts: Array<{
+        id: number; label: string; currency: string; ledger_number: string;
+        opening_cents: number; closing_cents: number; change_cents: number;
+      }>;
+      items: Array<{
+        entry_id: number; number: string; date: string; label: string;
+        category: string; amount_cents: number;
+      }>;
+    };
+    controls: {
+      debit_equals_credit: boolean; balance_sheet_balanced: boolean;
+      trial_result_cents: number; income_result_cents: number;
+      balance_result_cents: number; result_reconciled: boolean;
+      cash_reconciled: boolean;
+    };
+    definitions: { read_only: string; cash_flow: string; comparison: string };
+  };
+  vat: {
+    regime: null | {
+      id: number; status: string; vat_number: string; method: string;
+      reporting_mode: string; frequency: string; start_date: string;
+      end_date: string | null; regulatory_source: string; verified_on: string;
+    };
+    periods: Array<{
+      id: number; start_date: string; end_date: string; status: string;
+      version: number; regime_id: number;
+    }>;
+    statements: Array<{
+      id: number; period_id: number; status: string; submission_type: number;
+      correction_number: number; start_date: string; end_date: string;
+      turnover_cents: number; vat_due_cents: number; input_tax_cents: number;
+      corrections_cents: number; balance_cents: number;
+    }>;
+    selected_statement: null | {
+      summary: AccountingWorkspace['vat']['statements'][number];
+      boxes: Array<{ code: string; label: string; amount_cents: number }>;
+      reconciliation: Record<string, number | boolean | string>;
+      sources: Array<{
+        vat_line_id: number; entry_id: number; entry_number: string;
+        date: string; label: string; box: string; base_cents: number;
+        vat_cents: number; input_tax_cents: number; gross_cents: number;
+      }>;
+      exports: Array<{
+        id: number; format: string; schema_version: string; hash: string;
+        schema_valid: boolean; transmitted: false; created_at: string;
+      }>;
+    };
+    standard: {
+      format: string; version: string; verified_on: string;
+      transmission: 'manuelle'; transmitted_by_application: false;
+    };
+  };
+  closing: {
+    periods: Array<{
+      id: number; label: string; start_date: string; end_date: string;
+      status: 'ouverte' | 'fermee'; version: number;
+    }>;
+    automatic_controls: Array<{
+      code: string; label: string; passed: boolean; detail: string;
+    }>;
+    manual_controls: Array<{
+      code: string; label: string;
+      status: 'a_faire' | 'termine' | 'non_applicable';
+      note: string; version: number; updated_at: string | null;
+    }>;
+    can_close: boolean;
+    archives: Array<{
+      id: number; type: 'cloture' | 'dossier_fiscal';
+      start_date: string; end_date: string; parameters_hash: string;
+      ledger_hash: string; hash: string; created_at: string;
+    }>;
+    definition: string;
+  };
+  tax_file: {
+    status: 'preparatoire'; official_declaration: false; disclaimer: string;
+    period: { start_date: string; end_date: string };
+    bank_reconciliation: {
+      bank_lines: number; unmatched_lines: number; unmatched_cents: number;
+    };
+    supporting_documents: {
+      financial_documents: number; linked_attachments: number;
+      missing_supplier_attachments: number;
+    };
+    vat: {
+      regime: AccountingWorkspace['vat']['regime']; period_count: number;
+      statement_count: number;
+      latest_statement: AccountingWorkspace['vat']['statements'][number] | null;
+    };
+    adjustments: Array<{
+      id: number; label: string; nature: string; amount_cents: number;
+      note: string; status: 'propose' | 'valide' | 'ecarte';
+      created_at: string; updated_at: string | null; version: number;
+    }>;
+  };
+  capabilities: {
+    edit: boolean; validate: boolean; setup: boolean; export: boolean;
+    vat_setup: boolean; vat_prepare: boolean; vat_control: boolean;
+    vat_export: boolean; vat_declare: boolean;
+  };
 };
 
 export type DashboardAging = {

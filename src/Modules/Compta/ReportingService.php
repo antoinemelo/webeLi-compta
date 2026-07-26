@@ -331,7 +331,7 @@ final class ReportingService
             $balance['items'],
             static fn (array $row): bool => in_array(
                 $row['type'],
-                ['actif', 'passif'],
+                ['actif', 'passif', 'fonds_propres'],
                 true
             )
         ));

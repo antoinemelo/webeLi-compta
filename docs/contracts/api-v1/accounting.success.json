@@ -19,24 +19,126 @@
     },
     "opening": {
       "status": "absent",
-      "entry_id": null,
-      "number": null,
       "soldes": {}
     },
     "journal": {
       "items": [],
-      "pagination": {
-        "page": 1,
-        "par_page": 50,
-        "total": 0,
-        "pages": 0
+      "total": 0,
+      "page": 1,
+      "par_page": 50,
+      "pages": 1
+    },
+    "ledger": null,
+    "reports": {
+      "parameters": {
+        "exercise_id": 1,
+        "date_start": "2026-01-01",
+        "date_end": "2026-12-31",
+        "ledger_statuses": ["validee", "contre_passee"]
       },
-      "totals": {
-        "debit_centimes": 0,
-        "credit_centimes": 0
+      "general_ledger": {"items": []},
+      "trial_balance": {
+        "items": [],
+        "total_debit_centimes": 0,
+        "total_credit_centimes": 0,
+        "equilibree": true
+      },
+      "balance_sheet": {
+        "items": [],
+        "total_actif_centimes": 0,
+        "total_passif_centimes": 0,
+        "equilibre": true
+      },
+      "income_statement": {
+        "items": [],
+        "current": {
+          "label": "2026",
+          "products_cents": 0,
+          "expenses_cents": 0,
+          "result_cents": 0
+        },
+        "previous": {
+          "exercise_id": null,
+          "label": null,
+          "products_cents": 0,
+          "expenses_cents": 0,
+          "result_cents": 0
+        },
+        "delta": {
+          "products_cents": 0,
+          "expenses_cents": 0,
+          "result_cents": 0
+        }
+      },
+      "cash_flow": {
+        "method": "directe_grand_livre",
+        "date_start": "2026-01-01",
+        "date_end": "2026-12-31",
+        "opening_cash_cents": 0,
+        "inflows_cents": 0,
+        "outflows_cents": 0,
+        "net_change_cents": 0,
+        "closing_cash_cents": 0,
+        "reconciliation_difference_cents": 0,
+        "classification_status": "a_valider",
+        "accounts": [],
+        "items": []
+      },
+      "controls": {
+        "debit_equals_credit": true,
+        "balance_sheet_balanced": true,
+        "trial_result_cents": 0,
+        "income_result_cents": 0,
+        "balance_result_cents": 0,
+        "result_reconciled": true,
+        "cash_reconciled": true
       }
     },
-    "ledger": null
+    "vat": {
+      "regime": null,
+      "periods": [],
+      "statements": [],
+      "selected_statement": null,
+      "standard": {
+        "format": "eCH-0217",
+        "version": "2.0.0",
+        "transmission": "manuelle",
+        "transmitted_by_application": false
+      }
+    },
+    "closing": {
+      "periods": [],
+      "automatic_controls": [],
+      "manual_controls": [],
+      "can_close": true,
+      "archives": []
+    },
+    "tax_file": {
+      "status": "preparatoire",
+      "official_declaration": false,
+      "bank_reconciliation": {
+        "bank_lines": 0,
+        "unmatched_lines": 0,
+        "unmatched_cents": 0
+      },
+      "supporting_documents": {
+        "financial_documents": 0,
+        "linked_attachments": 0,
+        "missing_supplier_attachments": 0
+      },
+      "adjustments": []
+    },
+    "capabilities": {
+      "edit": true,
+      "validate": true,
+      "setup": true,
+      "export": true,
+      "vat_setup": true,
+      "vat_prepare": true,
+      "vat_control": true,
+      "vat_export": true,
+      "vat_declare": true
+    }
   },
   "meta": {
     "contract_version": "compta-api-v1",

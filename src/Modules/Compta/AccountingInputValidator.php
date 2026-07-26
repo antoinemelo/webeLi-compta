@@ -9,22 +9,264 @@ use DateTimeImmutable;
 
 final class AccountingInputValidator
 {
-    /** @return array{exercise_id:int,account_id:?int} */
+    /** @return array{exercise_id:int,account_id:?int,date_start:?string,date_end:?string,vat_statement_id:?int} */
     public function query(Request $request): array
     {
         $this->rejectUnknown(array_keys($request->query), [
-            'exercise_id', 'account_id',
+            'exercise_id', 'account_id', 'date_start', 'date_end',
+            'vat_statement_id',
         ]);
         $exerciseId = $this->positiveInteger(
             $request->query['exercise_id'] ?? null,
             'exercise_id'
         );
         $rawAccount = $request->query['account_id'] ?? null;
+        $rawVatStatement = $request->query['vat_statement_id'] ?? null;
+        $dateStart = $this->optionalDate(
+            $request->query['date_start'] ?? null,
+            'date_start'
+        );
+        $dateEnd = $this->optionalDate(
+            $request->query['date_end'] ?? null,
+            'date_end'
+        );
+        if ($dateStart !== null && $dateEnd !== null && $dateStart > $dateEnd) {
+            throw ApiException::validation([
+                'date_end' => ['La fin doit suivre le début.'],
+            ]);
+        }
         return [
             'exercise_id' => $exerciseId,
             'account_id' => $rawAccount === null || $rawAccount === ''
                 ? null
                 : $this->positiveInteger($rawAccount, 'account_id'),
+            'date_start' => $dateStart,
+            'date_end' => $dateEnd,
+            'vat_statement_id' =>
+                $rawVatStatement === null || $rawVatStatement === ''
+                    ? null
+                    : $this->positiveInteger(
+                        $rawVatStatement,
+                        'vat_statement_id'
+                    ),
+        ];
+    }
+
+    /** @return array{start:string,end:string} */
+    public function vatPeriod(Request $request): array
+    {
+        $data = $this->only($request, ['start', 'end']);
+        $start = $this->requiredDate($data['start'] ?? null, 'start');
+        $end = $this->requiredDate($data['end'] ?? null, 'end');
+        if ($start > $end) {
+            throw ApiException::validation([
+                'end' => ['La fin doit suivre le début.'],
+            ]);
+        }
+        return ['start' => $start, 'end' => $end];
+    }
+
+    /** @return array{period_id:int,corrects_id:?int} */
+    public function vatPreparation(Request $request): array
+    {
+        $data = $this->only($request, ['period_id', 'corrects_id']);
+        return [
+            'period_id' => $this->positiveInteger(
+                $data['period_id'] ?? null,
+                'period_id'
+            ),
+            'corrects_id' => ($data['corrects_id'] ?? null) === null
+                ? null
+                : $this->positiveInteger(
+                    $data['corrects_id'],
+                    'corrects_id'
+                ),
+        ];
+    }
+
+    /** @return array{statement_id:int} */
+    public function vatStatement(Request $request): array
+    {
+        $data = $this->only($request, ['statement_id']);
+        return [
+            'statement_id' => $this->positiveInteger(
+                $data['statement_id'] ?? null,
+                'statement_id'
+            ),
+        ];
+    }
+
+    /** @return array{exercise_id:int,code:string,status:string,note:string,version:int} */
+    public function closingControl(Request $request): array
+    {
+        $data = $this->only($request, [
+            'exercise_id', 'code', 'status', 'note', 'version',
+        ]);
+        return [
+            'exercise_id' => $this->positiveInteger(
+                $data['exercise_id'] ?? null,
+                'exercise_id'
+            ),
+            'code' => trim((string) ($data['code'] ?? '')),
+            'status' => trim((string) ($data['status'] ?? '')),
+            'note' => trim((string) ($data['note'] ?? '')),
+            'version' => $this->integer($data['version'] ?? null, 'version', 0),
+        ];
+    }
+
+    /** @return array{exercise_id:int,period_id:int,status:string,version:int} */
+    public function periodStatus(Request $request): array
+    {
+        $data = $this->only($request, [
+            'exercise_id', 'period_id', 'status', 'version',
+        ]);
+        $status = (string) ($data['status'] ?? '');
+        if (!in_array($status, ['ouverte', 'fermee'], true)) {
+            throw ApiException::validation([
+                'status' => ['Statut de période invalide.'],
+            ]);
+        }
+        return [
+            'exercise_id' => $this->positiveInteger(
+                $data['exercise_id'] ?? null,
+                'exercise_id'
+            ),
+            'period_id' => $this->positiveInteger(
+                $data['period_id'] ?? null,
+                'period_id'
+            ),
+            'status' => $status,
+            'version' => $this->positiveInteger(
+                $data['version'] ?? null,
+                'version'
+            ),
+        ];
+    }
+
+    /** @return array{exercise_id:int,label:string,nature:string,amount_cents:int,note:string,idempotency_key:string} */
+    public function taxAdjustment(Request $request): array
+    {
+        $data = $this->only($request, [
+            'exercise_id', 'label', 'nature', 'amount_cents', 'note',
+            'idempotency_key',
+        ]);
+        $amount = $data['amount_cents'] ?? null;
+        if (!is_int($amount) || $amount < 0) {
+            throw ApiException::validation([
+                'amount_cents' => ['Montant entier positif ou nul requis.'],
+            ]);
+        }
+        $label = trim((string) ($data['label'] ?? ''));
+        $key = trim((string) ($data['idempotency_key'] ?? ''));
+        if ($label === '' || $key === '' || strlen($key) > 190) {
+            throw ApiException::validation([
+                'adjustment' => ['Libellé et clé idempotente requis.'],
+            ]);
+        }
+        return [
+            'exercise_id' => $this->positiveInteger(
+                $data['exercise_id'] ?? null,
+                'exercise_id'
+            ),
+            'label' => $label,
+            'nature' => trim((string) ($data['nature'] ?? '')),
+            'amount_cents' => $amount,
+            'note' => trim((string) ($data['note'] ?? '')),
+            'idempotency_key' => $key,
+        ];
+    }
+
+    /** @return array{adjustment_id:int,status:string,version:int} */
+    public function taxAdjustmentStatus(Request $request): array
+    {
+        $data = $this->only($request, [
+            'adjustment_id', 'status', 'version',
+        ]);
+        return [
+            'adjustment_id' => $this->positiveInteger(
+                $data['adjustment_id'] ?? null,
+                'adjustment_id'
+            ),
+            'status' => trim((string) ($data['status'] ?? '')),
+            'version' => $this->positiveInteger(
+                $data['version'] ?? null,
+                'version'
+            ),
+        ];
+    }
+
+    /** @return array{exercise_id:int,type:string,date_start:string,date_end:string} */
+    public function archive(Request $request): array
+    {
+        $data = $this->only($request, [
+            'exercise_id', 'type', 'date_start', 'date_end',
+        ]);
+        $start = $this->requiredDate(
+            $data['date_start'] ?? null,
+            'date_start'
+        );
+        $end = $this->requiredDate($data['date_end'] ?? null, 'date_end');
+        if ($start > $end) {
+            throw ApiException::validation([
+                'date_end' => ['La fin doit suivre le début.'],
+            ]);
+        }
+        return [
+            'exercise_id' => $this->positiveInteger(
+                $data['exercise_id'] ?? null,
+                'exercise_id'
+            ),
+            'type' => trim((string) ($data['type'] ?? '')),
+            'date_start' => $start,
+            'date_end' => $end,
+        ];
+    }
+
+    public function queryId(Request $request, string $field): int
+    {
+        $this->rejectUnknown(array_keys($request->query), [$field]);
+        return $this->positiveInteger(
+            $request->query[$field] ?? null,
+            $field
+        );
+    }
+
+    /** @return array{exercise_id:int,type:string,date_start:string,date_end:string} */
+    public function reportExport(Request $request): array
+    {
+        $this->rejectUnknown(array_keys($request->query), [
+            'exercise_id', 'type', 'date_start', 'date_end',
+        ]);
+        $type = trim((string) ($request->query['type'] ?? ''));
+        if (!in_array($type, [
+            'journal', 'grand_livre', 'balance', 'bilan',
+            'resultat', 'flux_tresorerie',
+        ], true)) {
+            throw ApiException::validation([
+                'type' => ['Type de rapport invalide.'],
+            ]);
+        }
+        $start = $this->requiredDate(
+            $request->query['date_start'] ?? null,
+            'date_start'
+        );
+        $end = $this->requiredDate(
+            $request->query['date_end'] ?? null,
+            'date_end'
+        );
+        if ($start > $end) {
+            throw ApiException::validation([
+                'date_end' => ['La fin doit suivre le début.'],
+            ]);
+        }
+        return [
+            'exercise_id' => $this->positiveInteger(
+                $request->query['exercise_id'] ?? null,
+                'exercise_id'
+            ),
+            'type' => $type,
+            'date_start' => $start,
+            'date_end' => $end,
         ];
     }
 
@@ -293,6 +535,31 @@ final class AccountingInputValidator
     private function nullablePositiveInteger(mixed $value, string $field): ?int
     {
         return $value === null ? null : $this->positiveInteger($value, $field);
+    }
+
+    private function optionalDate(mixed $value, string $field): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        return $this->requiredDate($value, $field);
+    }
+
+    private function requiredDate(mixed $value, string $field): string
+    {
+        if (!is_string($value)) {
+            throw ApiException::validation([
+                $field => ['Date AAAA-MM-JJ requise.'],
+            ]);
+        }
+        $date = trim($value);
+        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d', $date);
+        if ($parsed === false || $parsed->format('Y-m-d') !== $date) {
+            throw ApiException::validation([
+                $field => ['Date AAAA-MM-JJ valide requise.'],
+            ]);
+        }
+        return $date;
     }
 
     /** @return list<int> */

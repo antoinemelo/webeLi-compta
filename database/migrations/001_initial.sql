@@ -48,6 +48,46 @@ CREATE TABLE allocations_salaires (
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL
 );
 
+CREATE TABLE ajustements_fiscaux (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    exercice_id INTEGER NOT NULL REFERENCES exercices(id) ON DELETE RESTRICT,
+    libelle TEXT NOT NULL CHECK (length(trim(libelle)) > 0),
+    nature TEXT NOT NULL
+        CHECK (nature IN ('augmentation', 'deduction', 'information')),
+    montant_centimes INTEGER NOT NULL CHECK (montant_centimes >= 0),
+    note TEXT NOT NULL DEFAULT '',
+    cle_idempotence TEXT NOT NULL DEFAULT '',
+    statut TEXT NOT NULL DEFAULT 'propose'
+        CHECK (statut IN ('propose', 'valide', 'ecarte')),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE archives_rapports_financiers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    exercice_id INTEGER NOT NULL REFERENCES exercices(id) ON DELETE RESTRICT,
+    type TEXT NOT NULL CHECK (type IN ('cloture', 'dossier_fiscal')),
+    date_debut TEXT NOT NULL,
+    date_fin TEXT NOT NULL,
+    parametres_json TEXT NOT NULL CHECK (json_valid(parametres_json)),
+    empreinte_parametres TEXT NOT NULL CHECK (length(empreinte_parametres) = 64),
+    empreinte_grand_livre TEXT NOT NULL CHECK (length(empreinte_grand_livre) = 64),
+    contenu_json TEXT NOT NULL CHECK (json_valid(contenu_json)),
+    empreinte_sha256 TEXT NOT NULL CHECK (length(empreinte_sha256) = 64),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    UNIQUE (
+        dossier_id, exercice_id, type, empreinte_sha256
+    )
+);
+
 CREATE TABLE assignations_exercice (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
@@ -158,6 +198,23 @@ CREATE TABLE comptes_tresorerie (
     modifie_le TEXT,
     version INTEGER NOT NULL DEFAULT 1,
     UNIQUE (dossier_id, compte_comptable_id)
+);
+
+CREATE TABLE controles_cloture (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    exercice_id INTEGER NOT NULL REFERENCES exercices(id) ON DELETE RESTRICT,
+    code TEXT NOT NULL CHECK (
+        code IN ('pieces', 'ajustements', 'revue_fiscale')
+    ),
+    statut TEXT NOT NULL DEFAULT 'a_faire'
+        CHECK (statut IN ('a_faire', 'termine', 'non_applicable')),
+    note TEXT NOT NULL DEFAULT '',
+    modifie_le TEXT NOT NULL DEFAULT (datetime('now')),
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (exercice_id, code)
 );
 
 CREATE TABLE conditions_paiement (
@@ -1643,6 +1700,16 @@ CREATE INDEX idx_modeles_factures_echeance
 
 CREATE INDEX idx_dossiers_organisation ON dossiers(organisation_id);
 
+CREATE INDEX idx_archives_rapports_scope
+    ON archives_rapports_financiers(dossier_id, exercice_id, type, cree_le);
+
+CREATE INDEX idx_ajustements_fiscaux_scope
+    ON ajustements_fiscaux(dossier_id, exercice_id, statut);
+
+CREATE UNIQUE INDEX idx_ajustements_fiscaux_idempotence
+    ON ajustements_fiscaux(dossier_id, cle_idempotence)
+    WHERE cle_idempotence <> '';
+
 CREATE INDEX idx_ecritures_journal
     ON ecritures(dossier_id, exercice_id, date_comptable, journal_id, statut);
 
@@ -1765,6 +1832,14 @@ CREATE UNIQUE INDEX uq_rubriques_code
     WHERE code <> '';
 
 -- TRIGGERS
+
+CREATE TRIGGER trg_archives_rapports_immutable_delete
+BEFORE DELETE ON archives_rapports_financiers
+BEGIN SELECT RAISE(ABORT, 'archive financière non supprimable'); END;
+
+CREATE TRIGGER trg_archives_rapports_immutable_update
+BEFORE UPDATE ON archives_rapports_financiers
+BEGIN SELECT RAISE(ABORT, 'archive financière immuable'); END;
 
 CREATE TRIGGER trg_allocations_salaires_scope BEFORE INSERT ON allocations_salaires
 BEGIN

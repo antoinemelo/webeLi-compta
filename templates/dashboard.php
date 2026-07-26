@@ -93,13 +93,13 @@ use Compta\Core\Support\Html;
       </div>
       <div class="d-flex flex-wrap gap-2" aria-label="Rapports et enseignement">
         <a class="btn btn-outline-primary"
-          href="<?= Html::escape($config->url('/compta/journal')) ?>">Journal</a>
+          href="<?= Html::escape($config->url('/app/compta')) ?>">Journal</a>
         <a class="btn btn-outline-primary"
-          href="<?= Html::escape($config->url('/compta/balance')) ?>">Balance</a>
+          href="<?= Html::escape($config->url('/app/compta/etats')) ?>">Balance</a>
         <a class="btn btn-outline-primary"
           href="<?= Html::escape($config->url('/compta/bilan')) ?>">Bilan</a>
         <a class="btn btn-outline-primary"
-          href="<?= Html::escape($config->url('/compta/resultat')) ?>">Compte de résultat</a>
+          href="<?= Html::escape($config->url('/app/compta/etats')) ?>">Compte de résultat</a>
         <a class="btn btn-outline-primary"
           href="<?= Html::escape($config->url('/pedagogie')) ?>">Enseignement</a>
       </div>

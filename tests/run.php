@@ -25,7 +25,9 @@ use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Compta\AccountingInputValidator;
 use Compta\Modules\Compta\AccountingWorkspaceService;
 use Compta\Modules\Compta\ChartOfAccountsService;
+use Compta\Modules\Compta\ClosingAndTaxService;
 use Compta\Modules\Compta\EntryService;
+use Compta\Modules\Compta\FinancialReportingService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Compta\ReportingService;
 use Compta\Modules\Configuration\Application\ConfigurationService;
@@ -74,6 +76,7 @@ use Compta\Modules\Tva\VatLineService;
 use Compta\Modules\Tva\VatPostingService;
 use Compta\Modules\Tva\VatSettlementService;
 use Compta\Modules\Tva\VatStatementService;
+use Compta\Modules\Tva\VatWorkspaceService;
 use Compta\Modules\Salaires\PayrollCalculator;
 use Compta\Modules\Salaires\PayrollCertificateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
@@ -1484,6 +1487,28 @@ final class Tests
             $httpAudit
         );
         $httpVatConfiguration = new VatConfigurationService($pdo, $httpAudit);
+        $httpReports = new ReportingService($pdo);
+        $httpFinancial = new FinancialReportingService($pdo, $httpReports);
+        $httpVatWorkspace = new VatWorkspaceService(
+            $pdo,
+            new VatStatementService($pdo, $httpAudit),
+            new Ech0217ExportService(
+                $pdo,
+                $httpAudit,
+                new Ech0217Validator(
+                    dirname(__DIR__)
+                    . '/resources/xsd/ech-0217-2-0-0-current-profile.xsd'
+                ),
+                trim((string) file_get_contents(dirname(__DIR__) . '/VERSION'))
+            )
+        );
+        $httpAccountingSetup = new AccountingSetupService($pdo, $httpAudit);
+        $httpClosing = new ClosingAndTaxService(
+            $pdo,
+            $httpAudit,
+            $httpAccountingSetup,
+            $httpFinancial
+        );
         $apiRoutes = new ApiRouteRegistry(
             new ShellApiController(
                 $config,
@@ -1526,9 +1551,13 @@ final class Tests
                 new AccountingWorkspaceService(
                     new ChartOfAccountsService($pdo, $httpAudit),
                     $httpEntries,
-                    new ReportingService($pdo)
+                    $httpReports,
+                    $httpFinancial,
+                    $httpVatWorkspace,
+                    $httpClosing
                 ),
-                new AccountingInputValidator()
+                new AccountingInputValidator(),
+                $httpAudit
             ),
             new ExpenseApiController(
                 $session,
@@ -2745,12 +2774,89 @@ final class Tests
             && ($apiLedgerJson['data']['ledger']['total_debit_centimes'] ?? 0) >= 2530,
             'extrait liste et compte en T alimentés par la même projection'
         );
-        $grandLivreGateway = $app->handle(new Request('GET', '/compta/grand-livre'));
-        $this->same(200, $grandLivreGateway->status, 'grand livre synthétique accessible sans choisir un compte');
         $this->true(
-            str_contains($grandLivreGateway->body, 'Solde initial CHF')
-            && str_contains($grandLivreGateway->body, 'Solde final CHF'),
-            'grand livre reprend soldes initiaux, mouvements et soldes finaux'
+            isset(
+                $apiLedgerJson['data']['reports']['trial_balance'],
+                $apiLedgerJson['data']['reports']['balance_sheet'],
+                $apiLedgerJson['data']['reports']['income_statement'],
+                $apiLedgerJson['data']['reports']['cash_flow'],
+                $apiLedgerJson['data']['vat']['standard'],
+                $apiLedgerJson['data']['closing']['automatic_controls'],
+                $apiLedgerJson['data']['tax_file']['official_declaration']
+            ),
+            'rapports, TVA, clôture et dossier fiscal exposés dans le contrat Vue'
+        );
+        $this->true(
+            ($apiLedgerJson['data']['reports']['controls']['debit_equals_credit'] ?? false)
+            && ($apiLedgerJson['data']['reports']['controls']['balance_sheet_balanced'] ?? false)
+            && ($apiLedgerJson['data']['reports']['controls']['result_reconciled'] ?? false)
+            && ($apiLedgerJson['data']['reports']['controls']['cash_reconciled'] ?? false),
+            'contrôles de cohérence financière exposés au client'
+        );
+        $this->same(
+            false,
+            $apiLedgerJson['data']['tax_file']['official_declaration'] ?? null,
+            'dossier fiscal API explicitement préparatoire'
+        );
+        $archivePayload = ['data' => [
+            'exercise_id' => $exerciseId,
+            'type' => 'cloture',
+            'date_start' => '2026-01-01',
+            'date_end' => '2026-12-31',
+        ]];
+        $archiveWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/archives',
+            json: $archivePayload
+        ));
+        $this->same(403, $archiveWithoutCsrf->status, 'archive financière sans CSRF refusée');
+        $archiveResponse = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/archives',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: $archivePayload
+        ));
+        $archiveJson = $this->responseJson($archiveResponse);
+        $archiveId = (int) ($archiveJson['data']['id'] ?? 0);
+        $this->true(
+            $archiveResponse->status === 200 && $archiveId > 0,
+            'archive financière créée depuis Vue'
+        );
+        $archiveReplay = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/archives',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: $archivePayload
+        ));
+        $this->same(
+            $archiveId,
+            (int) ($this->responseJson($archiveReplay)['data']['id'] ?? 0),
+            'archive financière API idempotente'
+        );
+        $archiveDownload = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/archives/download',
+            query: ['archive_id' => (string) $archiveId]
+        ));
+        $this->true(
+            $archiveDownload->status === 200
+            && strlen($archiveDownload->headers['X-Content-SHA256'] ?? '') === 64
+            && hash(
+                'sha256',
+                $archiveDownload->body
+            ) === ($archiveDownload->headers['X-Content-SHA256'] ?? ''),
+            'archive téléchargée avec empreinte vérifiée'
+        );
+        $grandLivreGateway = $app->handle(new Request('GET', '/compta/grand-livre'));
+        $this->same(303, $grandLivreGateway->status, 'ancien grand livre redirigé');
+        $this->same(
+            '/edu/app/compta/etats',
+            $grandLivreGateway->headers['Location'] ?? '',
+            'grand livre servi uniquement par Vue'
+        );
+        $this->true(
+            isset($apiLedgerJson['data']['reports']['general_ledger']['items']),
+            'grand livre synthétique alimenté par la projection financière unique'
         );
         $entryPost = $app->handle(new Request(
             'POST',
@@ -2781,12 +2887,11 @@ final class Tests
         $journalScreen = $app->handle(new Request('GET', '/compta/journal', query: [
             'exercice' => (string) $exerciseId,
         ]));
-        $this->true(
-            str_contains($journalScreen->body, 'Compte(s) au débit')
-            && str_contains($journalScreen->body, 'Compte(s) au crédit')
-            && str_contains($journalScreen->body, '125,50 CHF')
-            && !str_contains($journalScreen->body, 'Débit (ct)'),
-            'journal lisible en comptes et francs comme le programme historique'
+        $this->same(303, $journalScreen->status, 'ancien journal redirigé');
+        $this->same(
+            '/edu/app/compta',
+            $journalScreen->headers['Location'] ?? '',
+            'journal servi uniquement par Vue'
         );
         $billingScreen = $app->handle(new Request('GET', '/facturation'));
         $this->same(303, $billingScreen->status, 'ancien écran facturation retiré');
@@ -2963,19 +3068,22 @@ final class Tests
         $balance = $app->handle(new Request('GET', '/compta/balance', query: [
             'exercice' => (string) $exerciseId,
         ]));
-        $this->same(200, $balance->status, 'vue imprimable de balance accessible');
-        $this->true(
-            str_contains($balance->body, 'veb.ch'),
-            'attribution du plan visible dans le rapport'
+        $this->same(303, $balance->status, 'ancien rapport de balance redirigé');
+        $this->same(
+            '/edu/app/compta/etats',
+            $balance->headers['Location'] ?? '',
+            'balance servie uniquement par Vue'
         );
-        $csv = $app->handle(new Request('GET', '/compta/balance', query: [
-            'exercice' => (string) $exerciseId,
-            'format' => 'csv',
+        $csv = $app->handle(new Request('GET', '/api/v1/accounting/reports/export', query: [
+            'exercise_id' => (string) $exerciseId,
+            'type' => 'balance',
+            'date_start' => '2026-01-01',
+            'date_end' => '2026-12-31',
         ]));
         $this->same(
             'text/csv; charset=UTF-8',
             $csv->headers['Content-Type'],
-            'export CSV HTTP'
+            'export CSV HTTP par le contrat Vue'
         );
         $plan = $app->handle(new Request('GET', '/compta/plan'));
         $this->same(303, $plan->status, 'ancien plan comptable redirigé');
@@ -2986,8 +3094,9 @@ final class Tests
         );
         $this->true(
             !is_file(dirname(__DIR__) . '/templates/compta/plan.php')
+            && !is_file(dirname(__DIR__) . '/templates/compta/report.php')
             && is_file(dirname(__DIR__) . '/frontend/admin-vue/src/views/AccountingView.vue'),
-            'ancien template supprimé au profit de la vue unique'
+            'anciens templates comptables supprimés au profit de la vue unique'
         );
         $planNoCsrf = $app->handle(new Request(
             'POST',
@@ -3033,6 +3142,16 @@ final class Tests
         [$pdo, $runner] = $this->database();
         $runner->apply();
         $ids = $this->seedScopes($pdo);
+        $pdo->prepare(
+            'INSERT INTO utilisateurs (email, mot_de_passe, prenom, nom)
+             VALUES (?, ?, ?, ?)'
+        )->execute([
+            'compta-reports@example.test',
+            'test-hash',
+            'Rapports',
+            'Test',
+        ]);
+        $reportActorId = (int) $pdo->lastInsertId();
         $audit = new AuditLogger($pdo);
         $scope = new ScopeManager($pdo, $audit);
         $exerciseA = $scope->createExercise(
@@ -3731,7 +3850,7 @@ final class Tests
             '2027-01-01',
             '2027-12-31'
         );
-        $setup->createPeriod(
+        $period2027 = $setup->createPeriod(
             $ids['organisation_a'],
             $ids['dossier_a'],
             $nextExercise,
@@ -3876,6 +3995,220 @@ final class Tests
             'bilan généré'
         );
         $this->true($sheet['equilibre'], 'résultat courant intégré au bilan');
+
+        (new TreasuryAccountService($pdo, $audit))->create([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'compte_comptable_id' => $bank,
+            'libelle' => 'Banque rapports',
+            'type' => 'banque',
+            'iban' => 'CH9300762011623852957',
+            'bic' => 'POFICHBEXXX',
+            'monnaie' => 'CHF',
+        ]);
+        $financial = new FinancialReportingService($pdo, $reports);
+        $financial2027 = $financial->read(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            '2027-01-01',
+            '2027-12-31'
+        );
+        $this->true(
+            $financial2027['controls']['debit_equals_credit']
+            && $financial2027['controls']['balance_sheet_balanced']
+            && $financial2027['controls']['result_reconciled'],
+            'balance, résultat et bilan réconciliés dans la projection financière'
+        );
+        $this->same(
+            175000,
+            $financial2027['cash_flow']['opening_cash_cents'],
+            'flux reprend les liquidités d’ouverture'
+        );
+        $this->same(
+            0,
+            $financial2027['cash_flow']['reconciliation_difference_cents'],
+            'flux réconcilié au centime avec la variation des liquidités'
+        );
+        $this->same(
+            $exerciseA,
+            $financial2027['income_statement']['previous']['exercise_id'],
+            'compte de résultat comparé au dernier exercice antérieur'
+        );
+        $vatWorkspace = new VatWorkspaceService(
+            $pdo,
+            new VatStatementService($pdo, $audit),
+            new Ech0217ExportService(
+                $pdo,
+                $audit,
+                new Ech0217Validator(
+                    dirname(__DIR__)
+                    . '/resources/xsd/ech-0217-2-0-0-current-profile.xsd'
+                ),
+                'test'
+            )
+        );
+        $vat2027 = $vatWorkspace->read(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            '2027-01-01',
+            '2027-12-31'
+        );
+        $this->same(null, $vat2027['regime'], 'TVA Vue explicite sans régime configuré');
+        $closing = new ClosingAndTaxService(
+            $pdo,
+            $audit,
+            $setup,
+            $financial
+        );
+        $closing->saveManualControl(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            'pieces',
+            'termine',
+            'Pièces revues.',
+            0,
+            $reportActorId
+        );
+        $closingState = $closing->read(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            '2027-01-01',
+            '2027-12-31',
+            $financial2027,
+            $vat2027
+        );
+        $this->true($closingState['closing']['can_close'], 'checklist automatique autorise la clôture');
+        $this->same(
+            'termine',
+            $closingState['closing']['manual_controls'][0]['status'],
+            'checklist manuelle versionnée conservée'
+        );
+        $adjustmentA = $closing->createAdjustment(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            'Réserve préparatoire',
+            'information',
+            2500,
+            'À valider par le fiscaliste.',
+            'fiscal-2027-reserve',
+            $reportActorId
+        );
+        $adjustmentB = $closing->createAdjustment(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            'Réserve préparatoire',
+            'information',
+            2500,
+            'À valider par le fiscaliste.',
+            'fiscal-2027-reserve',
+            $reportActorId
+        );
+        $this->same($adjustmentA, $adjustmentB, 'ajustement fiscal rejouable sans doublon');
+        $this->throws(
+            fn () => $closing->createAdjustment(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $nextExercise,
+                'Réserve préparatoire',
+                'information',
+                2501,
+                'À valider par le fiscaliste.',
+                'fiscal-2027-reserve',
+                $reportActorId
+            ),
+            'clé fiscale refuse un ajustement différent'
+        );
+        $this->same(
+            false,
+            $closingState['tax_file']['official_declaration'],
+            'dossier fiscal ne prétend pas produire une déclaration officielle'
+        );
+        $archivePayload = [
+            'reports' => $financial2027,
+            'vat' => $vat2027,
+            'tax_file' => $closingState['tax_file'],
+        ];
+        $archiveA = $closing->archive(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            'cloture',
+            '2027-01-01',
+            '2027-12-31',
+            $archivePayload,
+            $reportActorId
+        );
+        $archiveB = $closing->archive(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            'cloture',
+            '2027-01-01',
+            '2027-12-31',
+            $archivePayload,
+            $reportActorId
+        );
+        $this->same($archiveA, $archiveB, 'archive financière idempotente à grand livre identique');
+        $archiveChanged = $closing->archive(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            'cloture',
+            '2027-01-01',
+            '2027-12-31',
+            [...$archivePayload, 'review_note' => 'Revue complétée'],
+            $reportActorId
+        );
+        $this->true(
+            $archiveChanged !== $archiveA,
+            'contenu de clôture différent produit une archive distincte'
+        );
+        $archive = $closing->archiveContent(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $archiveA
+        );
+        $this->same(
+            hash('sha256', $archive['content']),
+            $archive['hash'],
+            'empreinte de l’archive financière vérifiée'
+        );
+        $this->throws(
+            fn () => $pdo->exec(
+                "UPDATE archives_rapports_financiers
+                 SET date_fin = '2027-11-30' WHERE id = {$archiveA}"
+            ),
+            'archive financière immuable'
+        );
+        $closing->setPeriodStatus(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            $period2027,
+            'fermee',
+            1,
+            $reportActorId
+        );
+        $this->same(
+            'fermee',
+            (string) $pdo->query(
+                "SELECT statut FROM periodes WHERE id = {$period2027}"
+            )->fetchColumn(),
+            'période verrouillée depuis la checklist de clôture'
+        );
+        $this->same(
+            3,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM archives_rapports_financiers
+                 WHERE exercice_id = {$nextExercise} AND type = 'cloture'"
+            )->fetchColumn(),
+            'fermeture archive automatiquement ses rapports et contrôles'
+        );
 
         $chart = new ChartOfAccountsService($pdo, $audit);
         $adminVersion = (int) $pdo->query(

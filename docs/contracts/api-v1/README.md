@@ -71,6 +71,19 @@ Les exemples versionnés sont :
 | POST | `/api/v1/accounting/chart/rubrics` | création, édition, ordre ou retrait d’une rubrique |
 | POST | `/api/v1/accounting/chart/accounts` | création, édition, ordre ou désactivation d’un compte |
 | POST | `/api/v1/accounting/opening` | enregistrement ou validation des soldes d’ouverture |
+| GET | `/api/v1/accounting/reports/export` | export CSV paramétré et empreinte du grand livre |
+| POST | `/api/v1/accounting/vat/periods` | création d’une période TVA |
+| POST | `/api/v1/accounting/vat/statements/prepare` | préparation ou rectification depuis les sources |
+| POST | `/api/v1/accounting/vat/statements/control` | contrôle et rapprochement avec le grand livre TVA |
+| POST | `/api/v1/accounting/vat/statements/export` | génération et validation eCH-0217, sans transmission |
+| POST | `/api/v1/accounting/vat/statements/declare` | confirmation manuelle de la déclaration |
+| GET | `/api/v1/accounting/vat/exports/download` | téléchargement XML avec empreinte |
+| POST | `/api/v1/accounting/closing/controls` | contrôle manuel versionné de la checklist |
+| POST | `/api/v1/accounting/closing/periods` | fermeture ou réouverture contrôlée d’une période |
+| POST | `/api/v1/accounting/tax-file/adjustments` | ajustement fiscal préparatoire idempotent |
+| POST | `/api/v1/accounting/tax-file/adjustments/status` | validation ou mise à l’écart d’un ajustement |
+| POST | `/api/v1/accounting/archives` | archive financière immuable et vérifiable |
+| GET | `/api/v1/accounting/archives/download` | téléchargement JSON avec empreinte |
 | GET | `/api/v1/liquidites` | dépenses, récurrences, pièces et catalogues du dossier |
 | POST | `/api/v1/liquidites/depenses` | création d’une dépense en brouillon |
 | POST | `/api/v1/liquidites/depenses/soumettre` | soumission à approbation |
@@ -145,11 +158,19 @@ entiers et les taux TVA en points de base ; Vue ne fait aucun calcul avec des
 flottants. Les valeurs proposées pour 2026 proviennent de `TAUX_DEFAUT` de
 Lasso et restent explicitement à vérifier auprès des organismes concernés.
 
-La lecture comptable exige `exercise_id` et accepte `account_id` pour demander
-un extrait. Les mutations utilisent uniquement le scope de session et les
-services `EntryService` et `ChartOfAccountsService`. Elles exigent
-respectivement `compta.edit`, `compta.setup` ou `compta.validate`. Tous les
-montants transmis sont des centimes entiers.
+La lecture comptable exige `exercise_id`, accepte `account_id`,
+`date_start`, `date_end` et `vat_statement_id`, puis renvoie le journal,
+l’extrait, le plan, les états financiers, la TVA, la checklist de clôture et le
+dossier fiscal préparatoire. Les états n’écrivent jamais dans le grand livre.
+Les mutations utilisent uniquement le scope de session et les services métier
+existants. Elles exigent `compta.edit`, `compta.setup`, `compta.validate`,
+`compta.export` ou la permission TVA correspondant précisément à l’étape.
+Tous les montants transmis sont des centimes entiers.
+
+Un export de rapport exige les dates exactes et inclut ces paramètres ainsi que
+l’empreinte du grand livre. Une archive contient en plus une empreinte de son
+contenu complet ; elle est immuable et vérifiée au téléchargement. L’export
+eCH-0217 est validé mais jamais déclaré transmis automatiquement.
 
 Les dépenses utilisent le même document fournisseur, les mêmes contacts, codes
 TVA, comptes, pièces jointes, paiements et allocations que Facturation. Elles

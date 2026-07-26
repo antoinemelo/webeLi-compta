@@ -177,6 +177,34 @@ test('journal, extrait et plan comptable utilisent le parcours Vue unique', asyn
   expect(legacy.headers().location).toBe('/e2e/app/compta/plan');
 });
 
+test('états, clôture et dossier fiscal utilisent le grand livre unique', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
+
+  await page.getByRole('link', { name: 'États financiers', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'États financiers' })).toBeVisible();
+  await expect(page.getByText('Débit = crédit')).toBeVisible();
+  await expect(page.getByText('Résultat réconcilié')).toBeVisible();
+  await page.getByRole('button', { name: 'Flux de trésorerie' }).click();
+  await expect(page.getByRole('heading', { name: 'Flux de trésorerie' })).toBeVisible();
+  await expect(page.getByText(/Méthode directe/)).toBeVisible();
+
+  await page.getByRole('link', { name: 'Clôture', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Clôture et verrouillage' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Contrôles documentés' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Dossier fiscal', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Dossier fiscal' })).toBeVisible();
+  await expect(page.getByText(/aucun calcul fiscal officiel/i)).toBeVisible();
+
+  const legacy = await page.request.get('/e2e/compta/bilan', { maxRedirects: 0 });
+  expect(legacy.status()).toBe(303);
+  expect(legacy.headers().location).toBe('/e2e/app/compta/etats');
+});
+
 test('facturation client, contact 360 et aging utilisent le parcours Vue unique', async ({ page }) => {
   await loginAsAdministrator(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({

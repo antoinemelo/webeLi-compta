@@ -92,6 +92,12 @@ ou compte en T, grand livre, soldes initiaux et états. Les différences et les
 garanties supplémentaires sont décrites dans la
 [correspondance avec Journal](docs/journal-correspondance.md).
 
+Les onglets Vue couvrent aussi le grand livre, la balance, le bilan, le compte
+de résultat comparatif, le flux de trésorerie réconcilié, le décompte TVA, la
+checklist de clôture et le dossier fiscal préparatoire. Les anciennes routes de
+rapports ne rendent plus d’écran parallèle et redirigent vers ce parcours
+unique. Voir [le guide rapports, clôture et fiscal](docs/rapports-cloture-fiscal.md).
+
 L’écran **Plan comptable et ouvertures** permet de configurer les préfixes
 moins / plus, les rubriques de regroupement, les numéros/libellés/types des
 comptes et les soldes initiaux. Les exceptions VEB restent explicites et une
