@@ -17,6 +17,10 @@ La commande vérifie successivement :
 5. le diagnostic et l'intégrité de cette base ;
 6. les préconditions de l'archive de production.
 
+La suite d’intégration vérifie en outre la montée d’une copie de base en
+version 010 vers les migrations additives 011 et 012, ainsi que la conservation
+des identifiants, de la devise et de l’intégrité référentielle.
+
 Les tests ne sont pas dupliqués. `quick` contient les contrôles purs de
 configuration et la parité de calcul Lasso ; `integration` contient SQLite,
 HTTP et tous les modules. `all` reste la valeur par défaut.

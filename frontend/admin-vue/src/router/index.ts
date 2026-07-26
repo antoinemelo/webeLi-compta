@@ -2,6 +2,7 @@ import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { runtimeConfig } from '@/config';
 import { canDiscardChanges } from '@/composables/unsavedChanges';
 import DashboardView from '@/views/DashboardView.vue';
+import ConfigurationView from '@/views/ConfigurationView.vue';
 import WorkspaceView from '@/views/WorkspaceView.vue';
 
 const workspace = (
@@ -24,7 +25,12 @@ const routes: RouteRecordRaw[] = [
   workspace('/facturation/:tab?', 'billing', 'Facturation', 'billing', '/facturation'),
   workspace('/compta/:tab?', 'accounting', 'Comptabilité', 'accounting', '/compta'),
   workspace('/salaires/:tab?', 'payroll', 'Salaires', 'payroll', '/salaires'),
-  workspace('/configuration/:tab?', 'settings', 'Configuration', 'settings', '/compta/plan'),
+  {
+    path: '/configuration/:tab?',
+    name: 'settings',
+    component: ConfigurationView,
+    meta: { label: 'Configuration', section: 'settings' }
+  },
   { path: '/:pathMatch(.*)*', redirect: '/' }
 ];
 

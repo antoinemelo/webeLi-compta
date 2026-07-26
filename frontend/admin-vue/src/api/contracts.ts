@@ -79,8 +79,90 @@ export type ShellContext = {
     exercise: null | Omit<Exercise, 'version'>;
   };
   permissions: string[];
+  enabled_modules: string[];
   navigation: NavigationItem[];
   csrf_token: string;
+};
+
+export type ConfigurationModule = {
+  code: 'apprentissage' | 'liquidites' | 'facturation' | 'comptabilite' | 'salaires';
+  label: string;
+  description: string;
+  enabled: boolean;
+  version: number;
+  updated_at: string | null;
+};
+
+export type PaymentTerm = {
+  id: number;
+  code: string;
+  label: string;
+  direction: 'client' | 'fournisseur' | 'tous';
+  days: number;
+  end_of_month: boolean;
+  valid_from: string;
+  valid_until: string | null;
+  active: boolean;
+  is_default: boolean;
+  version: number;
+};
+
+export type ConfigurationReferenceItem = {
+  id: number;
+  label: string;
+  type: string;
+  detail: string;
+  active: boolean;
+};
+
+export type ConfigurationReference = {
+  count: number;
+  items: ConfigurationReferenceItem[];
+  legacy_path: string;
+};
+
+export type ConfigurationPayload = {
+  identity: {
+    organization: {
+      id: number;
+      name: string;
+      legal_name: string;
+      legal_form: string;
+      uid: string;
+      address_line1: string;
+      address_line2: string;
+      postal_code: string;
+      city: string;
+      canton: string;
+      country: string;
+      phone: string;
+      email: string;
+      website: string;
+      version: number;
+    };
+    dossier: {
+      id: number;
+      name: string;
+      base_currency: string;
+      version: number;
+    };
+  };
+  modules: ConfigurationModule[];
+  payment_terms: PaymentTerm[];
+  references: Record<string, ConfigurationReference>;
+  audit: Array<{
+    id: number;
+    action: string;
+    target_type: string;
+    target_id: string;
+    actor: string;
+    created_at: string;
+  }>;
+  definitions: {
+    contacts: string;
+    historical_values: string;
+    payment_due_date: string;
+  };
 };
 
 export type DashboardAging = {

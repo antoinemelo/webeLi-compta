@@ -56,6 +56,12 @@ Le premier écran utile expose trésorerie, chiffre d’affaires, charges,
 SQLite strictement en lecture. Ses définitions et preuves de concordance sont
 documentées dans [le guide du tableau de bord](docs/dashboard.md).
 
+La page `/app/configuration` centralise l’identité légale, la devise, les
+modules par dossier, les conditions de paiement datées et les liens vers les
+référentiels existants. Une désactivation est appliquée dans la navigation et
+côté serveur sans supprimer les données. Voir
+[le guide de configuration](docs/configuration.md).
+
 ## Initialiser la comptabilité
 
 Après création de l’organisation, du dossier et de l’exercice :

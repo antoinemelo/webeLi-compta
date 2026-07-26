@@ -16,6 +16,7 @@ use Compta\Modules\Compta\AccountingException;
 use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Configuration\Application\ModuleAccessService;
 use Compta\Modules\Facturation\BillingException;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\ContactService;
@@ -63,6 +64,7 @@ final class WebApplication
         private readonly ?PedagogyService $pedagogy = null,
         private readonly ?ApiRouteRegistry $apiRoutes = null,
         private readonly ?ShellPageController $shellPage = null,
+        private readonly ?ModuleAccessService $moduleAccess = null,
     ) {
         $this->router = new Router();
         $this->routes();
@@ -70,6 +72,10 @@ final class WebApplication
 
     public function handle(Request $request): Response
     {
+        $moduleRefusal = $this->disabledModuleResponse($request);
+        if ($moduleRefusal !== null) {
+            return $this->withSecurityHeaders($moduleRefusal);
+        }
         if (str_starts_with($request->path, '/api/v1')) {
             if (!$this->router->has($request->method, $request->path)) {
                 return $this->withSecurityHeaders(ApiResponse::failure(
@@ -106,6 +112,47 @@ final class WebApplication
                 500
             ));
         }
+    }
+
+    private function disabledModuleResponse(Request $request): ?Response
+    {
+        $module = $this->moduleAccess?->moduleForPath($request->path);
+        $userId = $this->auth->userId();
+        if ($module === null || $userId === null) {
+            return null;
+        }
+        $organisationId = (int) $this->session->get('organisation_id', 0);
+        $dossierId = (int) $this->session->get('dossier_id', 0);
+        if (
+            $organisationId < 1
+            || $dossierId < 1
+            || !$this->access->canViewDossier(
+                $userId,
+                $organisationId,
+                $dossierId
+            )
+            || $this->moduleAccess?->isEnabled(
+                $organisationId,
+                $dossierId,
+                $module
+            )
+        ) {
+            return null;
+        }
+        if (str_starts_with($request->path, '/api/v1')) {
+            return ApiResponse::failure(
+                $request,
+                ApiException::forbidden('Module désactivé pour ce dossier.')
+            );
+        }
+        return new Response(
+            $this->view->render(
+                'error',
+                ['message' => 'Ce module est désactivé pour le dossier sélectionné.'],
+                'Module désactivé'
+            ),
+            403
+        );
     }
 
     private function routes(): void

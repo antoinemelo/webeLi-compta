@@ -4,12 +4,15 @@ declare(strict_types=1);
 namespace Compta\Modules\Shell\Application;
 
 use Compta\Core\Http\Api\ListQuery;
+use Compta\Modules\Configuration\Application\ModuleAccessService;
 use PDO;
 
 final class ShellReadService
 {
-    public function __construct(private readonly PDO $pdo)
-    {
+    public function __construct(
+        private readonly PDO $pdo,
+        private readonly ?ModuleAccessService $modules = null,
+    ) {
     }
 
     /** @return array{id:int,email:string,first_name:string,last_name:string,name:string}|null */
@@ -221,22 +224,44 @@ final class ShellReadService
         return is_string($currency) && $currency !== '' ? $currency : 'CHF';
     }
 
-    /** @param list<string> $permissions @return list<array<string,mixed>> */
-    public function navigation(array $permissions, bool $hasDossier): array
+    /** @return list<string> */
+    public function enabledModules(int $organisationId, int $dossierId): array
+    {
+        return $this->modules?->enabledCodes($organisationId, $dossierId)
+            ?? ['apprentissage', 'liquidites', 'facturation', 'comptabilite', 'salaires'];
+    }
+
+    /**
+     * @param list<string> $permissions
+     * @param list<string> $enabledModules
+     * @return list<array<string,mixed>>
+     */
+    public function navigation(
+        array $permissions,
+        bool $hasDossier,
+        array $enabledModules = [
+            'apprentissage', 'liquidites', 'facturation', 'comptabilite', 'salaires',
+        ],
+    ): array
     {
         $definitions = [
-            ['key' => 'dashboard', 'label' => 'Tableau de bord', 'path' => '/', 'permission' => null],
-            ['key' => 'learning', 'label' => 'Apprentissage', 'path' => '/pedagogie', 'permission' => 'pedagogie.view'],
-            ['key' => 'liquidity', 'label' => 'Liquidités', 'path' => '/liquidites', 'permission' => 'tresorerie.view'],
-            ['key' => 'billing', 'label' => 'Facturation', 'path' => '/facturation', 'permission' => 'facturation.view'],
-            ['key' => 'accounting', 'label' => 'Comptabilité', 'path' => '/compta', 'permission' => 'compta.view'],
-            ['key' => 'payroll', 'label' => 'Salaires', 'path' => '/salaires', 'permission' => 'salaires.view'],
-            ['key' => 'settings', 'label' => 'Configuration', 'path' => '/configuration', 'permission' => 'dossier.manage'],
+            ['key' => 'dashboard', 'label' => 'Tableau de bord', 'path' => '/', 'permission' => null, 'module' => null],
+            ['key' => 'learning', 'label' => 'Apprentissage', 'path' => '/pedagogie', 'permission' => 'pedagogie.view', 'module' => 'apprentissage'],
+            ['key' => 'liquidity', 'label' => 'Liquidités', 'path' => '/liquidites', 'permission' => 'tresorerie.view', 'module' => 'liquidites'],
+            ['key' => 'billing', 'label' => 'Facturation', 'path' => '/facturation', 'permission' => 'facturation.view', 'module' => 'facturation'],
+            ['key' => 'accounting', 'label' => 'Comptabilité', 'path' => '/compta', 'permission' => 'compta.view', 'module' => 'comptabilite'],
+            ['key' => 'payroll', 'label' => 'Salaires', 'path' => '/salaires', 'permission' => 'salaires.view', 'module' => 'salaires'],
+            ['key' => 'settings', 'label' => 'Configuration', 'path' => '/configuration', 'permission' => 'dossier.manage', 'module' => null],
         ];
         return array_values(array_filter(
             $definitions,
-            static fn (array $item): bool => $item['permission'] === null
+            static fn (array $item): bool => (
+                $item['permission'] === null
                 || ($hasDossier && in_array($item['permission'], $permissions, true))
+            ) && (
+                $item['module'] === null
+                || in_array($item['module'], $enabledModules, true)
+            )
         ));
     }
 

@@ -749,6 +749,131 @@ textarea {
   width: 55%;
 }
 
+.configuration-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.configuration-form {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.configuration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.configuration-grid .form-field {
+  margin: 0;
+}
+
+.configuration-grid input,
+.configuration-grid select,
+.default-term input,
+.default-term select {
+  width: 100%;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 3rem;
+  padding-top: 1.4rem;
+  font-weight: 650;
+}
+
+.checkbox-field input {
+  width: auto;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.module-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.module-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+}
+
+.module-card h3,
+.module-card p {
+  margin: 0;
+}
+
+.module-card p {
+  margin-top: 0.35rem;
+  color: var(--muted);
+}
+
+.module-state {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.default-term {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+}
+
+.default-term h3 {
+  margin: 0;
+}
+
+.reference-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.reference-card {
+  align-content: start;
+}
+
+.compact-list {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.compact-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.compact-list span:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.compact-list small {
+  color: var(--muted);
+}
+
 .visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -801,6 +926,20 @@ textarea {
   .metric-grid,
   .dashboard-two-columns {
     grid-template-columns: 1fr;
+  }
+
+  .configuration-grid,
+  .reference-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .module-card,
+  .module-state {
+    align-items: flex-start;
+  }
+
+  .module-card {
+    flex-direction: column;
   }
 
   .dashboard-filters {

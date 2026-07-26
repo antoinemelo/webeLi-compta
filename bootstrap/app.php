@@ -17,6 +17,10 @@ use Compta\Core\Security\NativeSessionStore;
 use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Configuration\Application\ConfigurationService;
+use Compta\Modules\Configuration\Application\ModuleAccessService;
+use Compta\Modules\Configuration\Http\ConfigurationApiController;
+use Compta\Modules\Configuration\Http\ConfigurationInputValidator;
 use Compta\Modules\Dashboard\Application\DashboardReadService;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
@@ -60,6 +64,8 @@ $auth = new AuthService(
 );
 $access = new AccessControl($pdo);
 $reports = new ReportingService($pdo);
+$moduleAccess = new ModuleAccessService($pdo);
+$configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
 $apiRoutes = new ApiRouteRegistry(
     new ShellApiController(
         $config,
@@ -68,7 +74,7 @@ $apiRoutes = new ApiRouteRegistry(
         $auth,
         $access,
         $audit,
-        new ShellReadService($pdo),
+        new ShellReadService($pdo, $moduleAccess),
         new ShellInputValidator()
     ),
     new DashboardApiController(
@@ -78,7 +84,14 @@ $apiRoutes = new ApiRouteRegistry(
         new DashboardReadService($pdo, $reports),
         new DashboardInputValidator()
     ),
-    $csrf
+    $csrf,
+    new ConfigurationApiController(
+        $session,
+        $auth,
+        $access,
+        $configuration,
+        new ConfigurationInputValidator()
+    )
 );
 $shellPage = new ShellPageController(
     $config,
@@ -113,6 +126,7 @@ return [
         new PayrollImportService($pdo, $audit, $payrolls),
         new PedagogyService($pdo, $audit, $entries),
         $apiRoutes,
-        $shellPage
+        $shellPage,
+        $moduleAccess
     ),
 ];

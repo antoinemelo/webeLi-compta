@@ -7,6 +7,7 @@ use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Http\Router;
 use Compta\Core\Security\Csrf;
+use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Throwable;
@@ -17,6 +18,7 @@ final class ApiRouteRegistry
         private readonly ShellApiController $shell,
         private readonly DashboardApiController $dashboard,
         private readonly Csrf $csrf,
+        private readonly ?ConfigurationApiController $configuration = null,
     ) {
     }
 
@@ -30,6 +32,38 @@ final class ApiRouteRegistry
         $this->add($router, 'GET', '/api/v1/exercises', $this->shell->exercises(...));
         $this->add($router, 'GET', '/api/v1/references', $this->shell->references(...));
         $this->add($router, 'GET', '/api/v1/dashboard', $this->dashboard->show(...));
+        if ($this->configuration !== null) {
+            $this->add(
+                $router,
+                'GET',
+                '/api/v1/configuration',
+                $this->configuration->show(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/identity',
+                $this->configuration->updateIdentity(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/modules',
+                $this->configuration->updateModule(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/payment-terms',
+                $this->configuration->createPaymentTerm(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/payment-defaults',
+                $this->configuration->updatePaymentDefault(...)
+            );
+        }
     }
 
     /** @param callable(Request):Response $handler */

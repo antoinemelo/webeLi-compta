@@ -28,6 +28,12 @@ $userId = $users->create(
     'Léa',
     'Lectrice'
 );
+$administratorId = $users->create(
+    'admin@example.test',
+    'mot-de-passe-e2e',
+    'Alex',
+    'Administrateur'
+);
 $organisationA = $scopes->createOrganisation('Entreprise Alpha SA', 'reelle');
 $dossierA = $scopes->createDossier(
     $organisationA,
@@ -135,9 +141,11 @@ $scopes->createExercise($dossierC, 'Atelier 2026', '2026-01-01', '2026-12-31');
 
 $scopes->grantRole($userId, 'lecteur', 'dossier', $dossierA);
 $scopes->grantRole($userId, 'lecteur', 'dossier', $dossierC);
+$scopes->grantRole($administratorId, 'administrateur', 'dossier', $dossierA);
 
 echo json_encode([
     'user_id' => $userId,
+    'administrator_id' => $administratorId,
     'allowed' => [$dossierA, $dossierC],
     'forbidden' => [
         'organisation_id' => $organisationB,

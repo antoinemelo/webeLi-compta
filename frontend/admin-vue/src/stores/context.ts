@@ -13,6 +13,8 @@ export const useContextStore = defineStore('context', {
   getters: {
     can: (state) => (permission: string): boolean =>
       state.context?.permissions.includes(permission) ?? false,
+    moduleEnabled: (state) => (module: string): boolean =>
+      state.context?.enabled_modules.includes(module) ?? false,
     selection: (state) => state.context?.selection ?? null,
     csrfToken: (state) => state.context?.csrf_token ?? ''
   },

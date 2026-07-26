@@ -37,8 +37,10 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
   ],
   settings: [
     { key: 'entity', label: 'Entité', path: '/configuration' },
-    { key: 'accounting', label: 'Comptabilité', path: '/configuration/comptabilite' },
-    { key: 'taxes', label: 'TVA et charges', path: '/configuration/taux' },
-    { key: 'access', label: 'Accès', path: '/configuration/acces' }
+    { key: 'modules', label: 'Modules', path: '/configuration/modules' },
+    { key: 'payments', label: 'Paiements', path: '/configuration/paiements' },
+    { key: 'references', label: 'Référentiels', path: '/configuration/referentiels' },
+    { key: 'access', label: 'Accès', path: '/configuration/acces' },
+    { key: 'audit', label: 'Audit', path: '/configuration/audit' }
   ]
 };

@@ -25,6 +25,11 @@ use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Compta\ReportingService;
+use Compta\Modules\Configuration\Application\ConfigurationService;
+use Compta\Modules\Configuration\Application\ModuleAccessService;
+use Compta\Modules\Configuration\Application\PaymentTermsService;
+use Compta\Modules\Configuration\Http\ConfigurationApiController;
+use Compta\Modules\Configuration\Http\ConfigurationInputValidator;
 use Compta\Modules\Dashboard\Application\DashboardReadService;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Dashboard\Http\DashboardInputValidator;
@@ -125,6 +130,10 @@ final class Tests
             'projection du tableau de bord' => [
                 'integration',
                 fn () => $this->dashboardTests(),
+            ],
+            'configuration, modules et conditions de paiement' => [
+                'integration',
+                fn () => $this->configurationTests(),
             ],
             'HTTP et CSRF' => ['integration', fn () => $this->httpTests()],
             'diagnostic, sauvegarde et multi-instance' => [
@@ -398,7 +407,10 @@ final class Tests
         [$pdo, $runner] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            ['001', '002', '003', '004', '005', '006', '007', '008', '009', '010'],
+            [
+                '001', '002', '003', '004', '005', '006',
+                '007', '008', '009', '010', '011', '012',
+            ],
             $applied,
             'migrations initiales appliquées'
         );
@@ -407,6 +419,55 @@ final class Tests
         $this->same('1', (string) $pdo->query('PRAGMA foreign_keys')->fetchColumn(), 'clés étrangères actives');
         $this->same('5000', (string) $pdo->query('PRAGMA busy_timeout')->fetchColumn(), 'busy timeout');
         $this->same('wal', mb_strtolower((string) $pdo->query('PRAGMA journal_mode')->fetchColumn()), 'WAL actif');
+
+        $versionTenDirectory = $this->tempDir() . '/migrations';
+        mkdir($versionTenDirectory, 0770, true);
+        foreach (range(1, 10) as $version) {
+            $prefix = str_pad((string) $version, 3, '0', STR_PAD_LEFT);
+            $source = glob(dirname(__DIR__) . "/database/migrations/{$prefix}_*.sql")[0];
+            copy($source, $versionTenDirectory . '/' . basename($source));
+        }
+        $versionTenPdo = ConnectionFactory::sqlite(
+            $this->tempDir() . '/version-010.sqlite'
+        );
+        $versionTenRunner = new MigrationRunner($versionTenPdo, $versionTenDirectory);
+        $versionTenRunner->apply();
+        $versionTenPdo->exec(
+            "INSERT INTO organisations (id, nom, nature)
+                VALUES (41, 'Organisation reprise', 'reelle');
+             INSERT INTO dossiers (id, organisation_id, nom, slug, type, monnaie)
+                VALUES (73, 41, 'Dossier repris', 'dossier-repris', 'reel', 'CHF');"
+        );
+        foreach ([11, 12] as $version) {
+            $prefix = str_pad((string) $version, 3, '0', STR_PAD_LEFT);
+            $source = glob(dirname(__DIR__) . "/database/migrations/{$prefix}_*.sql")[0];
+            copy($source, $versionTenDirectory . '/' . basename($source));
+        }
+        $this->same(
+            ['011', '012'],
+            $versionTenRunner->apply(),
+            'copie en version 010 montée additivement vers 012'
+        );
+        $this->same(
+            '41|73|CHF',
+            (string) $versionTenPdo->query(
+                "SELECT o.id || '|' || d.id || '|' || d.monnaie
+                 FROM organisations o JOIN dossiers d ON d.organisation_id = o.id
+                 WHERE o.id = 41 AND d.id = 73"
+            )->fetchColumn(),
+            'identifiants et devise conservés après reprise 010'
+        );
+        $this->same(
+            5,
+            (int) $versionTenPdo->query(
+                'SELECT COUNT(*) FROM modules_dossier WHERE dossier_id = 73'
+            )->fetchColumn(),
+            'modules initialisés sans recréer le dossier'
+        );
+        $this->true(
+            IntegrityChecker::check($versionTenPdo)['ok'],
+            'intégrité de la copie version 010 après migrations 011–012'
+        );
 
         $upgradeDirectory = $this->tempDir() . '/migrations';
         mkdir($upgradeDirectory, 0770, true);
@@ -1125,6 +1186,285 @@ final class Tests
         );
     }
 
+    private function configurationTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $audit = new AuditLogger($pdo);
+        $manager = new ScopeManager($pdo, $audit);
+        $organisationId = $manager->createOrganisation(
+            'Atelier Configuration SA',
+            'reelle'
+        );
+        $dossierId = $manager->createDossier(
+            $organisationId,
+            'Comptabilité configuration',
+            'configuration',
+            'reel'
+        );
+        $userId = (new UserRepository($pdo))->create(
+            'configuration@example.test',
+            'mot-de-passe-configuration'
+        );
+        $moduleAccess = new ModuleAccessService($pdo);
+        $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
+
+        $this->same(
+            5,
+            count($moduleAccess->modules($organisationId, $dossierId)),
+            'nouveau dossier initialisé avec le registre de modules'
+        );
+        $pdo->prepare(
+            'INSERT INTO parametres_dossier (dossier_id, cle, valeur)
+             VALUES (?, ?, ?)'
+        )->execute([$dossierId, 'preuve_apprentissage', 'conservee']);
+        $configuration->setModule(
+            $organisationId,
+            $dossierId,
+            'apprentissage',
+            false,
+            1,
+            $userId
+        );
+        $this->false(
+            $moduleAccess->isEnabled(
+                $organisationId,
+                $dossierId,
+                'apprentissage'
+            ),
+            'module désactivé côté service'
+        );
+        $navigation = (new ShellReadService($pdo, $moduleAccess))->navigation(
+            ['pedagogie.view'],
+            true,
+            $moduleAccess->enabledCodes($organisationId, $dossierId)
+        );
+        $this->false(
+            in_array('learning', array_column($navigation, 'key'), true),
+            'module désactivé absent de la navigation'
+        );
+        $configuration->setModule(
+            $organisationId,
+            $dossierId,
+            'apprentissage',
+            true,
+            2,
+            $userId
+        );
+        $this->true(
+            $moduleAccess->isEnabled(
+                $organisationId,
+                $dossierId,
+                'apprentissage'
+            ),
+            'module réactivé'
+        );
+        $this->same(
+            'conservee',
+            (string) $pdo->query(
+                "SELECT valeur FROM parametres_dossier
+                 WHERE dossier_id = {$dossierId}
+                   AND cle = 'preuve_apprentissage'"
+            )->fetchColumn(),
+            'réactivation retrouve les données intactes'
+        );
+
+        $initial = $configuration->read($organisationId, $dossierId);
+        $updatedIdentity = $configuration->updateIdentity(
+            $organisationId,
+            $dossierId,
+            [
+                'organization_version' => $initial['identity']['organization']['version'],
+                'dossier_version' => $initial['identity']['dossier']['version'],
+                'name' => 'Atelier Configuration',
+                'legal_name' => 'Atelier Configuration SA',
+                'legal_form' => 'Société anonyme',
+                'uid' => 'CHE-123.456.789',
+                'address_line1' => 'Rue des Tests 5',
+                'address_line2' => '',
+                'postal_code' => '1201',
+                'city' => 'Genève',
+                'canton' => 'GE',
+                'country' => 'CH',
+                'phone' => '+41 22 000 00 00',
+                'email' => 'compta@example.test',
+                'website' => 'https://example.test',
+                'base_currency' => 'EUR',
+            ],
+            $userId
+        );
+        $this->same(
+            'Atelier Configuration SA|EUR',
+            $updatedIdentity['organization']['legal_name']
+                . '|' . $updatedIdentity['dossier']['base_currency'],
+            'identité légale et devise de base enregistrées'
+        );
+        $this->throws(
+            fn () => $configuration->updateIdentity(
+                $organisationId,
+                $dossierId,
+                [
+                    'organization_version' => 1,
+                    'dossier_version' => 1,
+                    'name' => 'Écrasement',
+                    'base_currency' => 'CHF',
+                ],
+                $userId
+            ),
+            'conflit optimiste protège la configuration'
+        );
+
+        $net30 = $configuration->createPaymentTerm(
+            $organisationId,
+            $dossierId,
+            [
+                'code' => 'NET30',
+                'label' => 'Net à 30 jours',
+                'direction' => 'client',
+                'days' => 30,
+                'end_of_month' => false,
+                'valid_from' => '2026-01-01',
+                'valid_until' => '',
+            ],
+            $userId
+        );
+        $configuration->setPaymentDefault(
+            $organisationId,
+            $dossierId,
+            'client',
+            $net30,
+            '2026-01-01',
+            $userId
+        );
+        $terms = new PaymentTermsService($pdo);
+        $oldResolution = $terms->resolveDefault(
+            $organisationId,
+            $dossierId,
+            'client',
+            '2026-02-01'
+        );
+        $this->same(
+            '2026-03-03',
+            $oldResolution['due_date'] ?? '',
+            'échéance calculée sans flottant depuis le défaut daté'
+        );
+        $this->throws(
+            fn () => $configuration->setPaymentDefault(
+                $organisationId,
+                $dossierId,
+                'client',
+                999999,
+                '2026-06-01',
+                $userId
+            ),
+            'condition par défaut étrangère ou absente refusée'
+        );
+        $this->same(
+            $net30,
+            $terms->resolveDefault(
+                $organisationId,
+                $dossierId,
+                'client',
+                '2026-06-15'
+            )['condition_id'] ?? 0,
+            'refus de condition atomique sans altérer le défaut courant'
+        );
+
+        $pdo->prepare(
+            "INSERT INTO contacts
+             (organisation_id, dossier_id, raison_sociale)
+             VALUES (?, ?, 'Client historique')"
+        )->execute([$organisationId, $dossierId]);
+        $contactId = (int) $pdo->lastInsertId();
+        $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, statut, numero,
+              date_document, date_echeance, adresse_snapshot_json,
+              contact_snapshot_json, condition_paiement_id,
+              condition_paiement_snapshot_json)
+             VALUES (?, ?, ?, 'facture_client', 'emis', 'F-2026-001',
+                     '2026-02-01', ?, '{}', '{}', ?, ?)"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $contactId,
+            $oldResolution['due_date'],
+            $oldResolution['condition_id'],
+            json_encode($oldResolution['snapshot'], JSON_THROW_ON_ERROR),
+        ]);
+        $documentId = (int) $pdo->lastInsertId();
+
+        $monthEnd = $configuration->createPaymentTerm(
+            $organisationId,
+            $dossierId,
+            [
+                'code' => 'M10',
+                'label' => '10 jours fin de mois',
+                'direction' => 'client',
+                'days' => 10,
+                'end_of_month' => true,
+                'valid_from' => '2026-07-01',
+                'valid_until' => '',
+            ],
+            $userId
+        );
+        $configuration->setPaymentDefault(
+            $organisationId,
+            $dossierId,
+            'client',
+            $monthEnd,
+            '2026-07-01',
+            $userId
+        );
+        $newResolution = $terms->resolveDefault(
+            $organisationId,
+            $dossierId,
+            'client',
+            '2026-08-10'
+        );
+        $this->same(
+            '2026-08-31',
+            $newResolution['due_date'] ?? '',
+            'nouveau défaut appliqué seulement à sa période'
+        );
+        $historicalDocument = $pdo->query(
+            "SELECT date_echeance,
+                    json_extract(condition_paiement_snapshot_json, '$.code') AS code
+             FROM documents_financiers WHERE id = {$documentId}"
+        )->fetch();
+        $this->same(
+            '2026-03-03|NET30',
+            $historicalDocument['date_echeance'] . '|' . $historicalDocument['code'],
+            'changement de défaut sans effet rétroactif'
+        );
+        $this->throws(
+            fn () => $pdo->exec(
+                "UPDATE documents_financiers
+                 SET condition_paiement_snapshot_json = '{}'
+                 WHERE id = {$documentId}"
+            ),
+            'snapshot de paiement du document émis immuable'
+        );
+        $read = $configuration->read($organisationId, $dossierId);
+        $this->same(
+            1,
+            $read['references']['contacts']['count'],
+            'Configuration lie le registre unique de contacts'
+        );
+        $this->true(
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE dossier_id = {$dossierId}
+                   AND action LIKE 'configuration.%'"
+            )->fetchColumn() >= 7,
+            'toutes les modifications sensibles sont auditées'
+        );
+        $this->true(
+            IntegrityChecker::check($pdo)['ok'],
+            'intégrité après configuration'
+        );
+    }
+
     private function httpTests(): void
     {
         [$pdo, $runner, $dbPath] = $this->database();
@@ -1192,6 +1532,12 @@ final class Tests
             $session
         );
         $httpAccess = new AccessControl($pdo);
+        $httpModuleAccess = new ModuleAccessService($pdo);
+        $httpConfiguration = new ConfigurationService(
+            $pdo,
+            $httpAudit,
+            $httpModuleAccess
+        );
         $apiRoutes = new ApiRouteRegistry(
             new ShellApiController(
                 $config,
@@ -1200,7 +1546,7 @@ final class Tests
                 $httpAuth,
                 $httpAccess,
                 $httpAudit,
-                new ShellReadService($pdo),
+                new ShellReadService($pdo, $httpModuleAccess),
                 new ShellInputValidator()
             ),
             new DashboardApiController(
@@ -1210,7 +1556,14 @@ final class Tests
                 new DashboardReadService($pdo, new ReportingService($pdo)),
                 new DashboardInputValidator()
             ),
-            $csrf
+            $csrf,
+            new ConfigurationApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                $httpConfiguration,
+                new ConfigurationInputValidator()
+            )
         );
         $shellPage = new ShellPageController(
             $config,
@@ -1240,7 +1593,8 @@ final class Tests
             new PayrollImportService($pdo, $httpAudit, $httpPayrolls),
             $httpPedagogy,
             $apiRoutes,
-            $shellPage
+            $shellPage,
+            $httpModuleAccess
         );
 
         $session->remove('user_id');
@@ -1407,6 +1761,103 @@ final class Tests
             )->fetchColumn(),
             'corrélation conservée dans l’audit de mutation'
         );
+        $apiConfiguration = $app->handle(new Request(
+            'GET',
+            '/api/v1/configuration'
+        ));
+        $apiConfigurationJson = $this->responseJson($apiConfiguration);
+        $this->same(
+            200,
+            $apiConfiguration->status,
+            'configuration centralisée exposée en API'
+        );
+        $learningModule = array_values(array_filter(
+            $apiConfigurationJson['data']['modules'] ?? [],
+            static fn (array $module): bool => $module['code'] === 'apprentissage'
+        ))[0] ?? [];
+        $configurationWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/modules',
+            json: ['data' => [
+                'code' => 'apprentissage',
+                'enabled' => false,
+                'version' => (int) ($learningModule['version'] ?? 0),
+            ]]
+        ));
+        $this->same(
+            403,
+            $configurationWithoutCsrf->status,
+            'mutation de configuration sans CSRF refusée'
+        );
+        $disableLearning = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/modules',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'code' => 'apprentissage',
+                'enabled' => false,
+                'version' => (int) ($learningModule['version'] ?? 0),
+            ]]
+        ));
+        $this->same(200, $disableLearning->status, 'module désactivable par API');
+        $contextWithoutLearning = $this->responseJson(
+            $app->handle(new Request('GET', '/api/v1/context'))
+        );
+        $this->false(
+            in_array(
+                'learning',
+                array_column($contextWithoutLearning['data']['navigation'] ?? [], 'key'),
+                true
+            ),
+            'navigation API omet le module désactivé'
+        );
+        $this->same(
+            403,
+            $app->handle(new Request('GET', '/app/apprentissage'))->status,
+            'route Vue d’un module désactivé refusée côté serveur'
+        );
+        $this->same(
+            403,
+            $app->handle(new Request('GET', '/pedagogie'))->status,
+            'route historique d’un module désactivé refusée côté serveur'
+        );
+        $this->same(
+            403,
+            $app->handle(new Request('GET', '/api/v1/pedagogie/exercices'))->status,
+            'route API d’un module désactivé refusée côté serveur'
+        );
+        $reenableLearning = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/modules',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'code' => 'apprentissage',
+                'enabled' => true,
+                'version' => (int) ($learningModule['version'] ?? 0) + 1,
+            ]]
+        ));
+        $this->same(200, $reenableLearning->status, 'module réactivable par API');
+        $this->same(
+            200,
+            $app->handle(new Request('GET', '/app/apprentissage'))->status,
+            'réactivation restaure la route Vue'
+        );
+        $invalidConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/modules',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'code' => 'salaires',
+                'enabled' => true,
+                'version' => 1,
+                'dossier_id' => $ids['dossier_b'],
+            ]]
+        ));
+        $this->same(
+            422,
+            $invalidConfiguration->status,
+            'configuration refuse les identifiants de scope injectés'
+        );
         $apiDashboard = $app->handle(new Request(
             'GET',
             '/api/v1/dashboard',
@@ -1559,6 +2010,7 @@ final class Tests
             'context.success.json',
             'collection.success.json',
             'dashboard.success.json',
+            'configuration.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(

@@ -30,6 +30,7 @@ Les exemples versionnés sont :
 - `context.success.json` ;
 - `collection.success.json` ;
 - `dashboard.success.json` ;
+- `configuration.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -44,6 +45,11 @@ Les exemples versionnés sont :
 | GET | `/api/v1/exercises` | exercices du dossier courant, paginés |
 | GET | `/api/v1/references` | types, statuts et devise de base |
 | GET | `/api/v1/dashboard` | projection comptable à une date et pour un exercice |
+| GET | `/api/v1/configuration` | identité, modules, paiements et liens vers les référentiels |
+| POST | `/api/v1/configuration/identity` | identité légale et devise de base |
+| POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
+| POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
+| POST | `/api/v1/configuration/payment-defaults` | nouveau défaut client ou fournisseur |
 
 Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
@@ -67,6 +73,11 @@ L’exercice doit appartenir au dossier de session et la date doit être compris
 dans ses bornes. Cette route est strictement en lecture et exige
 `compta.view`.
 
+La configuration exige `dossier.manage`. Toutes ses mutations sont limitées au
+scope de session : les identifiants d’organisation ou de dossier sont refusés
+dans la charge utile. Les versions optimistes protègent l’identité et les
+modules contre les écrasements concurrents.
+
 ## Erreurs
 
 - `401 AUTHENTICATION_REQUIRED` : session absente ou utilisateur inactif ;
@@ -82,7 +93,7 @@ générique sans nom ni métadonnée de la ressource visée.
 
 ## Retour arrière
 
-Ce lot ne crée aucune migration et ne modifie aucune donnée comptable. Le
-retour arrière consiste à revenir au commit du lot 01
-`7166e808144cc84159d66b430674e052ced2ec0b`; les routes HTML historiques
-restent utilisables pendant toute la transition.
+Les routes initiales restent compatibles. Les migrations de configuration
+étant additives, revenir avant leur introduction nécessite de restaurer la
+sauvegarde SQLite créée avant migration. Voir
+[`../../configuration.md`](../../configuration.md).

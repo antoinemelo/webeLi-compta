@@ -48,7 +48,15 @@
     "permissions": [
       "compta.view",
       "dossier.view",
-      "exercice.view"
+      "exercice.view",
+      "dossier.manage"
+    ],
+    "enabled_modules": [
+      "apprentissage",
+      "liquidites",
+      "facturation",
+      "comptabilite",
+      "salaires"
     ],
     "navigation": [
       {
@@ -62,6 +70,12 @@
         "label": "Comptabilité",
         "path": "/compta",
         "permission": "compta.view"
+      },
+      {
+        "key": "settings",
+        "label": "Configuration",
+        "path": "/configuration",
+        "permission": "dossier.manage"
       }
     ],
     "csrf_token": "example-token-not-valid"

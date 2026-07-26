@@ -9,6 +9,14 @@ async function login(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Tableau de bord' })).toBeVisible();
 }
 
+async function loginAsAdministrator(page: Page): Promise<void> {
+  await page.goto('/e2e/login');
+  await page.getByLabel('Adresse e-mail').fill('admin@example.test');
+  await page.getByLabel('Mot de passe').fill('mot-de-passe-e2e');
+  await page.getByRole('button', { name: 'Se connecter' }).click();
+  await expect(page).toHaveURL(/\/e2e\/app\/?$/);
+}
+
 test('connexion, changement de dossier, route profonde et déconnexion', async ({ page }) => {
   await login(page);
 
@@ -82,4 +90,39 @@ test('navigation clavier et largeur 360 px', async ({ page }) => {
   await page.getByLabel('Dossier', { exact: true }).selectOption({ label: 'Comptabilité principale' });
   await expect(page.getByText('Chiffre d’affaires', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('configuration des modules et référentiels', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Configuration', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Configuration', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Navigation Configuration')).toBeVisible();
+
+  await page.getByRole('link', { name: 'Modules', exact: true }).click();
+  const learningCard = page.getByRole('heading', { name: 'Apprentissage' }).locator('..').locator('..');
+  await expect(learningCard).toContainText('Actif');
+  await learningCard.getByRole('button', { name: 'Désactiver' }).click();
+  await expect(learningCard).toContainText('Inactif');
+  await expect(
+    page.getByLabel('Navigation principale').getByRole('link', { name: 'Apprentissage' })
+  ).toHaveCount(0);
+  const refusal = await page.evaluate(async () =>
+    (await fetch('/e2e/api/v1/pedagogie/exercices')).status
+  );
+  expect(refusal).toBe(403);
+
+  await learningCard.getByRole('button', { name: 'Réactiver' }).click();
+  await expect(learningCard).toContainText('Actif');
+  await expect(
+    page.getByLabel('Navigation principale').getByRole('link', { name: 'Apprentissage' })
+  ).toBeVisible();
+
+  await page.getByRole('link', { name: 'Paiements', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Nouvelle condition de paiement' })).toBeVisible();
+  await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Plan comptable' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Débiteurs et créanciers' })).toBeVisible();
 });

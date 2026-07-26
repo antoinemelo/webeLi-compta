@@ -67,9 +67,12 @@ final class ShellApiController
         $permissions = $scope === null
             ? []
             : $this->reads->permissions($userId, $scope[0], $scope[1]);
+        $enabledModules = $scope === null
+            ? []
+            : $this->reads->enabledModules($scope[0], $scope[1]);
         return ApiResponse::success(
             $request,
-            $this->reads->navigation($permissions, $scope !== null)
+            $this->reads->navigation($permissions, $scope !== null, $enabledModules)
         );
     }
 
@@ -209,6 +212,7 @@ final class ShellApiController
         $scope = $this->optionalScope($userId);
         $selection = null;
         $permissions = [];
+        $enabledModules = [];
         if ($scope !== null) {
             [$organisationId, $dossierId] = $scope;
             $visible = $this->access->visibleDossier(
@@ -219,6 +223,10 @@ final class ShellApiController
             if ($visible !== null) {
                 $permissions = $this->reads->permissions(
                     $userId,
+                    $organisationId,
+                    $dossierId
+                );
+                $enabledModules = $this->reads->enabledModules(
                     $organisationId,
                     $dossierId
                 );
@@ -258,15 +266,18 @@ final class ShellApiController
                     ['key' => 'exercises', 'method' => 'GET', 'path' => '/exercises'],
                     ['key' => 'references', 'method' => 'GET', 'path' => '/references'],
                     ['key' => 'dashboard', 'method' => 'GET', 'path' => '/dashboard'],
+                    ['key' => 'configuration', 'method' => 'GET', 'path' => '/configuration'],
                 ],
             ],
             'instance' => $this->config->string('instance_id'),
             'user' => $user,
             'selection' => $selection,
             'permissions' => $permissions,
+            'enabled_modules' => $enabledModules,
             'navigation' => $this->reads->navigation(
                 $permissions,
-                $selection !== null
+                $selection !== null,
+                $enabledModules
             ),
             'csrf_token' => $this->csrf->token(),
         ];

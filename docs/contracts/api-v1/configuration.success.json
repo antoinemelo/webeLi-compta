@@ -1,0 +1,52 @@
+{
+  "data": {
+    "identity": {
+      "organization": {
+        "id": 2,
+        "name": "Entreprise Exemple SA",
+        "legal_name": "Entreprise Exemple SA",
+        "legal_form": "SA",
+        "uid": "CHE-123.456.789",
+        "address_line1": "Rue de l’Exemple 1",
+        "address_line2": "",
+        "postal_code": "1200",
+        "city": "Genève",
+        "canton": "GE",
+        "country": "CH",
+        "phone": "+41 22 000 00 00",
+        "email": "compta@example.test",
+        "website": "https://example.test",
+        "version": 3
+      },
+      "dossier": {
+        "id": 4,
+        "name": "Comptabilité principale",
+        "base_currency": "CHF",
+        "version": 2
+      }
+    },
+    "modules": [
+      {
+        "code": "apprentissage",
+        "label": "Apprentissage",
+        "description": "Exercices et suivi pédagogique ciblé.",
+        "enabled": true,
+        "version": 1,
+        "updated_at": null
+      }
+    ],
+    "payment_terms": [],
+    "references": {},
+    "audit": [],
+    "definitions": {
+      "contacts": "Le registre unique reste celui de Facturation.",
+      "historical_values": "Les taux et conditions utilisés sont figés dans les documents et fiches.",
+      "payment_due_date": "Date du document + délai, puis fin du mois obtenu si l’option est active."
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-configuration-0001"
+  },
+  "errors": []
+}

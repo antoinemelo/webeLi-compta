@@ -20,7 +20,20 @@ const requiredPermission: Record<string, string> = {
   payroll: 'salaires.view',
   settings: 'dossier.manage'
 };
-const allowed = computed(() => context.can(requiredPermission[section.value] || 'dossier.view'));
+const moduleCodes: Record<string, string> = {
+  learning: 'apprentissage',
+  liquidity: 'liquidites',
+  billing: 'facturation',
+  accounting: 'comptabilite',
+  payroll: 'salaires'
+};
+const moduleEnabled = computed(() => {
+  const code = moduleCodes[section.value];
+  return !code || context.moduleEnabled(code);
+});
+const allowed = computed(() =>
+  moduleEnabled.value && context.can(requiredPermission[section.value] || 'dossier.view')
+);
 const legacyUrl = computed(() => {
   const path = String(route.meta.legacyPath || '');
   if (!path) return '';
@@ -45,8 +58,9 @@ const legacyUrl = computed(() => {
   </section>
 
   <section v-else-if="!allowed" class="access-message denied" role="alert">
-    <strong>Accès refusé</strong>
-    <p>Votre rôle ne permet pas d’ouvrir {{ title }} dans ce dossier.</p>
+    <strong>{{ moduleEnabled ? 'Accès refusé' : 'Module désactivé' }}</strong>
+    <p v-if="moduleEnabled">Votre rôle ne permet pas d’ouvrir {{ title }} dans ce dossier.</p>
+    <p v-else>Ce module est désactivé dans la configuration du dossier.</p>
   </section>
 
   <EmptyState

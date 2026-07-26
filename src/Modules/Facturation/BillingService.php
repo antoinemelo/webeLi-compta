@@ -5,6 +5,7 @@ namespace Compta\Modules\Facturation;
 
 use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Compta\EntryService;
+use Compta\Modules\Configuration\Application\PaymentTermsService;
 use Compta\Modules\Tva\VatCalculator;
 use Compta\Modules\Tva\VatLineService;
 use PDO;
@@ -14,6 +15,7 @@ final class BillingService
 {
     private bool $transactionActive = false;
     private ContactService $contacts;
+    private PaymentTermsService $paymentTerms;
     private VatLineService $vat;
 
     public function __construct(
@@ -22,6 +24,7 @@ final class BillingService
         private readonly EntryService $entries,
     ) {
         $this->contacts = new ContactService($pdo, $audit);
+        $this->paymentTerms = new PaymentTermsService($pdo);
         $this->vat = new VatLineService($pdo, $audit);
     }
 
@@ -62,6 +65,24 @@ final class BillingService
         ): int {
             $this->assertType($type);
             $this->assertDate($documentDate);
+            $paymentTerm = null;
+            if (trim($dueDate) === '') {
+                $direction = str_contains($type, 'fournisseur')
+                    ? 'fournisseur'
+                    : 'client';
+                $paymentTerm = $this->paymentTerms->resolveDefault(
+                    $organisationId,
+                    $dossierId,
+                    $direction,
+                    $documentDate
+                );
+                if ($paymentTerm === null) {
+                    throw new BillingException(
+                        'Aucune condition de paiement par défaut ne couvre cette date.'
+                    );
+                }
+                $dueDate = $paymentTerm['due_date'];
+            }
             $this->assertDate($dueDate);
             if ($dueDate < $documentDate || $lines === []) {
                 throw new BillingException('Dates ou lignes du document invalides.');
@@ -83,14 +104,21 @@ final class BillingService
                  (organisation_id, dossier_id, contact_id, type, date_document,
                   date_echeance, adresse_snapshot_json, contact_snapshot_json,
                   compte_collectif_id, numero_externe, document_origine_id,
-                  justificatif_id, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                  justificatif_id, condition_paiement_id,
+                  condition_paiement_snapshot_json, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $contactId, $type,
                 $documentDate, $dueDate, $address, $snapshot,
                 $collectiveAccountId, trim($externalNumber),
-                $originDocumentId, $attachmentId, $actorId,
+                $originDocumentId, $attachmentId,
+                $paymentTerm['condition_id'] ?? null,
+                json_encode(
+                    $paymentTerm['snapshot'] ?? [],
+                    JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
+                ),
+                $actorId,
             ]);
             $id = (int) $this->pdo->lastInsertId();
             $this->replaceLines($organisationId, $dossierId, $id, $lines, 1);
