@@ -180,10 +180,8 @@ watch(
 
 async function loadMarketTab(): Promise<void> {
   if (exerciseId.value < 1) return;
-  if (activeTab.value === 'taux-change') {
+  if (activeTab.value === 'taux') {
     await treasury.loadExchangeHistory(exerciseId.value);
-  }
-  if (activeTab.value === 'taux-interet') {
     await treasury.loadInterestHistory(exerciseId.value);
     if (
       !treasury.interestHistory?.series.some(
@@ -1122,7 +1120,7 @@ async function toggleRecurrence(item: {
       <EmptyState v-else title="Aucun lot de paiements" description="Sélectionnez une ou plusieurs dettes comptabilisées." />
     </template>
 
-    <template v-else-if="workspace && treasury.workspace && activeTab === 'taux-change'">
+    <template v-else-if="workspace && treasury.workspace && activeTab === 'taux'">
       <div class="toolbar">
         <div>
           <p class="eyebrow">Référentiel public partagé</p>
@@ -1253,9 +1251,8 @@ async function toggleRecurrence(item: {
         </section>
         <p class="market-note">{{ treasury.exchangeHistory.definitions.accounting }}</p>
       </template>
-    </template>
 
-    <template v-else-if="workspace && treasury.workspace && activeTab === 'taux-interet'">
+      <hr class="market-divider">
       <div class="toolbar">
         <div>
           <p class="eyebrow">Référentiel public partagé</p>
@@ -1383,6 +1380,7 @@ async function toggleRecurrence(item: {
 .market-panel th, .market-panel td { padding: .65rem; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .market-warning { margin: 0; padding: .75rem 1rem; border-left: 4px solid var(--warning, #a87500); background: var(--surface); }
 .market-note { margin: 0; color: var(--muted); font-size: .9rem; }
+.market-divider { width: 100%; margin: 1rem 0 0; border: 0; border-top: 1px solid var(--border); }
 @media (max-width: 850px) {
   .form-grid, .detail-grid, .reconciliation-grid, .reconciliation-totals, .confirmation-row, .market-summary { grid-template-columns: 1fr; }
   .line-editor { grid-template-columns: 1fr; }

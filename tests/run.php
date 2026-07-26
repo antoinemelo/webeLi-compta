@@ -2135,6 +2135,56 @@ final class Tests
             ),
             'tous les référentiels de Configuration partagent le contrat natif'
         );
+        $currencyFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/currencies',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['currency' => 'EUR', 'active' => true]]
+        ));
+        $this->same(
+            200,
+            $currencyFromConfiguration->status,
+            'devise ajoutée depuis Configuration sans erreur interne'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM devises_dossier
+                 WHERE dossier_id = {$ids['dossier_a']}
+                   AND code = 'EUR' AND actif = 1"
+            )->fetchColumn(),
+            'devise configurée dans le dossier courant'
+        );
+        $exchangeAccounts = $pdo->query(
+            "SELECT id FROM comptes
+             WHERE dossier_id = {$ids['dossier_a']}
+               AND actif = 1 AND imputable = 1
+             ORDER BY id LIMIT 2"
+        )->fetchAll(PDO::FETCH_COLUMN);
+        $mappingFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/exchange-mapping',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'realized_gain_account_id' => (int) $exchangeAccounts[0],
+                'realized_loss_account_id' => (int) $exchangeAccounts[1],
+                'unrealized_gain_account_id' => (int) $exchangeAccounts[0],
+                'unrealized_loss_account_id' => (int) $exchangeAccounts[1],
+            ]]
+        ));
+        $this->same(
+            200,
+            $mappingFromConfiguration->status,
+            'comptes de change modifiés depuis Configuration sans erreur interne'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM parametres_change
+                 WHERE dossier_id = {$ids['dossier_a']}"
+            )->fetchColumn(),
+            'comptes de différences de change persistés'
+        );
         $treasuryLedgerId = (int) $pdo->query(
             "SELECT id FROM comptes
              WHERE dossier_id = {$ids['dossier_a']} AND numero = '1000'"
@@ -7955,6 +8005,54 @@ XML;
             $calls['zimoma'],
             'série de taux BNS synchronisée une seule fois'
         );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM series_marche_publiques
+                 WHERE devise NOT IN ('CHF', 'EUR')"
+            )->fetchColumn(),
+            'aucune série stockée pour une monnaie non définie'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*)
+                 FROM valeurs_marche_mensuelles
+                 WHERE periode < '2025-01' OR periode > '2026-06'"
+            )->fetchColumn(),
+            'aucune valeur stockée hors exercice et douze mois précédents'
+        );
+        $this->same(
+            ['EUR'],
+            $pdo->query(
+                'SELECT DISTINCT devise
+                 FROM taux_change_publics_quotidiens ORDER BY devise'
+            )->fetchAll(PDO::FETCH_COLUMN),
+            'taux quotidien limité aux monnaies définies'
+        );
+        $pdo->prepare(
+            'UPDATE devises_dossier SET actif = 0
+             WHERE organisation_id = ? AND dossier_id = ? AND code = \'EUR\''
+        )->execute([$ids['organisation_a'], $ids['dossier_a']]);
+        $service->exchangeHistory(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseA
+        );
+        $this->same(
+            4,
+            (int) $pdo->query(
+                "SELECT COUNT(*)
+                 FROM valeurs_marche_mensuelles v
+                 JOIN series_marche_publiques s ON s.id = v.serie_id
+                 WHERE s.jeu_donnees = 'devkum'"
+            )->fetchColumn(),
+            'cache EUR conservé tant qu’un autre dossier en a besoin'
+        );
+        $pdo->prepare(
+            'UPDATE devises_dossier SET actif = 1
+             WHERE organisation_id = ? AND dossier_id = ? AND code = \'EUR\''
+        )->execute([$ids['organisation_a'], $ids['dossier_a']]);
         $columns = array_column(
             $pdo->query('PRAGMA table_info(series_marche_publiques)')->fetchAll(),
             'name'

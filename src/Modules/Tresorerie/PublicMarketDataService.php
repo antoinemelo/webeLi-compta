@@ -30,7 +30,10 @@ final class PublicMarketDataService
         int $exerciseId,
     ): array {
         $scope = $this->scope($organisationId, $dossierId, $exerciseId);
-        $warning = $this->ensureMonthly('devkum');
+        $requirements = $this->monthlyRequirements($exerciseId, true);
+        $this->pruneMonthly('devkum', $requirements);
+        $warning = $this->ensureMonthly('devkum', $requirements);
+        $this->pruneDaily($this->definedCurrencies());
         $dailyWarning = $this->ensureDaily($scope['currencies']);
         return [
             'kind' => 'exchange',
@@ -65,7 +68,9 @@ final class PublicMarketDataService
         int $exerciseId,
     ): array {
         $scope = $this->scope($organisationId, $dossierId, $exerciseId);
-        $warning = $this->ensureMonthly('zimoma');
+        $requirements = $this->monthlyRequirements($exerciseId, false);
+        $this->pruneMonthly('zimoma', $requirements);
+        $warning = $this->ensureMonthly('zimoma', $requirements);
         return [
             'kind' => 'interest',
             'exercise' => $scope['exercise'],
@@ -131,44 +136,292 @@ final class PublicMarketDataService
         ];
     }
 
-    private function ensureMonthly(string $dataset): string
-    {
-        $today = $this->now();
-        $expected = $today->modify('first day of this month -1 month')->format('Y-m');
+    /**
+     * Conserve l’union des besoins des exercices ouverts et de l’exercice
+     * explicitement consulté. Une valeur partagée n’est donc supprimée que si
+     * aucun dossier courant n’en a encore besoin.
+     *
+     * @return array<string,list<array{start:string,end:string}>>
+     */
+    private function monthlyRequirements(
+        int $requestedExerciseId,
+        bool $exchangeOnly,
+    ): array {
         $stmt = $this->pdo->prepare(
-            'SELECT MAX(v.periode)
-             FROM valeurs_marche_mensuelles v
-             JOIN series_marche_publiques s ON s.id = v.serie_id
+            'SELECT x.id, x.date_debut, x.date_fin,
+                    d.organisation_id, d.id AS dossier_id, d.monnaie,
+                    dd.code AS devise_configuree
+             FROM exercices x
+             JOIN dossiers d ON d.id = x.dossier_id
+             LEFT JOIN devises_dossier dd
+               ON dd.organisation_id = d.organisation_id
+              AND dd.dossier_id = d.id
+              AND dd.actif = 1
+             WHERE x.statut = \'ouvert\' OR x.id = ?
+             ORDER BY x.id, dd.code'
+        );
+        $stmt->execute([$requestedExerciseId]);
+        $latestAvailable = $this->now()
+            ->modify('first day of this month -1 month')->format('Y-m');
+        $requirements = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $start = (new DateTimeImmutable((string) $row['date_debut']))
+                ->sub(new DateInterval('P12M'))->format('Y-m');
+            $end = min(
+                (new DateTimeImmutable((string) $row['date_fin']))->format('Y-m'),
+                $latestAvailable
+            );
+            if ($start > $end) {
+                continue;
+            }
+            $currencies = [(string) $row['monnaie']];
+            if ($row['devise_configuree'] !== null) {
+                $currencies[] = (string) $row['devise_configuree'];
+            }
+            foreach (array_unique(array_map('strtoupper', $currencies)) as $currency) {
+                if ($exchangeOnly && $currency === 'CHF') {
+                    continue;
+                }
+                $requirements[$currency][] = ['start' => $start, 'end' => $end];
+            }
+        }
+        ksort($requirements, SORT_STRING);
+        foreach ($requirements as $currency => $intervals) {
+            usort(
+                $intervals,
+                static fn (array $left, array $right): int
+                    => $left['start'] <=> $right['start']
+            );
+            $merged = [];
+            foreach ($intervals as $interval) {
+                $last = count($merged) - 1;
+                if (
+                    $last >= 0
+                    && $interval['start'] <= (new DateTimeImmutable(
+                        $merged[$last]['end'] . '-01'
+                    ))->modify('+1 month')->format('Y-m')
+                ) {
+                    $merged[$last]['end'] = max(
+                        $merged[$last]['end'],
+                        $interval['end']
+                    );
+                    continue;
+                }
+                $merged[] = $interval;
+            }
+            $requirements[$currency] = $merged;
+        }
+        return $requirements;
+    }
+
+    /** @return list<string> */
+    private function definedCurrencies(): array
+    {
+        $currencies = $this->pdo->query(
+            'SELECT monnaie AS code FROM dossiers
+             UNION
+             SELECT code FROM devises_dossier WHERE actif = 1
+             ORDER BY code'
+        )->fetchAll(PDO::FETCH_COLUMN);
+        $currencies = array_values(array_unique(array_map(
+            static fn (mixed $currency): string => strtoupper((string) $currency),
+            $currencies
+        )));
+        sort($currencies, SORT_STRING);
+        return $currencies;
+    }
+
+    /**
+     * @param array<string,list<array{start:string,end:string}>> $requirements
+     */
+    private function pruneMonthly(string $dataset, array $requirements): void
+    {
+        $this->pdo->exec(
+            'CREATE TEMP TABLE IF NOT EXISTS besoins_marche_mensuels (
+                devise TEXT NOT NULL,
+                periode_debut TEXT NOT NULL,
+                periode_fin TEXT NOT NULL
+            )'
+        );
+        $this->pdo->exec('DELETE FROM besoins_marche_mensuels');
+        $insert = $this->pdo->prepare(
+            'INSERT INTO besoins_marche_mensuels
+             (devise, periode_debut, periode_fin) VALUES (?, ?, ?)'
+        );
+        foreach ($requirements as $currency => $intervals) {
+            foreach ($intervals as $interval) {
+                $insert->execute([$currency, $interval['start'], $interval['end']]);
+            }
+        }
+        $this->pdo->prepare(
+            'DELETE FROM valeurs_marche_mensuelles
+             WHERE serie_id IN (
+                 SELECT id FROM series_marche_publiques WHERE jeu_donnees = ?
+             )
+             AND NOT EXISTS (
+                 SELECT 1
+                 FROM series_marche_publiques s
+                 JOIN besoins_marche_mensuels b ON b.devise = s.devise
+                 WHERE s.id = valeurs_marche_mensuelles.serie_id
+                   AND valeurs_marche_mensuelles.periode
+                       BETWEEN b.periode_debut AND b.periode_fin
+             )'
+        )->execute([$dataset]);
+        $this->pdo->prepare(
+            'DELETE FROM series_marche_publiques
+             WHERE jeu_donnees = ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM valeurs_marche_mensuelles v
+                   WHERE v.serie_id = series_marche_publiques.id
+               )'
+        )->execute([$dataset]);
+    }
+
+    /** @param list<string> $currencies */
+    private function pruneDaily(array $currencies): void
+    {
+        $currencies = array_values(array_diff($currencies, ['CHF']));
+        if ($currencies === []) {
+            $this->pdo->exec('DELETE FROM taux_change_publics_quotidiens');
+            return;
+        }
+        $marks = implode(',', array_fill(0, count($currencies), '?'));
+        $stmt = $this->pdo->prepare(
+            "DELETE FROM taux_change_publics_quotidiens
+             WHERE date_requise <> ? OR devise NOT IN ({$marks})"
+        );
+        $stmt->execute([$this->now()->format('Y-m-d'), ...$currencies]);
+    }
+
+    /**
+     * @param array<string,list<array{start:string,end:string}>> $requirements
+     */
+    private function monthlyDataMissing(string $dataset, array $requirements): bool
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT s.devise, s.mode, v.periode
+             FROM series_marche_publiques s
+             JOIN valeurs_marche_mensuelles v ON v.serie_id = s.id
              WHERE s.jeu_donnees = ?'
         );
         $stmt->execute([$dataset]);
-        $latest = (string) ($stmt->fetchColumn() ?: '');
+        $coverage = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $coverage[(string) $row['devise']][(string) $row['mode']]
+                [(string) $row['periode']] = true;
+        }
+        foreach ($requirements as $currency => $intervals) {
+            foreach ($intervals as $interval) {
+                foreach ($this->periods($interval['start'], $interval['end']) as $period) {
+                    if ($dataset === 'devkum') {
+                        foreach (['moyenne', 'fin_mois'] as $mode) {
+                            if (!isset($coverage[$currency][$mode][$period])) {
+                                return true;
+                            }
+                        }
+                        continue;
+                    }
+                    $available = false;
+                    foreach (($coverage[$currency] ?? []) as $periods) {
+                        if (isset($periods[$period])) {
+                            $available = true;
+                            break;
+                        }
+                    }
+                    if (!$available) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param array<string,list<array{start:string,end:string}>> $requirements
+     */
+    private function requiredPeriod(
+        array $requirements,
+        string $currency,
+        string $period,
+    ): bool {
+        foreach (($requirements[$currency] ?? []) as $interval) {
+            if ($period >= $interval['start'] && $period <= $interval['end']) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * @param array<string,list<array{start:string,end:string}>> $requirements
+     */
+    private function requirementSignature(string $dataset, array $requirements): string
+    {
+        return hash(
+            'sha256',
+            $dataset . '|' . json_encode(
+                $requirements,
+                JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR
+            )
+        );
+    }
+
+    /** @param list<string> $currencies @return list<string> */
+    private function missingDailyCurrencies(array $currencies, string $requested): array
+    {
+        if ($currencies === []) {
+            return [];
+        }
+        $marks = implode(',', array_fill(0, count($currencies), '?'));
+        $stmt = $this->pdo->prepare(
+            "SELECT DISTINCT devise FROM taux_change_publics_quotidiens
+             WHERE date_requise = ? AND devise IN ({$marks})"
+        );
+        $stmt->execute([$requested, ...$currencies]);
+        return array_values(array_diff(
+            $currencies,
+            $stmt->fetchAll(PDO::FETCH_COLUMN)
+        ));
+    }
+
+    /**
+     * @param array<string,list<array{start:string,end:string}>> $requirements
+     */
+    private function ensureMonthly(string $dataset, array $requirements): string
+    {
+        if ($requirements === [] || !$this->monthlyDataMissing($dataset, $requirements)) {
+            return '';
+        }
+        $today = $this->now();
+        $signature = $this->requirementSignature($dataset, $requirements);
         $lastAttempt = $this->pdo->prepare(
-            'SELECT substr(tente_le, 1, 10) AS date_tentative, statut
+            'SELECT substr(tente_le, 1, 10) AS date_tentative, statut,
+                    signature_besoin
              FROM actualisations_marche_publiques
              WHERE jeu_donnees = ?'
         );
         $lastAttempt->execute([$dataset]);
         $attempt = $lastAttempt->fetch();
-        if ($latest >= $expected) {
-            return '';
-        }
         if (
             $attempt !== false
             && (string) $attempt['date_tentative'] === $today->format('Y-m-d')
+            && hash_equals((string) $attempt['signature_besoin'], $signature)
         ) {
             return (string) $attempt['statut'] === 'echec'
                 ? 'Actualisation BNS impossible : les dernières données conservées sont affichées.'
-                : '';
+                : 'Certaines données BNS demandées ne sont pas encore publiées.';
         }
         $url = $dataset === 'devkum' ? self::SNB_EXCHANGE_URL : self::SNB_INTEREST_URL;
         try {
-            $this->importSnb($dataset, $url, $this->http->get($url));
-            $this->recordRefresh($dataset, $url, 'succes');
-            return '';
+            $this->importSnb($dataset, $url, $this->http->get($url), $requirements);
+            $this->recordRefresh($dataset, $signature, $url, 'succes');
+            return $this->monthlyDataMissing($dataset, $requirements)
+                ? 'Certaines données BNS demandées ne sont pas encore publiées.'
+                : '';
         } catch (Throwable $exception) {
             $message = mb_substr($exception->getMessage(), 0, 300);
-            $this->recordRefresh($dataset, $url, 'echec', $message);
+            $this->recordRefresh($dataset, $signature, $url, 'echec', $message);
             return 'Actualisation BNS impossible : les dernières données conservées sont affichées.';
         }
     }
@@ -176,20 +429,20 @@ final class PublicMarketDataService
     /** @param list<string> $currencies */
     private function ensureDaily(array $currencies): string
     {
-        if (array_values(array_diff($currencies, ['CHF'])) === []) {
+        $currencies = array_values(array_diff($currencies, ['CHF']));
+        sort($currencies, SORT_STRING);
+        if ($currencies === []) {
             return '';
         }
         $requested = $this->now()->format('Y-m-d');
-        $available = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM taux_change_publics_quotidiens
-             WHERE date_requise = ?'
-        );
-        $available->execute([$requested]);
-        if ((int) $available->fetchColumn() > 0) {
+        $missing = $this->missingDailyCurrencies($currencies, $requested);
+        if ($missing === []) {
             return '';
         }
+        $signature = hash('sha256', $requested . '|' . implode(',', $currencies));
         $lastAttempt = $this->pdo->prepare(
-            'SELECT substr(tente_le, 1, 10) AS date_tentative, statut
+            'SELECT substr(tente_le, 1, 10) AS date_tentative, statut,
+                    signature_besoin
              FROM actualisations_marche_publiques
              WHERE jeu_donnees = \'bazg_daily\''
         );
@@ -198,10 +451,11 @@ final class PublicMarketDataService
         if (
             $attempt !== false
             && (string) $attempt['date_tentative'] === $requested
+            && hash_equals((string) $attempt['signature_besoin'], $signature)
         ) {
             return (string) $attempt['statut'] === 'echec'
                 ? 'Actualisation OFDF impossible : le dernier taux quotidien conservé est affiché.'
-                : '';
+                : 'Certains taux OFDF demandés ne sont pas disponibles.';
         }
         $error = 'Aucun taux quotidien disponible.';
         for ($offset = 0; $offset <= 7; $offset++) {
@@ -209,18 +463,33 @@ final class PublicMarketDataService
             $url = self::BAZG_DAILY_URL . '?d=' . $date->format('Ymd') . '&locale=fr';
             try {
                 $rates = $this->parseDailyXml($this->http->get($url));
-                $this->storeDaily($requested, $url, $rates);
-                $this->recordRefresh('bazg_daily', $url, 'succes');
-                return '';
+                $this->storeDaily($requested, $url, $rates, $missing);
+                $this->recordRefresh('bazg_daily', $signature, $url, 'succes');
+                return $this->missingDailyCurrencies($currencies, $requested) === []
+                    ? '' : 'Certains taux OFDF demandés ne sont pas disponibles.';
             } catch (Throwable $exception) {
                 $error = mb_substr($exception->getMessage(), 0, 300);
             }
         }
-        $this->recordRefresh('bazg_daily', self::BAZG_DAILY_URL, 'echec', $error);
+        $this->recordRefresh(
+            'bazg_daily',
+            $signature,
+            self::BAZG_DAILY_URL,
+            'echec',
+            $error
+        );
         return 'Actualisation OFDF impossible : le dernier taux quotidien conservé est affiché.';
     }
 
-    private function importSnb(string $dataset, string $url, string $body): void
+    /**
+     * @param array<string,list<array{start:string,end:string}>> $requirements
+     */
+    private function importSnb(
+        string $dataset,
+        string $url,
+        string $body,
+        array $requirements,
+    ): void
     {
         try {
             $payload = json_decode($body, true, 512, JSON_THROW_ON_ERROR);
@@ -243,6 +512,26 @@ final class PublicMarketDataService
                 if ($parsed === null) {
                     continue;
                 }
+                $currency = (string) $parsed['currency'];
+                if (!isset($requirements[$currency])) {
+                    continue;
+                }
+                $values = array_values(array_filter(
+                    is_array($series['values'] ?? null) ? $series['values'] : [],
+                    fn (mixed $value): bool => is_array($value)
+                        && preg_match(
+                            '/^\d{4}-\d{2}$/',
+                            (string) ($value['date'] ?? '')
+                        ) === 1
+                        && $this->requiredPeriod(
+                            $requirements,
+                            $currency,
+                            (string) $value['date']
+                        )
+                ));
+                if ($values === []) {
+                    continue;
+                }
                 $seriesId = $this->storeSeries($dataset, $category, $url, $parsed);
                 $valueStatement = $this->pdo->prepare(
                     'INSERT INTO valeurs_marche_mensuelles
@@ -254,7 +543,7 @@ final class PublicMarketDataService
                        echelle = excluded.echelle,
                        actualisee_le = datetime(\'now\')'
                 );
-                foreach (($series['values'] ?? []) as $value) {
+                foreach ($values as $value) {
                     if (
                         !is_array($value)
                         || preg_match('/^\d{4}-\d{2}$/', (string) ($value['date'] ?? '')) !== 1
@@ -419,8 +708,13 @@ final class PublicMarketDataService
         return trim(html_entity_decode(strip_tags($match[1]), ENT_QUOTES | ENT_XML1, 'UTF-8'));
     }
 
-    /** @param array<string,mixed> $rates */
-    private function storeDaily(string $requested, string $url, array $rates): void
+    /** @param array<string,mixed> $rates @param list<string> $currencies */
+    private function storeDaily(
+        string $requested,
+        string $url,
+        array $rates,
+        array $currencies,
+    ): void
     {
         $stmt = $this->pdo->prepare(
             'INSERT INTO taux_change_publics_quotidiens
@@ -436,6 +730,9 @@ final class PublicMarketDataService
                actualise_le = datetime(\'now\')'
         );
         foreach ($rates['items'] as $rate) {
+            if (!in_array($rate['currency'], $currencies, true)) {
+                continue;
+            }
             $stmt->execute([
                 $requested, $rates['publication_date'], $rates['validity'],
                 $rate['currency'], $rate['base_unit'], $rate['value'],
@@ -569,23 +866,26 @@ final class PublicMarketDataService
 
     private function recordRefresh(
         string $dataset,
+        string $signature,
         string $url,
         string $status,
         string $error = '',
     ): void {
         $this->pdo->prepare(
             'INSERT INTO actualisations_marche_publiques
-             (jeu_donnees, url_source, statut, tente_le, reussie_le, erreur)
-             VALUES (?, ?, ?, datetime(\'now\'),
+             (jeu_donnees, signature_besoin, url_source, statut,
+              tente_le, reussie_le, erreur)
+             VALUES (?, ?, ?, ?, datetime(\'now\'),
                      CASE WHEN ? = \'succes\' THEN datetime(\'now\') END, ?)
              ON CONFLICT(jeu_donnees) DO UPDATE SET
+               signature_besoin = excluded.signature_besoin,
                url_source = excluded.url_source, statut = excluded.statut,
                tente_le = excluded.tente_le,
                reussie_le = CASE WHEN excluded.statut = \'succes\'
                     THEN excluded.reussie_le
                     ELSE actualisations_marche_publiques.reussie_le END,
                erreur = excluded.erreur'
-        )->execute([$dataset, $url, $status, $status, $error]);
+        )->execute([$dataset, $signature, $url, $status, $status, $error]);
     }
 
     /** @return list<string> */

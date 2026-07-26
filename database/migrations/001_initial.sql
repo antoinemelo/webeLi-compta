@@ -675,6 +675,7 @@ CREATE TABLE taux_change_publics_quotidiens (
 CREATE TABLE actualisations_marche_publiques (
     jeu_donnees TEXT PRIMARY KEY
         CHECK (jeu_donnees IN ('devkum', 'zimoma', 'bazg_daily')),
+    signature_besoin TEXT NOT NULL DEFAULT '',
     url_source TEXT NOT NULL,
     statut TEXT NOT NULL CHECK (statut IN ('succes', 'echec')),
     tente_le TEXT NOT NULL,

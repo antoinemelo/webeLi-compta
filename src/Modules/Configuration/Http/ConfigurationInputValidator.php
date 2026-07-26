@@ -726,6 +726,33 @@ final class ConfigurationInputValidator
         return $date !== false && $date->format('Y-m-d') === $value;
     }
 
+    private function rejectScope(Request $request): void
+    {
+        $errors = [];
+        foreach (['organisation_id', 'dossier_id'] as $field) {
+            if (array_key_exists($field, $request->input())) {
+                $errors[$field][] = 'Le scope provient exclusivement de la session.';
+            }
+        }
+        $this->fail($errors);
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @param array<string,list<string>> $errors
+     */
+    private function positiveInt(
+        array $data,
+        string $field,
+        array &$errors,
+    ): int {
+        if (!is_int($data[$field] ?? null) || (int) $data[$field] < 1) {
+            $errors[$field][] = 'Entier positif requis.';
+            return 0;
+        }
+        return (int) $data[$field];
+    }
+
     /** @param array<string,mixed> $data @param array<string,list<string>> $errors */
     private function idsAndVersion(array $data, array &$errors): void
     {

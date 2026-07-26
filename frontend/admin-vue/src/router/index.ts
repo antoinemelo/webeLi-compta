@@ -18,6 +18,14 @@ const routes: RouteRecordRaw[] = [
     meta: { label: 'Apprentissage', section: 'learning' }
   },
   {
+    path: '/liquidites/taux-change',
+    redirect: '/liquidites/taux'
+  },
+  {
+    path: '/liquidites/taux-interet',
+    redirect: '/liquidites/taux'
+  },
+  {
     path: '/liquidites/:tab?',
     name: 'liquidity',
     component: LiquidityView,
