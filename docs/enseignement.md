@@ -19,6 +19,12 @@ Un dossier réel ne peut jamais servir de source. L’assignation clone la versi
 dans un nouveau dossier de type `exercice`, individuel ou partagé par un groupe.
 Le modèle et chaque copie conservent ainsi des identifiants et données séparés.
 
+Le catalogue initial couvre sept compétences : débit/crédit, TVA, facturation,
+salaires, rapprochement, clôture et lecture d’états. Chaque fiche indique son
+niveau, sa durée estimée, sa version, son nombre d’étapes et son barème. Le
+bouton d’installation est idempotent : il ne crée pas de doublon lorsqu’une
+compétence est déjà publiée.
+
 ## Collaboration
 
 Les membres travaillent par transactions courtes. Chaque mutation conserve son
@@ -39,6 +45,17 @@ Chaque tentative est immuable. Les indices sont révélés dans leur ordre et le
 consultation est tracée. La solution n’est chargée qu’après autorisation
 manuelle, seuil de tentatives ou date configurée.
 
+L’espace Vue `/app/apprentissage` expose trois parcours :
+
+- `Catalogue` pour consulter ou publier les scénarios versionnés ;
+- `Exercices` pour ouvrir la copie isolée, journaliser, demander un indice,
+  vérifier une écriture et repartir d’une copie vierge ;
+- `Suivi` pour assigner individuellement ou par groupe, suivre les points,
+  tentatives et contributeurs, autoriser une correction et exporter en CSV.
+
+Les messages de réussite et d’échec appartiennent à la version du scénario.
+Ils expliquent le contrôle comptable sans révéler la solution protégée.
+
 ## Réinitialisation et isolation
 
 La réinitialisation est réservée aux dossiers `exercice`. Elle crée
@@ -50,3 +67,7 @@ Un apprenant limité à ce rôle ne voit que ses attributions explicites. Les
 organisations réelles, dossiers réels, recherches et sélecteurs associés sont
 exclus de ses listes. Toutes les pages d’un dossier d’exercice affichent le
 bandeau permanent « EXERCICE — DONNÉES FICTIVES ».
+
+Le module se désactive dans `Configuration > Modules`. Le serveur refuse alors
+à la fois la route Vue et toutes les routes `/api/v1/pedagogie`; masquer la
+navigation côté client ne constitue pas le contrôle d’accès.

@@ -12,6 +12,7 @@ use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Immobilisations\AssetApiController;
+use Compta\Modules\Pedagogie\PedagogyApiController;
 use Compta\Modules\Salaires\PayrollApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
@@ -31,6 +32,7 @@ final class ApiRouteRegistry
         private readonly ?BillingApiController $billing = null,
         private readonly ?AssetApiController $assets = null,
         private readonly ?PayrollApiController $payroll = null,
+        private readonly ?PedagogyApiController $pedagogy = null,
     ) {
     }
 
@@ -355,6 +357,20 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/facturation/allocations', $this->billing->allocatePayment(...));
             $this->add($router, 'POST', '/api/v1/facturation/allocations/avoirs', $this->billing->allocateCredit(...));
             $this->add($router, 'POST', '/api/v1/facturation/allocations/annuler', $this->billing->unallocate(...));
+        }
+        if ($this->pedagogy !== null) {
+            $this->add($router, 'GET', '/api/v1/pedagogie', $this->pedagogy->show(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/catalogue/installer', $this->pedagogy->installCatalog(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/modeles', $this->pedagogy->createModel(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/tentatives', $this->pedagogy->attempt(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/indices', $this->pedagogy->hint(...));
+            $this->add($router, 'GET', '/api/v1/pedagogie/correction', $this->pedagogy->correction(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/correction/autoriser', $this->pedagogy->authorize(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/reinitialiser', $this->pedagogy->reset(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/groupes', $this->pedagogy->createGroup(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/groupes/membres', $this->pedagogy->addMember(...));
+            $this->add($router, 'POST', '/api/v1/pedagogie/assignations', $this->pedagogy->assign(...));
+            $this->add($router, 'GET', '/api/v1/pedagogie/export', $this->pedagogy->export(...));
         }
     }
 

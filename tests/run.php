@@ -92,6 +92,8 @@ use Compta\Modules\Salaires\PayrollPaymentService;
 use Compta\Modules\Salaires\PayrollService;
 use Compta\Modules\Salaires\PayrollWorkspaceService;
 use Compta\Modules\Pedagogie\PedagogyConflictException;
+use Compta\Modules\Pedagogie\PedagogyApiController;
+use Compta\Modules\Pedagogie\PedagogyInputValidator;
 use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Shell\Application\ShellReadService;
 use Compta\Modules\Shell\Http\ShellApiController;
@@ -1722,6 +1724,13 @@ final class Tests
                     $httpAudit
                 ),
                 new PayrollInputValidator()
+            ),
+            new PedagogyApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                $httpPedagogy,
+                new PedagogyInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -2538,7 +2547,7 @@ final class Tests
         );
         $this->same(
             403,
-            $app->handle(new Request('GET', '/api/v1/pedagogie/exercices'))->status,
+            $app->handle(new Request('GET', '/api/v1/pedagogie'))->status,
             'route API d’un module désactivé refusée côté serveur'
         );
         $reenableLearning = $app->handle(new Request(
@@ -2732,6 +2741,7 @@ final class Tests
             'treasury.success.json',
             'billing.success.json',
             'payroll.success.json',
+            'pedagogy.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(
@@ -3237,12 +3247,75 @@ final class Tests
             'aucun écran salarial ne prétend transmettre via Swissdec'
         );
         $pedagogyScreen = $app->handle(new Request('GET', '/pedagogie'));
-        $this->same(200, $pedagogyScreen->status, 'écran d’enseignement accessible');
-        $this->true(
-            str_contains($pedagogyScreen->body, 'Mon travail')
-            && str_contains($pedagogyScreen->body, 'Suivi formateur')
-            && str_contains($pedagogyScreen->body, 'Modèles et groupes'),
-            'onglets pédagogiques compacts présents'
+        $this->same(303, $pedagogyScreen->status, 'ancien écran d’enseignement retiré');
+        $this->same(
+            '/edu/app/apprentissage',
+            $pedagogyScreen->headers['Location'] ?? '',
+            'apprentissage servi uniquement par Vue'
+        );
+        $pedagogyCatalog = $app->handle(new Request(
+            'POST',
+            '/api/v1/pedagogie/catalogue/installer',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => []]
+        ));
+        $this->same(
+            200,
+            $pedagogyCatalog->status,
+            'sept parcours ciblés installables depuis Vue'
+        );
+        $pedagogyWorkspace = $app->handle(new Request(
+            'GET',
+            '/api/v1/pedagogie'
+        ));
+        $pedagogyWorkspaceJson = $this->responseJson($pedagogyWorkspace);
+        $this->same(
+            200,
+            $pedagogyWorkspace->status,
+            'espace d’apprentissage Vue alimenté par API'
+        );
+        $this->same(
+            7,
+            count($pedagogyWorkspaceJson['data']['catalog'] ?? []),
+            'catalogue API couvre les sept compétences'
+        );
+        $this->false(
+            str_contains($pedagogyWorkspace->body, 'Débit 1000 Caisse'),
+            'API ne livre aucune correction protégée dans le workspace'
+        );
+        $modelsBeforeInvalid = (int) $pdo->query(
+            'SELECT COUNT(*) FROM modeles_exercice'
+        )->fetchColumn();
+        $invalidPedagogyModel = $app->handle(new Request(
+            'POST',
+            '/api/v1/pedagogie/modeles',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'title' => 'Scénario incomplet',
+                'description' => '',
+                'competence' => 'debit_credit',
+                'level' => 'debutant',
+                'duration_minutes' => 20,
+                'instructions' => 'Consigne présente.',
+                'steps' => [['code' => 'X']],
+                'opening' => [],
+                'initial' => [],
+                'solution' => [],
+                'correction_rule' => 'manuelle',
+                'correction_value' => '',
+            ]]
+        ));
+        $this->same(
+            422,
+            $invalidPedagogyModel->status,
+            'publication pédagogique incomplète refusée'
+        );
+        $this->same(
+            $modelsBeforeInvalid,
+            (int) $pdo->query(
+                'SELECT COUNT(*) FROM modeles_exercice'
+            )->fetchColumn(),
+            'échec de publication sans modèle orphelin'
         );
 
         $httpModel = $httpPedagogy->createModel(
@@ -3257,7 +3330,22 @@ final class Tests
                 'code' => 'HTTP',
                 'titre' => 'Brouillon partagé',
                 'consigne' => 'Modifier le brouillon.',
-            ]]
+                'regles' => [[
+                    'type' => 'ecriture_equivalente',
+                    'configuration' => [
+                        'lignes' => [
+                            ['compte' => '1000', 'sens' => 'debit', 'montant_centimes' => 1000],
+                            ['compte' => '3400', 'sens' => 'credit', 'montant_centimes' => 1000],
+                        ],
+                    ],
+                    'message_succes' => 'Écriture HTTP correcte.',
+                    'message_echec' => 'Écriture HTTP à corriger.',
+                ]],
+            ]],
+            [],
+            [],
+            ['explication' => 'Correction HTTP protégée.'],
+            'manuelle'
         );
         $httpAssignment = $httpPedagogy->assignIndividual(
             $ids['organisation_a'],
@@ -3301,18 +3389,62 @@ final class Tests
             $httpCommand
         );
         $session->set('dossier_id', $httpDossier);
-        $staleHttp = $app->handle(new Request('POST', '/pedagogie/action', post: [
-            '_csrf' => $csrf->token(),
-            'action' => 'replace_draft',
-            'ecriture_id' => (string) $httpDraft,
-            'version' => (string) $httpDraftVersion,
-            'exercice_id' => (string) $httpExercise,
-            'journal_id' => (string) $httpCopiedJournal,
-            'date_comptable' => '2026-03-01',
-            'libelle' => 'Version périmée',
-            'lignes_json' => json_encode($httpCommand['lignes'], JSON_THROW_ON_ERROR),
-        ]));
-        $this->same(409, $staleHttp->status, 'conflit collaboratif HTTP 409');
+        $exerciseWorkspace = $app->handle(new Request(
+            'GET',
+            '/api/v1/pedagogie'
+        ));
+        $exerciseWorkspaceJson = $this->responseJson($exerciseWorkspace);
+        $httpStep = (int) (
+            $exerciseWorkspaceJson['data']['selected']['steps'][0]['id'] ?? 0
+        );
+        $this->same(
+            $httpAssignment,
+            (int) ($exerciseWorkspaceJson['data']['selected']['id'] ?? 0),
+            'API ouvre uniquement la copie assignée du contexte'
+        );
+        $correctionHidden = $app->handle(new Request(
+            'GET',
+            '/api/v1/pedagogie/correction'
+        ));
+        $this->same(
+            422,
+            $correctionHidden->status,
+            'correction protégée refusée avant autorisation'
+        );
+        $attemptHttp = $app->handle(new Request(
+            'POST',
+            '/api/v1/pedagogie/tentatives',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'step_id' => $httpStep,
+                'entry_id' => $httpDraft,
+            ]]
+        ));
+        $this->true(
+            (bool) ($this->responseJson($attemptHttp)['data']['reussie'] ?? false),
+            'tentative Vue validée par équivalence comptable'
+        );
+        $session->set('dossier_id', $ids['dossier_a']);
+        $authorizeHttp = $app->handle(new Request(
+            'POST',
+            '/api/v1/pedagogie/correction/autoriser',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['assignment_id' => $httpAssignment]]
+        ));
+        $this->same(200, $authorizeHttp->status, 'formateur autorise la correction par API');
+        $session->set('dossier_id', $httpDossier);
+        $correctionVisible = $app->handle(new Request(
+            'GET',
+            '/api/v1/pedagogie/correction'
+        ));
+        $this->same(
+            'Correction HTTP protégée.',
+            (string) (
+                $this->responseJson($correctionVisible)['data']['solution']['explication']
+                ?? ''
+            ),
+            'correction livrée seulement après autorisation'
+        );
 
         $realExerciseDossier = (new ScopeManager($pdo, $httpAudit))->createDossier(
             $ids['organisation_a'],
@@ -3330,12 +3462,13 @@ final class Tests
             && str_contains($realDashboard->body, 'context-real'),
             'dossier réel distingué par texte et présentation'
         );
-        $resetReal = $app->handle(new Request('POST', '/pedagogie/action', post: [
-            '_csrf' => $csrf->token(),
-            'action' => 'reset',
-            'assignation_id' => (string) $httpAssignment,
-        ]));
-        $this->same(403, $resetReal->status, 'route HTTP refuse le reset d’un dossier réel');
+        $resetReal = $app->handle(new Request(
+            'POST',
+            '/api/v1/pedagogie/reinitialiser',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['assignment_id' => $httpAssignment]]
+        ));
+        $this->same(422, $resetReal->status, 'API refuse le reset depuis un dossier réel');
         $demoDossier = (new ScopeManager($pdo, $httpAudit))->createDossier(
             $ids['organisation_a'],
             'Démonstration HTTP',
@@ -4943,6 +5076,141 @@ final class Tests
             ->installForDossier($organisation, $source, 'personne_morale');
         $entries = new EntryService($pdo, $audit);
         $pedagogy = new PedagogyService($pdo, $audit, $entries);
+        $catalogInstall = $pedagogy->installTargetedCatalog(
+            $organisation,
+            $source
+        );
+        $this->same(
+            ['created' => 7, 'existing' => 0],
+            $catalogInstall,
+            'catalogue ciblé installe les sept compétences'
+        );
+        $this->same(
+            ['created' => 0, 'existing' => 7],
+            $pedagogy->installTargetedCatalog($organisation, $source),
+            'installation du catalogue ciblé idempotente'
+        );
+        $catalogModels = $pedagogy->models($organisation);
+        $catalogCompetences = array_values(array_unique(
+            array_column($catalogModels, 'competence')
+        ));
+        $expectedCompetences = array_keys(PedagogyService::COMPETENCES);
+        sort($catalogCompetences);
+        sort($expectedCompetences);
+        $this->same(
+            $expectedCompetences,
+            $catalogCompetences,
+            'catalogue structuré dans les sept compétences'
+        );
+        $scenarioLines = [
+            'debit_credit' => [['1000', 10000, 0], ['3400', 0, 10000]],
+            'tva' => [['1000', 10810, 0], ['3400', 0, 10000], ['2200', 0, 810]],
+            'facturation' => [['1100', 10000, 0], ['3400', 0, 10000]],
+            'salaires' => [['5000', 10000, 0], ['2000', 0, 10000]],
+            'rapprochement' => [['1020', 10000, 0], ['1100', 0, 10000]],
+            'cloture' => [['1000', 10000, 0], ['3400', 0, 10000]],
+            'lecture_etats' => [['1000', 10000, 0], ['3400', 0, 10000]],
+        ];
+        foreach ($catalogModels as $catalogModel) {
+            $competence = (string) $catalogModel['competence'];
+            $scenarioAssignment = $pedagogy->assignIndividual(
+                $organisation,
+                (int) $catalogModel['version_id'],
+                $learnerC,
+                'Cible ' . $competence
+            );
+            $scenarioDossier = (int) $pdo->query(
+                "SELECT dossier_id FROM assignations_exercice
+                 WHERE id = {$scenarioAssignment}"
+            )->fetchColumn();
+            $scenarioExercise = (int) $pdo->query(
+                "SELECT id FROM exercices WHERE dossier_id = {$scenarioDossier}"
+            )->fetchColumn();
+            $scenarioJournal = (int) $pdo->query(
+                "SELECT id FROM journaux WHERE dossier_id = {$scenarioDossier}
+                 ORDER BY id LIMIT 1"
+            )->fetchColumn();
+            $scenarioStep = (int) $pdo->query(
+                "SELECT etape_id FROM progressions_etapes
+                 WHERE assignation_id = {$scenarioAssignment}"
+            )->fetchColumn();
+            $failure = $pedagogy->attempt(
+                $organisation,
+                $scenarioDossier,
+                $learnerC,
+                $scenarioStep,
+                null
+            );
+            $this->false(
+                $failure['reussie'],
+                "retour pédagogique d’échec ciblé {$competence}"
+            );
+            $this->true(
+                trim((string) ($failure['messages'][0] ?? '')) !== '',
+                "message d’échec explicatif {$competence}"
+            );
+            $lines = array_map(
+                fn (array $line): array => [
+                    'compte_id' => $this->accountId(
+                        $pdo,
+                        $scenarioDossier,
+                        $line[0]
+                    ),
+                    'debit_centimes' => $line[1],
+                    'credit_centimes' => $line[2],
+                ],
+                $scenarioLines[$competence]
+            );
+            $scenarioEntry = $pedagogy->createDraft(
+                $organisation,
+                $scenarioDossier,
+                $learnerC,
+                [
+                    'exercice_id' => $scenarioExercise,
+                    'journal_id' => $scenarioJournal,
+                    'date_comptable' => '2026-04-15',
+                    'libelle' => 'Réponse ' . $competence,
+                    'lignes' => $lines,
+                ]
+            );
+            $pedagogy->validateDraft(
+                $organisation,
+                $scenarioDossier,
+                $learnerC,
+                $scenarioEntry
+            );
+            $success = $pedagogy->attempt(
+                $organisation,
+                $scenarioDossier,
+                $learnerC,
+                $scenarioStep,
+                $scenarioEntry
+            );
+            $this->true(
+                $success['reussie'],
+                "validation comptable réussie {$competence}"
+            );
+            $this->true(
+                trim((string) ($success['messages'][0] ?? '')) !== '',
+                "message de réussite explicatif {$competence}"
+            );
+        }
+        $learnerWorkspace = $pedagogy->workspace(
+            $organisation,
+            (int) $pdo->query(
+                "SELECT dossier_id FROM assignations_exercice
+                 WHERE utilisateur_id = {$learnerC} ORDER BY id LIMIT 1"
+            )->fetchColumn(),
+            $learnerC,
+            false
+        );
+        $this->false(
+            str_contains(
+                json_encode($learnerWorkspace, JSON_THROW_ON_ERROR),
+                'Débit 1000 Caisse'
+            ),
+            'solutions protégées absentes du contrat espace apprenant'
+        );
         $model = $pedagogy->createModel(
             $organisation, 'Caisse et ventes', 'Exercice de saisie'
         );

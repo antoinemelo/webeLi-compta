@@ -27,8 +27,6 @@ use Compta\Modules\Salaires\PayrollException;
 use Compta\Modules\Salaires\PayrollImportService;
 use Compta\Modules\Salaires\PayrollPaymentService;
 use Compta\Modules\Salaires\PayrollService;
-use Compta\Modules\Pedagogie\PedagogyConflictException;
-use Compta\Modules\Pedagogie\PedagogyException;
 use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Shell\Http\ShellPageController;
 use PDOException;
@@ -299,12 +297,16 @@ final class WebApplication
             $this->router->add(
                 'GET',
                 '/pedagogie',
-                fn (Request $request): Response => $this->pedagogyScreen($request)
+                fn (): Response => Response::redirect(
+                    $this->config->url('/app/apprentissage')
+                )
             );
             $this->router->add(
                 'POST',
                 '/pedagogie/action',
-                fn (Request $request): Response => $this->pedagogyMutation($request)
+                fn (): Response => Response::redirect(
+                    $this->config->url('/app/apprentissage')
+                )
             );
         }
         $this->apiRoutes?->register($this->router);
@@ -389,266 +391,6 @@ final class WebApplication
             'dossier_type' => (string) ($visible['type'] ?? ''),
             'navigation' => $navigation,
         ];
-    }
-
-    private function pedagogyScreen(Request $request): Response
-    {
-        $context = $this->accountingContext('pedagogie.view');
-        if ($context instanceof Response) {
-            return $context;
-        }
-        [$userId, $organisationId] = $context;
-        $manage = $this->access->hasDossierPermission(
-            $userId,
-            $organisationId,
-            (int) $context[2],
-            'pedagogie.manage'
-        );
-        $assignments = $this->pedagogy?->assignmentsForUser($userId) ?? [];
-        $selected = (int) ($request->query['assignation'] ?? 0);
-        if ($selected === 0 && $assignments !== []) {
-            $selected = (int) $assignments[0]['id'];
-        }
-        return new Response($this->view->render('pedagogie/index', [
-            'csrf' => $this->csrf->token(),
-            'assignments' => $assignments,
-            'selected_assignment' => $selected,
-            'steps' => $selected > 0
-                ? ($this->pedagogy?->steps($selected, $userId) ?? [])
-                : [],
-            'can_manage' => $manage,
-            'can_reset' => $this->access->hasDossierPermission(
-                $userId, $organisationId, (int) $context[2], 'pedagogie.reset'
-            ),
-            'teacher_rows' => $manage
-                ? ($this->pedagogy?->dashboard($organisationId) ?? [])
-                : [],
-            'models' => $manage
-                ? ($this->pedagogy?->models($organisationId) ?? [])
-                : [],
-            'groups' => $manage
-                ? ($this->pedagogy?->groups($organisationId) ?? [])
-                : [],
-            'success' => (string) ($request->query['ok'] ?? ''),
-            'error' => (string) ($request->query['erreur'] ?? ''),
-        ], 'Enseignement'));
-    }
-
-    private function pedagogyMutation(Request $request): Response
-    {
-        $action = (string) ($request->post['action'] ?? '');
-        $permission = in_array($action, [
-            'model', 'group', 'member', 'assign_user', 'assign_group',
-            'authorize', 'reset',
-        ], true) ? 'pedagogie.manage' : 'pedagogie.work';
-        $context = $this->accountingContext($permission);
-        if ($context instanceof Response) {
-            return $context;
-        }
-        if (!$this->csrf->validate($request->post['_csrf'] ?? null)) {
-            return $this->error('Jeton CSRF invalide.', 419);
-        }
-        [$userId, $organisationId, $dossierId] = $context;
-        try {
-            $message = match ($action) {
-                'hint' => 'Indice ' . ($this->pedagogy?->nextHint(
-                    $organisationId,
-                    $dossierId,
-                    $userId,
-                    (int) ($request->post['etape_id'] ?? 0)
-                )['niveau'] ?? 0) . ' affiché.',
-                'attempt' => ($this->pedagogy?->attempt(
-                    $organisationId,
-                    $dossierId,
-                    $userId,
-                    (int) ($request->post['etape_id'] ?? 0),
-                    (int) ($request->post['ecriture_id'] ?? 0) ?: null
-                )['reussie'] ?? false) ? 'Étape validée.' : 'Nouvelle tentative enregistrée.',
-                'authorize' => $this->pedagogyAuthorize(
-                    $organisationId, (int) ($request->post['assignation_id'] ?? 0), $userId
-                ),
-                'reset' => $this->pedagogyReset(
-                    $organisationId, $dossierId,
-                    (int) ($request->post['assignation_id'] ?? 0), $userId
-                ),
-                'group' => $this->pedagogyGroup($request, $organisationId, $userId),
-                'model' => $this->pedagogyModel(
-                    $request, $organisationId, $dossierId, $userId
-                ),
-                'member' => $this->pedagogyMember($request, $organisationId, $userId),
-                'assign_user' => $this->pedagogyAssign(
-                    $request, $organisationId, $userId, false
-                ),
-                'assign_group' => $this->pedagogyAssign(
-                    $request, $organisationId, $userId, true
-                ),
-                'replace_draft' => $this->pedagogyReplaceDraft(
-                    $request, $organisationId, $dossierId, $userId
-                ),
-                default => throw new PedagogyException('Action pédagogique inconnue.'),
-            };
-            return $this->pedagogyRedirect($message);
-        } catch (PedagogyConflictException $e) {
-            return $this->error($e->getMessage(), 409);
-        } catch (PedagogyException|AccountingException|PDOException $e) {
-            if ($action === 'reset') {
-                return $this->error($e->getMessage(), 403);
-            }
-            return $this->pedagogyRedirect($e->getMessage(), true);
-        }
-    }
-
-    private function pedagogyAuthorize(
-        int $organisationId,
-        int $assignmentId,
-        int $userId,
-    ): string {
-        $this->pedagogy?->authorizeCorrection($organisationId, $assignmentId, $userId);
-        return 'Correction autorisée.';
-    }
-
-    private function pedagogyReset(
-        int $organisationId,
-        int $dossierId,
-        int $assignmentId,
-        int $userId,
-    ): string {
-        $this->pedagogy?->assertResetAllowed($organisationId, $dossierId);
-        $newDossier = $this->pedagogy?->reset(
-            $organisationId, $assignmentId, $userId
-        ) ?? 0;
-        $this->session->set('dossier_id', $newDossier);
-        return 'Exercice réinitialisé atomiquement.';
-    }
-
-    private function pedagogyGroup(
-        Request $request,
-        int $organisationId,
-        int $userId,
-    ): string {
-        $this->pedagogy?->createGroup(
-            $organisationId, (string) ($request->post['nom'] ?? ''), $userId
-        );
-        return 'Groupe créé.';
-    }
-
-    private function pedagogyModel(
-        Request $request,
-        int $organisationId,
-        int $sourceDossierId,
-        int $userId,
-    ): string {
-        $steps = json_decode(
-            (string) ($request->post['etapes_json'] ?? '[]'),
-            true,
-            64,
-            JSON_THROW_ON_ERROR
-        );
-        $solution = json_decode(
-            (string) ($request->post['solution_json'] ?? '{}'),
-            true,
-            64,
-            JSON_THROW_ON_ERROR
-        );
-        $model = $this->pedagogy?->createModel(
-            $organisationId,
-            (string) ($request->post['titre'] ?? ''),
-            (string) ($request->post['description'] ?? ''),
-            $userId
-        ) ?? 0;
-        $this->pedagogy?->createVersion(
-            $organisationId,
-            $model,
-            $sourceDossierId,
-            (string) ($request->post['consignes'] ?? ''),
-            is_array($steps) ? $steps : [],
-            [],
-            [],
-            is_array($solution) ? $solution : [],
-            (string) ($request->post['regle_correction'] ?? 'manuelle'),
-            (string) ($request->post['valeur_correction'] ?? ''),
-            $userId
-        );
-        return 'Modèle versionné et publié.';
-    }
-
-    private function pedagogyMember(
-        Request $request,
-        int $organisationId,
-        int $userId,
-    ): string {
-        $this->pedagogy?->addMember(
-            $organisationId,
-            (int) ($request->post['groupe_id'] ?? 0),
-            (int) ($request->post['utilisateur_id'] ?? 0),
-            'membre',
-            $userId
-        );
-        return 'Membre ajouté.';
-    }
-
-    private function pedagogyAssign(
-        Request $request,
-        int $organisationId,
-        int $userId,
-        bool $group,
-    ): string {
-        if ($group) {
-            $this->pedagogy?->assignGroup(
-                $organisationId,
-                (int) ($request->post['version_id'] ?? 0),
-                (int) ($request->post['groupe_id'] ?? 0),
-                (string) ($request->post['nom'] ?? ''),
-                $userId
-            );
-        } else {
-            $this->pedagogy?->assignIndividual(
-                $organisationId,
-                (int) ($request->post['version_id'] ?? 0),
-                (int) ($request->post['utilisateur_id'] ?? 0),
-                (string) ($request->post['nom'] ?? ''),
-                $userId
-            );
-        }
-        return 'Exercice cloné et assigné.';
-    }
-
-    private function pedagogyReplaceDraft(
-        Request $request,
-        int $organisationId,
-        int $dossierId,
-        int $userId,
-    ): string {
-        $lines = json_decode(
-            (string) ($request->post['lignes_json'] ?? '[]'),
-            true,
-            32,
-            JSON_THROW_ON_ERROR
-        );
-        $this->pedagogy?->replaceDraft(
-            $organisationId,
-            $dossierId,
-            $userId,
-            (int) ($request->post['ecriture_id'] ?? 0),
-            (int) ($request->post['version'] ?? 0),
-            [
-                'exercice_id' => (int) ($request->post['exercice_id'] ?? 0),
-                'journal_id' => (int) ($request->post['journal_id'] ?? 0),
-                'date_comptable' => (string) ($request->post['date_comptable'] ?? ''),
-                'libelle' => (string) ($request->post['libelle'] ?? ''),
-                'lignes' => is_array($lines) ? $lines : [],
-            ]
-        );
-        return 'Brouillon collaboratif enregistré.';
-    }
-
-    private function pedagogyRedirect(string $message, bool $error = false): Response
-    {
-        return Response::redirect(
-            $this->config->url('/pedagogie') . '?' . http_build_query([
-                $error ? 'erreur' : 'ok' => $message,
-            ])
-        );
     }
 
     private function payrollScreen(Request $request): Response

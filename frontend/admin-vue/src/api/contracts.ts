@@ -1167,3 +1167,81 @@ export type OcasRatePreview = {
   missing_keys: string[];
   fingerprint: string;
 };
+
+export type PedagogyCatalogItem = {
+  id: number;
+  titre: string;
+  description: string;
+  competence: string;
+  niveau: 'debutant' | 'intermediaire' | 'avance';
+  duree_minutes: number;
+  version_id: number | null;
+  numero_version: number | null;
+  nombre_etapes: number;
+  points_total: number;
+};
+
+export type PedagogyAssignment = {
+  id: number;
+  organisation_id: number;
+  dossier_id: number;
+  generation: number;
+  dossier_nom: string;
+  modele_titre: string;
+  competence: string;
+  niveau: string;
+  duree_minutes: number;
+  consignes: string;
+  groupe_nom: string | null;
+  nombre_etapes: number;
+  etapes_validees: number;
+  points_total: number;
+  points_obtenus: number;
+};
+
+export type PedagogyStep = {
+  id: number;
+  code: string;
+  titre: string;
+  consigne: string;
+  points: number;
+  statut: 'a_faire' | 'en_cours' | 'validee';
+  tentatives: number;
+  indices_consultes: number;
+  nombre_indices: number;
+  messages: string[];
+};
+
+export type PedagogyWorkspace = {
+  available: boolean;
+  catalog: PedagogyCatalogItem[];
+  assignments: PedagogyAssignment[];
+  selected: (PedagogyAssignment & {
+    steps: PedagogyStep[];
+    entries: Array<{
+      id: number;
+      numero: string;
+      date_comptable: string;
+      libelle: string;
+      statut: string;
+      version: number;
+    }>;
+    correction_available: boolean;
+  }) | null;
+  tracking: Array<Record<string, string | number | null>>;
+  groups: Array<Record<string, string | number | null>>;
+  learners: Array<{
+    id: number;
+    email: string;
+    prenom: string;
+    nom: string;
+  }>;
+  competences: Record<string, string>;
+  capabilities: {
+    work: boolean;
+    manage: boolean;
+    correct: boolean;
+    reset: boolean;
+    export: boolean;
+  };
+};

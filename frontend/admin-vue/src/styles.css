@@ -1128,6 +1128,90 @@ textarea {
   background: var(--primary);
 }
 
+.learning-catalog,
+.learning-assignment-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+}
+
+.learning-competence {
+  margin: 0;
+}
+
+.learning-model + .learning-model {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.learning-model h3,
+.learning-model p {
+  margin: 0 0 0.45rem;
+}
+
+.learning-model ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.learning-model li {
+  padding: 0.2rem 0.5rem;
+  color: var(--muted);
+  background: #f1f2f7;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.learning-form {
+  margin-top: 1rem;
+}
+
+.learning-assignment-list .action-card strong {
+  font-size: 1.4rem;
+}
+
+.learning-steps {
+  display: grid;
+  gap: 1rem;
+}
+
+.learning-feedback {
+  color: var(--ink);
+  background: #f1f2f7;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem 0.75rem 2rem;
+}
+
+.learning-solution {
+  margin-top: 1rem;
+  padding: 1rem;
+  color: #184f30;
+  background: #eaf7ed;
+  border: 1px solid #91b89a;
+  border-radius: 0.55rem;
+}
+
+.learning-solution h3,
+.learning-solution p,
+.data-table td small {
+  display: block;
+  margin: 0;
+}
+
+.data-table td small {
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
 .payroll-contract-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

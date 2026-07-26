@@ -92,6 +92,69 @@ test('navigation clavier et largeur 360 px', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
+test('apprentissage ciblé, feedback et correction protégée utilisent le moteur comptable', async ({
+  page
+}) => {
+  await login(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Atelier débit-crédit'
+  });
+  await page.getByRole('link', { name: 'Apprentissage', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Apprentissage', exact: true })).toBeVisible();
+  await expect(page.getByLabel('Navigation Apprentissage')).toContainText('Catalogue');
+  await expect(page.getByText('Débit / crédit', { exact: true })).toBeVisible();
+  await expect(page.getByText('TVA', { exact: true })).toBeVisible();
+  await expect(page.getByText('Lecture d’états', { exact: true })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Exercices', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Mes exercices' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Vente au comptant' }).last()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Afficher la correction' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Vérifier ma réponse' }).click();
+  await expect(page.getByText(/À reprendre\./)).toBeVisible();
+  await expect(page.getByText(
+    'Recontrôlez le sens de la caisse et du produit.',
+    { exact: true }
+  ).last()).toBeVisible();
+
+  await page.getByLabel('Écriture à vérifier').selectOption({ index: 1 });
+  await page.getByRole('button', { name: 'Vérifier ma réponse' }).click();
+  await expect(page.getByText(/Étape validée\./)).toBeVisible();
+  await expect(page.getByText(
+    'La caisse augmente au débit et le produit au crédit.',
+    { exact: true }
+  ).last()).toBeVisible();
+  await expect(page.getByText('100/100')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Afficher la correction' }).click();
+  await expect(page.getByRole('heading', { name: 'Correction autorisée' })).toBeVisible();
+  await expect(page.getByText(/Débit 1000 Caisse/)).toBeVisible();
+
+  const legacy = await page.request.get('/e2e/pedagogie', { maxRedirects: 0 });
+  expect(legacy.status()).toBe(303);
+  expect(legacy.headers().location).toBe('/e2e/app/apprentissage');
+});
+
+test('suivi formateur expose assignation, score, contributeurs et export', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Démonstration guidée'
+  });
+  await page.getByRole('link', { name: 'Apprentissage', exact: true }).click();
+  await expect(page.locator('p.eyebrow').filter({
+    hasText: 'Lecture d’états'
+  })).toBeVisible();
+  await page.getByRole('link', { name: 'Suivi', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Tableau de suivi' })).toBeVisible();
+  await expect(page.getByRole('row').filter({ hasText: 'Vente au comptant' })).toContainText(
+    'lecteur@example.test'
+  );
+  await expect(page.getByRole('link', { name: 'Exporter en CSV' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Groupes' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Assigner une copie isolée' })).toBeVisible();
+});
+
 test('configuration des modules et référentiels', async ({ page }) => {
   await loginAsAdministrator(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({
@@ -111,7 +174,7 @@ test('configuration des modules et référentiels', async ({ page }) => {
     page.getByLabel('Navigation principale').getByRole('link', { name: 'Apprentissage' })
   ).toHaveCount(0);
   const refusal = await page.evaluate(async () =>
-    (await fetch('/e2e/api/v1/pedagogie/exercices')).status
+    (await fetch('/e2e/api/v1/pedagogie')).status
   );
   expect(refusal).toBe(403);
 

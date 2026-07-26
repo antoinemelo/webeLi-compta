@@ -11,6 +11,7 @@ use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Facturation\ContactService;
+use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
 use Compta\Modules\Salaires\PayrollService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
@@ -340,16 +341,107 @@ $dossierC = $scopes->createDossier(
     'demonstration-guidee',
     'demo'
 );
-$scopes->createExercise($dossierC, 'Atelier 2026', '2026-01-01', '2026-12-31');
+$exerciseC = $scopes->createExercise(
+    $dossierC,
+    'Atelier 2026',
+    '2026-01-01',
+    '2026-12-31'
+);
+(new PlanSeeder($pdo, $root . '/database/seeds'))->installForDossier(
+    $organisationC,
+    $dossierC,
+    'personne_morale'
+);
+$setup->createPeriod(
+    $organisationC,
+    $dossierC,
+    $exerciseC,
+    'Année 2026',
+    '2026-01-01',
+    '2026-12-31'
+);
+$setup->createJournal(
+    $organisationC,
+    $dossierC,
+    'OD',
+    'Opérations diverses'
+);
 
 $scopes->grantRole($userId, 'lecteur', 'dossier', $dossierA);
 $scopes->grantRole($userId, 'lecteur', 'dossier', $dossierC);
+$scopes->grantRole($userId, 'apprenant', 'dossier', $dossierC);
 $scopes->grantRole($administratorId, 'administrateur', 'dossier', $dossierA);
+$scopes->grantRole($administratorId, 'formateur', 'dossier', $dossierC);
+
+$pedagogy = new PedagogyService($pdo, $audit, $entries);
+$pedagogy->installTargetedCatalog(
+    $organisationC,
+    $dossierC,
+    $administratorId
+);
+$debitCreditVersion = (int) $pdo->query(
+    "SELECT v.id FROM versions_modeles_exercice v
+     JOIN modeles_exercice m ON m.id = v.modele_id
+     WHERE m.organisation_id = {$organisationC}
+       AND m.competence = 'debit_credit'
+       AND v.numero_version = m.version_courante"
+)->fetchColumn();
+$assignmentC = $pedagogy->assignIndividual(
+    $organisationC,
+    $debitCreditVersion,
+    $userId,
+    'Atelier débit-crédit',
+    $administratorId
+);
+$assignmentDossier = (int) $pdo->query(
+    "SELECT dossier_id FROM assignations_exercice WHERE id = {$assignmentC}"
+)->fetchColumn();
+$assignmentExercise = (int) $pdo->query(
+    "SELECT id FROM exercices WHERE dossier_id = {$assignmentDossier}"
+)->fetchColumn();
+$assignmentJournal = (int) $pdo->query(
+    "SELECT id FROM journaux WHERE dossier_id = {$assignmentDossier}
+     ORDER BY id LIMIT 1"
+)->fetchColumn();
+$assignmentAccount = static function (
+    string $number
+) use (
+    $pdo,
+    $assignmentDossier
+): int {
+    $stmt = $pdo->prepare(
+        'SELECT id FROM comptes WHERE dossier_id = ? AND numero = ?'
+    );
+    $stmt->execute([$assignmentDossier, $number]);
+    return (int) $stmt->fetchColumn();
+};
+$pedagogy->createDraft(
+    $organisationC,
+    $assignmentDossier,
+    $userId,
+    [
+        'exercice_id' => $assignmentExercise,
+        'journal_id' => $assignmentJournal,
+        'date_comptable' => '2026-04-15',
+        'libelle' => 'Réponse préparée E2E',
+        'lignes' => [
+            [
+                'compte_id' => $assignmentAccount('1000'),
+                'debit_centimes' => 10000,
+            ],
+            [
+                'compte_id' => $assignmentAccount('3400'),
+                'credit_centimes' => 10000,
+            ],
+        ],
+    ],
+    $userId
+);
 
 echo json_encode([
     'user_id' => $userId,
     'administrator_id' => $administratorId,
-    'allowed' => [$dossierA, $dossierC],
+    'allowed' => [$dossierA, $dossierC, $assignmentDossier],
     'forbidden' => [
         'organisation_id' => $organisationB,
         'dossier_id' => $dossierB,

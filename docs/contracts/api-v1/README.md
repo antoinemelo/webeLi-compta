@@ -37,6 +37,7 @@ Les exemples versionnés sont :
 - `treasury.success.json` ;
 - `billing.success.json` ;
 - `payroll.success.json` ;
+- `pedagogy.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -148,6 +149,18 @@ Les exemples versionnés sont :
 | POST | `/api/v1/facturation/allocations` | allocation N–N d’un paiement |
 | POST | `/api/v1/facturation/allocations/avoirs` | allocation d’un avoir |
 | POST | `/api/v1/facturation/allocations/annuler` | délettrage audité |
+| GET | `/api/v1/pedagogie` | catalogue, copies, étapes, progression et capacités |
+| POST | `/api/v1/pedagogie/catalogue/installer` | installation idempotente des sept compétences ciblées |
+| POST | `/api/v1/pedagogie/modeles` | publication d’un scénario versionné |
+| POST | `/api/v1/pedagogie/tentatives` | validation d’une réponse par le moteur comptable |
+| POST | `/api/v1/pedagogie/indices` | révélation tracée de l’indice suivant |
+| GET | `/api/v1/pedagogie/correction` | correction protégée si sa règle d’ouverture est satisfaite |
+| POST | `/api/v1/pedagogie/correction/autoriser` | autorisation explicite du formateur |
+| POST | `/api/v1/pedagogie/reinitialiser` | remplacement atomique d’une copie d’exercice |
+| POST | `/api/v1/pedagogie/groupes` | création d’un groupe |
+| POST | `/api/v1/pedagogie/groupes/membres` | ajout d’un apprenant au groupe |
+| POST | `/api/v1/pedagogie/assignations` | assignation individuelle ou collective d’une copie isolée |
+| GET | `/api/v1/pedagogie/export` | export CSV du suivi formateur |
 
 Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
@@ -216,6 +229,13 @@ l’export. Les tranches d’aging incluent exactement 0–30, 31–60, 61–90 
 de 90 jours ; les paiements non alloués sont séparés des tranches mais déduits
 du solde net. Les mutations restent scopées par la session et les documents
 émis ne sont jamais réécrits.
+
+Le contrat pédagogique ne renvoie jamais `solution_json` dans le workspace.
+Une correction est obtenue uniquement par sa route dédiée après autorisation.
+Un contexte réel renvoie un workspace indisponible et aucune donnée
+pédagogique ; modèles et assignations sont limités à une organisation de nature
+`pedagogique`. Les créations et validations réutilisent `EntryService`, sans
+moteur de saisie parallèle.
 
 ## Erreurs
 

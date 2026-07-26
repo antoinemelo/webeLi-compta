@@ -1,0 +1,45 @@
+{
+  "data": {
+    "available": true,
+    "catalog": [
+      {
+        "id": 1,
+        "titre": "Vente au comptant",
+        "description": "Reconnaître les effets débit/crédit d’une vente.",
+        "competence": "debit_credit",
+        "niveau": "debutant",
+        "duree_minutes": 25,
+        "version_id": 1,
+        "numero_version": 1,
+        "nombre_etapes": 1,
+        "points_total": 100
+      }
+    ],
+    "assignments": [],
+    "selected": null,
+    "tracking": [],
+    "groups": [],
+    "learners": [],
+    "competences": {
+      "debit_credit": "Débit / crédit",
+      "tva": "TVA",
+      "facturation": "Facturation",
+      "salaires": "Salaires",
+      "rapprochement": "Rapprochement",
+      "cloture": "Clôture",
+      "lecture_etats": "Lecture d’états"
+    },
+    "capabilities": {
+      "work": true,
+      "manage": false,
+      "correct": false,
+      "reset": false,
+      "export": false
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "74f5c9b8ee274d87b0da7b29fa7fd246"
+  },
+  "errors": []
+}

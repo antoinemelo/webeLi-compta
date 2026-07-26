@@ -11,6 +11,16 @@ use Throwable;
 
 final class PedagogyService
 {
+    public const COMPETENCES = [
+        'debit_credit' => 'Débit / crédit',
+        'tva' => 'TVA',
+        'facturation' => 'Facturation',
+        'salaires' => 'Salaires',
+        'rapprochement' => 'Rapprochement',
+        'cloture' => 'Clôture',
+        'lecture_etats' => 'Lecture d’états',
+    ];
+
     private bool $inTransaction = false;
 
     public function __construct(
@@ -25,15 +35,33 @@ final class PedagogyService
         string $title,
         string $description = '',
         ?int $actorId = null,
+        string $competence = 'debit_credit',
+        string $level = 'debutant',
+        int $durationMinutes = 30,
     ): int {
-        if (trim($title) === '') {
-            throw new PedagogyException('Le titre du modèle est requis.');
+        if (
+            trim($title) === ''
+            || !isset(self::COMPETENCES[$competence])
+            || !in_array($level, ['debutant', 'intermediaire', 'avance'], true)
+            || $durationMinutes < 5
+            || $durationMinutes > 480
+        ) {
+            throw new PedagogyException('Paramètres du modèle invalides.');
         }
         $stmt = $this->pdo->prepare(
             'INSERT INTO modeles_exercice
-             (organisation_id, titre, description, cree_par) VALUES (?, ?, ?, ?)'
+             (organisation_id, titre, description, competence, niveau,
+              duree_minutes, cree_par) VALUES (?, ?, ?, ?, ?, ?, ?)'
         );
-        $stmt->execute([$organisationId, trim($title), trim($description), $actorId]);
+        $stmt->execute([
+            $organisationId,
+            trim($title),
+            trim($description),
+            $competence,
+            $level,
+            $durationMinutes,
+            $actorId,
+        ]);
         $id = (int) $this->pdo->lastInsertId();
         $this->audit->log(
             'pedagogie.modele_cree', $actorId, $organisationId,
@@ -109,6 +137,73 @@ final class PedagogyService
                 summary: ['version' => $number]
             );
             return $versionId;
+        });
+    }
+
+    /**
+     * @param list<array<string,mixed>> $steps
+     * @param list<array<string,mixed>> $opening
+     * @param list<array<string,mixed>> $initial
+     * @param array<string,mixed> $solution
+     * @return array{model_id:int,version_id:int}
+     */
+    public function createPublishedModel(
+        int $organisationId,
+        int $sourceDossierId,
+        string $title,
+        string $description,
+        string $competence,
+        string $level,
+        int $durationMinutes,
+        string $instructions,
+        array $steps,
+        array $opening,
+        array $initial,
+        array $solution,
+        string $correctionRule,
+        string $correctionValue,
+        ?int $actorId = null,
+    ): array {
+        return $this->transaction(function () use (
+            $organisationId,
+            $sourceDossierId,
+            $title,
+            $description,
+            $competence,
+            $level,
+            $durationMinutes,
+            $instructions,
+            $steps,
+            $opening,
+            $initial,
+            $solution,
+            $correctionRule,
+            $correctionValue,
+            $actorId
+        ): array {
+            $modelId = $this->createModel(
+                $organisationId,
+                $title,
+                $description,
+                $actorId,
+                $competence,
+                $level,
+                $durationMinutes
+            );
+            $versionId = $this->createVersion(
+                $organisationId,
+                $modelId,
+                $sourceDossierId,
+                $instructions,
+                $steps,
+                $opening,
+                $initial,
+                $solution,
+                $correctionRule,
+                $correctionValue,
+                $actorId
+            );
+            return ['model_id' => $modelId, 'version_id' => $versionId];
         });
     }
 
@@ -479,15 +574,37 @@ final class PedagogyService
         }
     }
 
+    public function assertPedagogicalContext(
+        int $organisationId,
+        int $dossierId,
+    ): void {
+        $row = $this->one(
+            'SELECT o.nature, d.type FROM dossiers d
+             JOIN organisations o ON o.id = d.organisation_id
+             WHERE d.id = ? AND d.organisation_id = ?',
+            [$dossierId, $organisationId],
+            'Dossier absent.'
+        );
+        if ($row['nature'] !== 'pedagogique' || $row['type'] === 'reel') {
+            throw new PedagogyException(
+                'La réinitialisation exige un contexte pédagogique fictif.'
+            );
+        }
+    }
+
     /** @return list<array<string,mixed>> */
     public function assignmentsForUser(int $userId): array
     {
         return $this->all(
             "SELECT a.id, a.organisation_id, a.dossier_id, a.generation,
-                    d.nom AS dossier_nom, m.titre AS modele_titre, v.consignes,
+                    d.nom AS dossier_nom, m.titre AS modele_titre, m.competence,
+                    m.niveau, m.duree_minutes, v.consignes,
                     g.nom AS groupe_nom, COUNT(pe.id) AS nombre_etapes,
                     SUM(CASE WHEN pe.statut = 'validee' THEN 1 ELSE 0 END)
-                      AS etapes_validees
+                      AS etapes_validees,
+                    SUM(e.points) AS points_total,
+                    SUM(CASE WHEN pe.statut = 'validee' THEN e.points ELSE 0 END)
+                      AS points_obtenus
              FROM assignations_exercice a
              JOIN dossiers d ON d.id = a.dossier_id AND d.actif = 1
                AND d.type = 'exercice'
@@ -499,6 +616,7 @@ final class PedagogyService
              LEFT JOIN membres_groupes mg ON mg.groupe_id = a.groupe_id
                AND mg.utilisateur_id = ? AND mg.retrait_le IS NULL
              LEFT JOIN progressions_etapes pe ON pe.assignation_id = a.id
+             LEFT JOIN etapes_exercice e ON e.id = pe.etape_id
              WHERE a.statut = 'en_cours'
                AND (a.utilisateur_id = ? OR mg.id IS NOT NULL)
              GROUP BY a.id ORDER BY a.assignee_le DESC",
@@ -510,16 +628,31 @@ final class PedagogyService
     public function steps(int $assignmentId, int $userId): array
     {
         return $this->all(
-            "SELECT e.id, e.titre, e.consigne, pe.statut,
+            "SELECT e.id, e.code, e.titre, e.consigne, e.points, pe.statut,
                     (SELECT COUNT(*) FROM tentatives_pedagogiques t
-                     WHERE t.assignation_id = ? AND t.etape_id = e.id) AS tentatives
+                     WHERE t.assignation_id = ? AND t.etape_id = e.id) AS tentatives,
+                    (SELECT t.resultat_json FROM tentatives_pedagogiques t
+                     WHERE t.assignation_id = ? AND t.etape_id = e.id
+                     ORDER BY t.id DESC LIMIT 1) AS dernier_resultat_json,
+                    (SELECT COUNT(*) FROM consultations_indices ci
+                     JOIN indices_exercice i ON i.id = ci.indice_id
+                     WHERE ci.assignation_id = ? AND ci.utilisateur_id = ?
+                       AND i.etape_id = e.id) AS indices_consultes,
+                    (SELECT COUNT(*) FROM indices_exercice i
+                     WHERE i.etape_id = e.id) AS nombre_indices
              FROM etapes_exercice e
              JOIN assignations_exercice a ON a.version_modele_id = e.version_modele_id
                AND a.id = ?
              JOIN progressions_etapes pe ON pe.assignation_id = a.id
                AND pe.etape_id = e.id
              ORDER BY e.ordre, e.id",
-            [$assignmentId, $assignmentId]
+            [
+                $assignmentId,
+                $assignmentId,
+                $assignmentId,
+                $userId,
+                $assignmentId,
+            ]
         );
     }
 
@@ -528,11 +661,28 @@ final class PedagogyService
     {
         return $this->all(
             "SELECT a.id, a.dossier_id, d.nom AS dossier_nom, m.titre,
+                    m.competence, m.niveau,
                     g.nom AS groupe_nom, u.email AS apprenant,
-                    a.generation, COUNT(pe.id) AS etapes,
-                    SUM(CASE WHEN pe.statut = 'validee' THEN 1 ELSE 0 END) AS validees,
-                    COUNT(DISTINCT t.id) AS tentatives,
-                    COUNT(DISTINCT c.utilisateur_id) AS contributeurs
+                    a.generation,
+                    (SELECT COUNT(*) FROM progressions_etapes pe
+                     WHERE pe.assignation_id = a.id) AS etapes,
+                    (SELECT COUNT(*) FROM progressions_etapes pe
+                     WHERE pe.assignation_id = a.id
+                       AND pe.statut = 'validee') AS validees,
+                    (SELECT COALESCE(SUM(e.points), 0)
+                     FROM progressions_etapes pe JOIN etapes_exercice e
+                       ON e.id = pe.etape_id
+                     WHERE pe.assignation_id = a.id) AS points_total,
+                    (SELECT COALESCE(SUM(e.points), 0)
+                     FROM progressions_etapes pe JOIN etapes_exercice e
+                       ON e.id = pe.etape_id
+                     WHERE pe.assignation_id = a.id
+                       AND pe.statut = 'validee') AS points_obtenus,
+                    (SELECT COUNT(*) FROM tentatives_pedagogiques t
+                     WHERE t.assignation_id = a.id) AS tentatives,
+                    (SELECT COUNT(DISTINCT c.utilisateur_id)
+                     FROM contributions_pedagogiques c
+                     WHERE c.assignation_id = a.id) AS contributeurs
              FROM assignations_exercice a
              JOIN organisations o ON o.id = a.organisation_id
                AND o.nature = 'pedagogique'
@@ -541,11 +691,8 @@ final class PedagogyService
              JOIN modeles_exercice m ON m.id = v.modele_id
              LEFT JOIN groupes_pedagogiques g ON g.id = a.groupe_id
              LEFT JOIN utilisateurs u ON u.id = a.utilisateur_id
-             LEFT JOIN progressions_etapes pe ON pe.assignation_id = a.id
-             LEFT JOIN tentatives_pedagogiques t ON t.assignation_id = a.id
-             LEFT JOIN contributions_pedagogiques c ON c.assignation_id = a.id
              WHERE a.organisation_id = ?
-             GROUP BY a.id ORDER BY m.titre, d.nom",
+             ORDER BY m.titre, d.nom",
             [$organisationId]
         );
     }
@@ -554,10 +701,15 @@ final class PedagogyService
     public function models(int $organisationId): array
     {
         return $this->all(
-            'SELECT m.*, v.id AS version_id FROM modeles_exercice m
+            'SELECT m.*, v.id AS version_id, v.numero_version,
+                    COUNT(e.id) AS nombre_etapes,
+                    COALESCE(SUM(e.points), 0) AS points_total
+             FROM modeles_exercice m
              LEFT JOIN versions_modeles_exercice v ON v.modele_id = m.id
                AND v.numero_version = m.version_courante
-             WHERE m.organisation_id = ? ORDER BY m.titre',
+             LEFT JOIN etapes_exercice e ON e.version_modele_id = v.id
+             WHERE m.organisation_id = ?
+             GROUP BY m.id, v.id ORDER BY m.competence, m.titre',
             [$organisationId]
         );
     }
@@ -573,6 +725,353 @@ final class PedagogyService
              GROUP BY g.id ORDER BY g.nom',
             [$organisationId]
         );
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function learners(int $organisationId): array
+    {
+        return $this->all(
+            "SELECT DISTINCT u.id, u.email, u.prenom, u.nom
+             FROM utilisateurs u
+             JOIN (
+               SELECT utilisateur_id, role_id FROM utilisateur_roles_installation
+               UNION ALL
+               SELECT utilisateur_id, role_id FROM utilisateur_roles_organisation
+                WHERE organisation_id = ?
+               UNION ALL
+               SELECT urd.utilisateur_id, urd.role_id
+               FROM utilisateur_roles_dossier urd
+               JOIN dossiers d ON d.id = urd.dossier_id
+               WHERE d.organisation_id = ?
+             ) affectation ON affectation.utilisateur_id = u.id
+             JOIN roles r ON r.id = affectation.role_id
+             WHERE u.actif = 1 AND r.code = 'apprenant'
+             ORDER BY u.email",
+            [$organisationId, $organisationId]
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function workspace(
+        int $organisationId,
+        int $dossierId,
+        int $userId,
+        bool $manage,
+    ): array {
+        $scope = $this->one(
+            'SELECT o.nature, d.type FROM organisations o
+             JOIN dossiers d ON d.organisation_id = o.id
+             WHERE o.id = ? AND d.id = ?',
+            [$organisationId, $dossierId],
+            'Contexte pédagogique absent.'
+        );
+        $available = $scope['nature'] === 'pedagogique'
+            && $scope['type'] !== 'reel';
+        if (!$available) {
+            return [
+                'available' => false,
+                'catalog' => [],
+                'assignments' => [],
+                'selected' => null,
+                'tracking' => [],
+                'groups' => [],
+                'learners' => [],
+                'competences' => self::COMPETENCES,
+            ];
+        }
+        $assignments = array_values(array_filter(
+            $this->assignmentsForUser($userId),
+            static fn (array $row): bool =>
+                (int) $row['organisation_id'] === $organisationId
+        ));
+        $selected = null;
+        foreach ($assignments as $assignment) {
+            if ((int) $assignment['dossier_id'] !== $dossierId) {
+                continue;
+            }
+            $steps = array_map(static function (array $step): array {
+                $result = $step['dernier_resultat_json'] === null
+                    ? []
+                    : (array) json_decode(
+                        (string) $step['dernier_resultat_json'],
+                        true,
+                        32,
+                        JSON_THROW_ON_ERROR
+                    );
+                unset($step['dernier_resultat_json']);
+                $step['messages'] = array_values((array) ($result['messages'] ?? []));
+                return $step;
+            }, $this->steps((int) $assignment['id'], $userId));
+            $selected = [
+                ...$assignment,
+                'steps' => $steps,
+                'entries' => $this->all(
+                    "SELECT id, numero, date_comptable, libelle, statut, version
+                     FROM ecritures WHERE organisation_id = ? AND dossier_id = ?
+                       AND source_type <> 'pedagogie_initiale'
+                     ORDER BY id DESC LIMIT 100",
+                    [$organisationId, $dossierId]
+                ),
+                'correction_available' => $this->correctionAvailable(
+                    $organisationId,
+                    $dossierId,
+                    $userId
+                ),
+            ];
+            break;
+        }
+        return [
+            'available' => true,
+            'catalog' => $this->models($organisationId),
+            'assignments' => $assignments,
+            'selected' => $selected,
+            'tracking' => $manage ? $this->dashboard($organisationId) : [],
+            'groups' => $manage ? $this->groups($organisationId) : [],
+            'learners' => $manage ? $this->learners($organisationId) : [],
+            'competences' => self::COMPETENCES,
+        ];
+    }
+
+    public function correctionAvailable(
+        int $organisationId,
+        int $dossierId,
+        int $userId,
+    ): bool {
+        try {
+            $this->correction($organisationId, $dossierId, $userId);
+            return true;
+        } catch (PedagogyException) {
+            return false;
+        }
+    }
+
+    /** @return array{created:int,existing:int} */
+    public function installTargetedCatalog(
+        int $organisationId,
+        int $sourceDossierId,
+        ?int $actorId = null,
+    ): array {
+        return $this->transaction(function () use (
+            $organisationId,
+            $sourceDossierId,
+            $actorId
+        ): array {
+            $created = 0;
+            $existing = 0;
+            foreach ($this->targetedScenarios() as $competence => $scenario) {
+                $stmt = $this->pdo->prepare(
+                    'SELECT id FROM modeles_exercice
+                     WHERE organisation_id = ? AND competence = ? AND titre = ?
+                       AND statut <> \'archive\' LIMIT 1'
+                );
+                $stmt->execute([
+                    $organisationId,
+                    $competence,
+                    $scenario['title'],
+                ]);
+                if ($stmt->fetchColumn() !== false) {
+                    $existing++;
+                    continue;
+                }
+                $model = $this->createModel(
+                    $organisationId,
+                    $scenario['title'],
+                    $scenario['description'],
+                    $actorId,
+                    $competence,
+                    $scenario['level'],
+                    $scenario['duration']
+                );
+                $this->createVersion(
+                    $organisationId,
+                    $model,
+                    $sourceDossierId,
+                    $scenario['instructions'],
+                    $scenario['steps'],
+                    [],
+                    [],
+                    $scenario['solution'],
+                    'apres_tentatives',
+                    '2',
+                    $actorId
+                );
+                $created++;
+            }
+            return ['created' => $created, 'existing' => $existing];
+        });
+    }
+
+    public function exportResults(int $organisationId): string
+    {
+        $stream = fopen('php://temp', 'w+b');
+        if ($stream === false) {
+            throw new PedagogyException('Export pédagogique indisponible.');
+        }
+        fputcsv($stream, [
+            'assignation_id', 'competence', 'modele', 'copie', 'cible',
+            'points_obtenus', 'points_total', 'tentatives', 'contributeurs',
+        ], ';');
+        foreach ($this->dashboard($organisationId) as $row) {
+            fputcsv($stream, [
+                $row['id'],
+                $row['competence'],
+                $row['titre'],
+                $row['dossier_nom'],
+                $row['groupe_nom'] ?: $row['apprenant'],
+                $row['points_obtenus'],
+                $row['points_total'],
+                $row['tentatives'],
+                $row['contributeurs'],
+            ], ';');
+        }
+        rewind($stream);
+        $csv = stream_get_contents($stream);
+        fclose($stream);
+        return "\xEF\xBB\xBF" . ($csv === false ? '' : $csv);
+    }
+
+    /** @return array<string,array<string,mixed>> */
+    private function targetedScenarios(): array
+    {
+        $line = static fn (
+            string $account,
+            string $side,
+            int $amount
+        ): array => [
+            'compte' => $account,
+            'sens' => $side,
+            'montant_centimes' => $amount,
+        ];
+        $scenario = static fn (
+            string $title,
+            string $description,
+            string $instructions,
+            string $rule,
+            array $configuration,
+            string $success,
+            string $failure,
+            array $solution,
+            string $level = 'debutant',
+            int $duration = 25,
+        ): array => [
+            'title' => $title,
+            'description' => $description,
+            'instructions' => $instructions,
+            'level' => $level,
+            'duration' => $duration,
+            'steps' => [[
+                'code' => 'E1',
+                'titre' => $title,
+                'consigne' => $instructions,
+                'points' => 100,
+                'indices' => [
+                    'Identifiez d’abord les comptes concernés et leur sens.',
+                    'Contrôlez ensuite que le total des débits égale les crédits.',
+                ],
+                'regles' => [[
+                    'type' => $rule,
+                    'configuration' => $configuration,
+                    'message_succes' => $success,
+                    'message_echec' => $failure,
+                ]],
+            ]],
+            'solution' => $solution,
+        ];
+        return [
+            'debit_credit' => $scenario(
+                'Vente au comptant',
+                'Reconnaître les effets débit/crédit d’une vente.',
+                'Comptabilisez une vente au comptant de CHF 100.00.',
+                'ecriture_equivalente',
+                ['lignes' => [
+                    $line('1000', 'debit', 10000),
+                    $line('3400', 'credit', 10000),
+                ]],
+                'La caisse augmente au débit et le produit au crédit.',
+                'Recontrôlez le sens de la caisse et du produit.',
+                ['explication' => 'Débit 1000 Caisse, crédit 3400 Ventes, CHF 100.00.']
+            ),
+            'tva' => $scenario(
+                'Vente avec TVA',
+                'Séparer base nette, TVA collectée et encaissement.',
+                'Comptabilisez CHF 100.00 net avec 8,1 % de TVA, payé comptant.',
+                'montants',
+                ['lignes' => [
+                    $line('1000', 'debit', 10810),
+                    $line('3400', 'credit', 10000),
+                    $line('2200', 'credit', 810),
+                ]],
+                'La base, la TVA collectée et le brut concordent.',
+                'Le brut doit égaler la base nette plus la TVA collectée.',
+                ['explication' => 'Débit Caisse 108.10, crédit Ventes 100.00 et TVA 8.10.'],
+                'intermediaire',
+                30
+            ),
+            'facturation' => $scenario(
+                'Créance client',
+                'Identifier les comptes essentiels d’une facture client.',
+                'Enregistrez une créance client de CHF 100.00 hors TVA.',
+                'comptes',
+                ['comptes' => ['1100', '3400']],
+                'La créance et le produit sont correctement identifiés.',
+                'La facture doit toucher un compte client et un compte de produit.',
+                ['explication' => 'Débit 1100 Clients, crédit 3400 Ventes.']
+            ),
+            'salaires' => $scenario(
+                'Salaire brut à payer',
+                'Lire le sens comptable d’une charge salariale et de sa dette.',
+                'Comptabilisez CHF 100.00 de salaire brut à payer.',
+                'sens',
+                ['lignes' => [
+                    $line('5000', 'debit', 10000),
+                    $line('2000', 'credit', 10000),
+                ]],
+                'La charge est au débit et la dette au crédit.',
+                'Distinguez la charge salariale de la dette envers le bénéficiaire.',
+                ['explication' => 'Débit 5000 Charges de personnel, crédit 2000 Dette.']
+            ),
+            'rapprochement' => $scenario(
+                'Encaissement bancaire',
+                'Relier un mouvement bancaire à la créance correspondante.',
+                'Comptabilisez l’encaissement bancaire d’une créance de CHF 100.00.',
+                'montants',
+                ['lignes' => [
+                    $line('1020', 'debit', 10000),
+                    $line('1100', 'credit', 10000),
+                ]],
+                'La banque augmente et la créance client diminue.',
+                'L’encaissement ne crée pas un nouveau produit.',
+                ['explication' => 'Débit 1020 Banque, crédit 1100 Clients.'],
+                'intermediaire',
+                25
+            ),
+            'cloture' => $scenario(
+                'Lire le résultat avant clôture',
+                'Contrôler le résultat issu du grand livre.',
+                'Produisez un résultat positif de CHF 100.00 dans la copie.',
+                'rapport',
+                ['resultat_centimes' => 10000, 'tolerance_centimes' => 0],
+                'Le résultat du grand livre atteint CHF 100.00.',
+                'Le résultat validé ne correspond pas encore à CHF 100.00.',
+                ['explication' => 'Une vente de CHF 100.00 sans charge produit ce résultat.'],
+                'avance',
+                35
+            ),
+            'lecture_etats' => $scenario(
+                'Lire le solde de caisse',
+                'Relier une balance au détail des écritures.',
+                'Obtenez un solde débiteur de CHF 100.00 sur le compte 1000.',
+                'soldes',
+                ['comptes' => [[
+                    'compte' => '1000',
+                    'solde_centimes' => 10000,
+                    'tolerance_centimes' => 0,
+                ]]],
+                'Le solde de caisse est correctement lu.',
+                'Le solde validé du compte 1000 n’est pas encore CHF 100.00.',
+                ['explication' => 'Le solde débiteur correspond aux débits moins les crédits.']
+            ),
+        ];
     }
 
     /** @return array<string,mixed> */
@@ -647,10 +1146,15 @@ final class PedagogyService
             }
             $this->pdo->prepare(
                 'INSERT INTO etapes_exercice
-                 (version_modele_id, code, titre, consigne, ordre)
-                 VALUES (?, ?, ?, ?, ?)'
+                 (version_modele_id, code, titre, consigne, points, ordre)
+                 VALUES (?, ?, ?, ?, ?, ?)'
             )->execute([
-                $versionId, $step['code'], $step['titre'], $step['consigne'], $order + 1,
+                $versionId,
+                $step['code'],
+                $step['titre'],
+                $step['consigne'],
+                max(1, (int) ($step['points'] ?? 100)),
+                $order + 1,
             ]);
             $stepId = (int) $this->pdo->lastInsertId();
             foreach (array_values($step['indices'] ?? []) as $level => $hint) {
@@ -669,10 +1173,15 @@ final class PedagogyService
                 }
                 $this->pdo->prepare(
                     'INSERT INTO regles_validation
-                     (etape_id, type, configuration_json, ordre) VALUES (?, ?, ?, ?)'
+                     (etape_id, type, configuration_json, message_succes,
+                      message_echec, ordre) VALUES (?, ?, ?, ?, ?, ?)'
                 )->execute([
                     $stepId, $type,
-                    $this->json((array) ($rule['configuration'] ?? [])), $rank + 1,
+                    $this->json((array) ($rule['configuration'] ?? [])),
+                    trim((string) ($rule['message_succes'] ?? 'Étape validée.')),
+                    trim((string) ($rule['message_echec']
+                        ?? 'La réponse comptable ne satisfait pas la règle.')),
+                    $rank + 1,
                 ]);
             }
         }

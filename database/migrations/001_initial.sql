@@ -650,6 +650,7 @@ CREATE TABLE etapes_exercice (
     code TEXT NOT NULL,
     titre TEXT NOT NULL,
     consigne TEXT NOT NULL,
+    points INTEGER NOT NULL DEFAULT 100 CHECK (points > 0),
     ordre INTEGER NOT NULL DEFAULT 0,
     UNIQUE (version_modele_id, code)
 );
@@ -999,6 +1000,15 @@ CREATE TABLE modeles_exercice (
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
     titre TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
+    competence TEXT NOT NULL DEFAULT 'debit_credit' CHECK (
+        competence IN (
+            'debit_credit', 'tva', 'facturation', 'salaires',
+            'rapprochement', 'cloture', 'lecture_etats'
+        )
+    ),
+    niveau TEXT NOT NULL DEFAULT 'debutant'
+        CHECK (niveau IN ('debutant', 'intermediaire', 'avance')),
+    duree_minutes INTEGER NOT NULL DEFAULT 30 CHECK (duree_minutes BETWEEN 5 AND 480),
     statut TEXT NOT NULL DEFAULT 'brouillon'
         CHECK (statut IN ('brouillon', 'publie', 'archive')),
     version_courante INTEGER NOT NULL DEFAULT 0 CHECK (version_courante >= 0),

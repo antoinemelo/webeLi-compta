@@ -7,24 +7,16 @@ import AccountingView from '@/views/AccountingView.vue';
 import LiquidityView from '@/views/LiquidityView.vue';
 import PayrollView from '@/views/PayrollView.vue';
 import BillingView from '@/views/BillingView.vue';
-import WorkspaceView from '@/views/WorkspaceView.vue';
-
-const workspace = (
-  path: string,
-  name: string,
-  label: string,
-  section: string,
-  legacyPath: string
-): RouteRecordRaw => ({
-  path,
-  name,
-  component: WorkspaceView,
-  meta: { label, section, legacyPath }
-});
+import LearningView from '@/views/LearningView.vue';
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'dashboard', component: DashboardView, meta: { label: 'Tableau de bord' } },
-  workspace('/apprentissage/:tab?', 'learning', 'Apprentissage', 'learning', '/pedagogie'),
+  {
+    path: '/apprentissage/:tab?',
+    name: 'learning',
+    component: LearningView,
+    meta: { label: 'Apprentissage', section: 'learning' }
+  },
   {
     path: '/liquidites/:tab?',
     name: 'liquidity',

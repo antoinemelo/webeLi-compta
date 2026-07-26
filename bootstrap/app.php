@@ -53,6 +53,8 @@ use Compta\Modules\Salaires\PayrollPaymentService;
 use Compta\Modules\Salaires\PayrollService;
 use Compta\Modules\Salaires\PayrollWorkspaceService;
 use Compta\Modules\Pedagogie\PedagogyService;
+use Compta\Modules\Pedagogie\PedagogyApiController;
+use Compta\Modules\Pedagogie\PedagogyInputValidator;
 use Compta\Modules\Shell\Application\ShellReadService;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Shell\Http\ShellInputValidator;
@@ -132,6 +134,7 @@ $closingAndTax = new ClosingAndTaxService(
 );
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
+$pedagogy = new PedagogyService($pdo, $audit, $entries);
 $apiRoutes = new ApiRouteRegistry(
     new ShellApiController(
         $config,
@@ -249,6 +252,13 @@ $apiRoutes = new ApiRouteRegistry(
             $audit
         ),
         new PayrollInputValidator()
+    ),
+    new PedagogyApiController(
+        $session,
+        $auth,
+        $access,
+        $pedagogy,
+        new PedagogyInputValidator()
     )
 );
 $shellPage = new ShellPageController(
@@ -280,7 +290,7 @@ return [
         $payrollPayments,
         $payrollCertificates,
         new PayrollImportService($pdo, $audit, $payrolls),
-        new PedagogyService($pdo, $audit, $entries),
+        $pedagogy,
         $apiRoutes,
         $shellPage,
         $moduleAccess
