@@ -40,6 +40,8 @@ final class PayrollService
         ?int $sourceTaxPpm = null,
         ?int $actorId = null,
         array $context = [],
+        ?int $draftId = null,
+        ?int $expectedVersion = null,
     ): int {
         return $this->transaction(function () use (
             $organisationId,
@@ -51,7 +53,9 @@ final class PayrollService
             $vacationPpm,
             $sourceTaxPpm,
             $actorId,
-            $context
+            $context,
+            $draftId,
+            $expectedVersion
         ): int {
             $employee = $this->configuration->employee(
                 $organisationId,
@@ -98,66 +102,134 @@ final class PayrollService
                 $employeeCalculation['supplement_vacances_ppm'];
             $employeeSnapshot['impot_source_ppm'] =
                 $employeeCalculation['impot_source_ppm'];
-            $stmt = $this->pdo->prepare(
-                'INSERT INTO fiches_salaires
-                 (organisation_id, dossier_id, employe_id, annee, mois,
-                  employe_snapshot_json, employeur_snapshot_json,
-                  contrat_snapshot_json, variables_snapshot_json,
-                  taux_snapshot_json, taux_source_annee, nombre_heures_milli,
-                  salaire_travail_centimes, supplement_centimes, brut_centimes,
-                  ded_avs_centimes, ded_ac_centimes, ded_amat_centimes,
-                  ded_laa_centimes, ded_lpp_centimes,
-                  ded_impot_source_centimes, total_deductions_centimes,
-                  net_centimes, emp_avs_centimes, emp_ac_centimes,
-                  emp_amat_centimes, emp_af_centimes, emp_laa_centimes,
-                  emp_frais_centimes, emp_cpe_centimes, emp_lfp_centimes,
-                  emp_lpp_centimes, total_charges_employeur_centimes,
-                  cout_total_centimes, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            );
-            $stmt->execute([
-                $organisationId, $dossierId, $employeeId, $year, $month,
-                $this->json($employeeSnapshot), $this->json($employer),
-                $this->json($context['contract'] ?? []),
-                $this->json($context['elements'] ?? []),
-                $this->json($rateSnapshot + [
+            $values = [
+                'employe_snapshot_json' => $this->json($employeeSnapshot),
+                'employeur_snapshot_json' => $this->json($employer),
+                'contrat_snapshot_json' => $this->json($context['contract'] ?? []),
+                'variables_snapshot_json' => $this->json($context['elements'] ?? []),
+                'taux_snapshot_json' => $this->json($rateSnapshot + [
                     'impot_source_ppm' => $employeeCalculation['impot_source_ppm'],
                     'supplement_vacances_ppm' =>
                         $employeeCalculation['supplement_vacances_ppm'],
                 ]),
-                (int) ($rates['annee'] ?? $year),
-                $hoursMilli,
-                $calculation['salaire_travail_centimes'],
-                $calculation['supplement_centimes'],
-                $calculation['brut_centimes'],
-                $calculation['ded_avs_centimes'],
-                $calculation['ded_ac_centimes'],
-                $calculation['ded_amat_centimes'],
-                $calculation['ded_laa_centimes'],
-                $calculation['ded_lpp_centimes'],
-                $calculation['ded_impot_source_centimes'],
-                $calculation['total_deductions_centimes'],
-                $calculation['net_centimes'],
-                $calculation['emp_avs_centimes'],
-                $calculation['emp_ac_centimes'],
-                $calculation['emp_amat_centimes'],
-                $calculation['emp_af_centimes'],
-                $calculation['emp_laa_centimes'],
-                $calculation['emp_frais_centimes'],
-                $calculation['emp_cpe_centimes'],
-                $calculation['emp_lfp_centimes'],
-                $calculation['emp_lpp_centimes'],
-                $calculation['total_charges_employeur_centimes'],
-                $calculation['cout_total_centimes'],
-                $actorId,
-            ]);
-            $id = (int) $this->pdo->lastInsertId();
+                'taux_source_annee' => (int) ($rates['annee'] ?? $year),
+                'nombre_heures_milli' => $hoursMilli,
+                'salaire_travail_centimes' => $calculation['salaire_travail_centimes'],
+                'supplement_centimes' => $calculation['supplement_centimes'],
+                'brut_centimes' => $calculation['brut_centimes'],
+                'ded_avs_centimes' => $calculation['ded_avs_centimes'],
+                'ded_ac_centimes' => $calculation['ded_ac_centimes'],
+                'ded_amat_centimes' => $calculation['ded_amat_centimes'],
+                'ded_laa_centimes' => $calculation['ded_laa_centimes'],
+                'ded_lpp_centimes' => $calculation['ded_lpp_centimes'],
+                'ded_impot_source_centimes' =>
+                    $calculation['ded_impot_source_centimes'],
+                'total_deductions_centimes' =>
+                    $calculation['total_deductions_centimes'],
+                'net_centimes' => $calculation['net_centimes'],
+                'emp_avs_centimes' => $calculation['emp_avs_centimes'],
+                'emp_ac_centimes' => $calculation['emp_ac_centimes'],
+                'emp_amat_centimes' => $calculation['emp_amat_centimes'],
+                'emp_af_centimes' => $calculation['emp_af_centimes'],
+                'emp_laa_centimes' => $calculation['emp_laa_centimes'],
+                'emp_frais_centimes' => $calculation['emp_frais_centimes'],
+                'emp_cpe_centimes' => $calculation['emp_cpe_centimes'],
+                'emp_lfp_centimes' => $calculation['emp_lfp_centimes'],
+                'emp_lpp_centimes' => $calculation['emp_lpp_centimes'],
+                'total_charges_employeur_centimes' =>
+                    $calculation['total_charges_employeur_centimes'],
+                'cout_total_centimes' => $calculation['cout_total_centimes'],
+            ];
+            if ($draftId === null) {
+                $this->assertPeriodAvailable(
+                    $organisationId,
+                    $dossierId,
+                    $employeeId,
+                    $year,
+                    $month
+                );
+                $columns = [
+                    'organisation_id', 'dossier_id', 'employe_id', 'annee', 'mois',
+                    ...array_keys($values),
+                    'cree_par',
+                ];
+                $marks = implode(', ', array_fill(0, count($columns), '?'));
+                $stmt = $this->pdo->prepare(
+                    'INSERT INTO fiches_salaires (' . implode(', ', $columns)
+                    . ") VALUES ({$marks})"
+                );
+                $stmt->execute([
+                    $organisationId,
+                    $dossierId,
+                    $employeeId,
+                    $year,
+                    $month,
+                    ...array_values($values),
+                    $actorId,
+                ]);
+                $id = (int) $this->pdo->lastInsertId();
+                $auditAction = 'salaires.fiche_brouillon_creee';
+            } else {
+                $current = $this->payroll(
+                    $organisationId,
+                    $dossierId,
+                    $draftId,
+                    true
+                );
+                if (
+                    $current['statut'] !== 'brouillon'
+                    || (int) $current['version'] !== $expectedVersion
+                ) {
+                    throw new PayrollException(
+                        'Brouillon déjà validé ou modifié simultanément.'
+                    );
+                }
+                if (
+                    (int) $current['employe_id'] !== $employeeId
+                    || (int) $current['annee'] !== $year
+                    || (int) $current['mois'] !== $month
+                ) {
+                    throw new PayrollException(
+                        'L’employé et la période d’un brouillon existant sont immuables.'
+                    );
+                }
+                $assignments = implode(', ', array_map(
+                    static fn (string $column): string => "{$column} = ?",
+                    array_keys($values)
+                ));
+                $stmt = $this->pdo->prepare(
+                    "UPDATE fiches_salaires SET {$assignments},
+                        modifie_le = datetime('now'), version = version + 1
+                     WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                       AND statut = 'brouillon' AND version = ?"
+                );
+                $stmt->execute([
+                    ...array_values($values),
+                    $draftId,
+                    $organisationId,
+                    $dossierId,
+                    $expectedVersion,
+                ]);
+                if ($stmt->rowCount() !== 1) {
+                    throw new PayrollException('Brouillon modifié simultanément.');
+                }
+                $id = $draftId;
+                foreach ([
+                    'lignes_prestation',
+                    'elements_periode_salaire',
+                    'composants_fiche',
+                ] as $table) {
+                    $this->pdo->prepare(
+                        "DELETE FROM {$table} WHERE fiche_salaire_id = ?"
+                    )->execute([$id]);
+                }
+                $auditAction = 'salaires.fiche_brouillon_recalculee';
+            }
             $this->insertLines($id, $normalizedLines);
             $this->insertPeriodElements($id, $context['elements'] ?? []);
             $this->insertComponents($id, $calculation, $rateSnapshot, $employeeCalculation);
             $this->audit->log(
-                'salaires.fiche_brouillon_creee',
+                $auditAction,
                 $actorId,
                 $organisationId,
                 $dossierId,
@@ -178,6 +250,8 @@ final class PayrollService
         int $month,
         array $elements,
         ?int $actorId = null,
+        ?int $draftId = null,
+        ?int $expectedVersion = null,
     ): int {
         $contract = $this->configuration->contractForPeriod(
             $organisationId,
@@ -269,8 +343,67 @@ final class PayrollService
                 'elements' => $normalized,
                 'adjustment_cents' => $adjustment,
                 'hours_milli_override' => $hoursOverride ?? null,
-            ]
+            ],
+            $draftId,
+            $expectedVersion
         );
+    }
+
+    public function deleteDraft(
+        int $organisationId,
+        int $dossierId,
+        int $payrollId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $payrollId,
+            $expectedVersion,
+            $actorId
+        ): void {
+            $payroll = $this->payroll(
+                $organisationId,
+                $dossierId,
+                $payrollId,
+                true
+            );
+            if (
+                $payroll['statut'] !== 'brouillon'
+                || (int) $payroll['version'] !== $expectedVersion
+            ) {
+                throw new PayrollException(
+                    'Seul un brouillon non modifié peut être supprimé.'
+                );
+            }
+            $stmt = $this->pdo->prepare(
+                "DELETE FROM fiches_salaires
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND statut = 'brouillon' AND version = ?"
+            );
+            $stmt->execute([
+                $payrollId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($stmt->rowCount() !== 1) {
+                throw new PayrollException('Brouillon modifié simultanément.');
+            }
+            $this->audit->log(
+                'salaires.fiche_brouillon_supprimee',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'fiche_salaire',
+                (string) $payrollId,
+                [
+                    'annee' => (int) $payroll['annee'],
+                    'mois' => (int) $payroll['mois'],
+                ]
+            );
+        }, true);
     }
 
     public function validate(
@@ -868,6 +1001,40 @@ final class PayrollService
         return strlen($digits) === 13
             ? '756.****.****.' . substr($digits, -2)
             : '***';
+    }
+
+    private function assertPeriodAvailable(
+        int $organisationId,
+        int $dossierId,
+        int $employeeId,
+        int $year,
+        int $month,
+    ): void {
+        $stmt = $this->pdo->prepare(
+            "SELECT statut FROM fiches_salaires
+             WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?
+               AND annee = ? AND mois = ? AND statut <> 'annulee'
+             LIMIT 1"
+        );
+        $stmt->execute([
+            $organisationId,
+            $dossierId,
+            $employeeId,
+            $year,
+            $month,
+        ]);
+        $status = $stmt->fetchColumn();
+        if ($status === 'brouillon') {
+            throw new PayrollException(
+                'Un brouillon existe déjà pour cet employé et cette période. '
+                . 'Utilisez « Modifier » dans la liste.'
+            );
+        }
+        if ($status !== false) {
+            throw new PayrollException(
+                'Une fiche validée existe déjà pour cet employé et cette période.'
+            );
+        }
     }
 
     private function transaction(callable $callback, bool $immediate = false): mixed

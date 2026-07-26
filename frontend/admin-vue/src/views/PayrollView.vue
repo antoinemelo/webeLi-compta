@@ -27,9 +27,20 @@ const contract = reactive({
   valid_until: '', amount: '', weekly_hours: '40', activity: '100', source: 'Contrat signé'
 });
 const draft = reactive({
-  employee_id: 0, year: currentYear, month: new Date().getMonth() + 1,
-  type: 'heures', label: 'Heures travaillées', quantity: '', amount: '', note: ''
+  id: 0, version: 0, employee_id: 0,
+  year: currentYear, month: new Date().getMonth() + 1
 });
+type DraftElementType = 'heures' | 'absence' | 'prime' | 'indemnite' | 'ajustement';
+type DraftElementForm = {
+  key: number;
+  type: DraftElementType;
+  label: string;
+  quantity: string;
+  amount: string;
+  note: string;
+};
+let draftElementKey = 0;
+const draftElements = ref<DraftElementForm[]>([]);
 const posting = reactive({ exercise_id: 0, journal_id: 0, date: today });
 const payment = reactive({
   beneficiary_type: 'employe', employee_id: 0, date: today,
@@ -53,6 +64,48 @@ const mappingFields: Array<[string, string]> = [
   ['dette_laa_id', 'Dette LAA'], ['dette_lpp_id', 'Dette LPP'],
   ['dette_impot_id', 'Dette impôt source']
 ];
+const periodPayrolls = computed(() => (
+  workspace.value?.payrolls.filter((row) => n(row, 'annee') === year.value) || []
+));
+const selectedContract = computed<Record<string, unknown> | null>(() => {
+  if (!workspace.value || draft.employee_id < 1) return null;
+  const start = `${draft.year}-${String(draft.month).padStart(2, '0')}-01`;
+  const end = new Date(Date.UTC(draft.year, draft.month, 0)).toISOString().slice(0, 10);
+  return workspace.value.catalog.contracts.find((row) => (
+    n(row, 'employe_id') === draft.employee_id
+    && n(row, 'actif') === 1
+    && s(row, 'date_debut') <= end
+    && (s(row, 'date_fin') === '' || s(row, 'date_fin') >= start)
+  )) || null;
+});
+const hourlyContract = computed(() => s(selectedContract.value || {}, 'type') === 'horaire');
+const periodLabel = computed(() => (
+  `${String(draft.month).padStart(2, '0')}/${draft.year}`
+));
+const draftReady = computed(() => {
+  if (!selectedContract.value || draft.employee_id < 1) return false;
+  if (
+    hourlyContract.value
+    && !draftElements.value.some((element) => (
+      element.type === 'heures' && element.quantity.trim() !== ''
+    ))
+  ) return false;
+  return draftElements.value.every((element) => (
+    element.label.trim() !== ''
+    && (
+      element.type === 'heures'
+        ? element.quantity.trim() !== ''
+        : element.amount.trim() !== ''
+    )
+  ));
+});
+const draftElementLabels: Record<DraftElementType, string> = {
+  heures: 'Heures travaillées',
+  absence: 'Absence non rémunérée',
+  prime: 'Prime',
+  indemnite: 'Indemnité',
+  ajustement: 'Ajustement'
+};
 
 function n(row: Record<string, unknown>, key: string): number {
   return Number(row[key] ?? 0);
@@ -88,6 +141,87 @@ function employeeName(id: number): string {
   const item = workspace.value?.employees.find((row) => n(row, 'id') === id);
   return item ? `${s(item, 'prenom')} ${s(item, 'nom')}` : `#${id}`;
 }
+function decimal(centsValue: number): string {
+  return (centsValue / 100).toFixed(2);
+}
+function defaultElement(type: DraftElementType): DraftElementForm {
+  return {
+    key: ++draftElementKey,
+    type,
+    label: draftElementLabels[type],
+    quantity: '',
+    amount: '',
+    note: ''
+  };
+}
+function resetDraftElements(): void {
+  draftElements.value = hourlyContract.value ? [defaultElement('heures')] : [];
+}
+function addDraftElement(): void {
+  const type: DraftElementType = hourlyContract.value
+    && !draftElements.value.some((row) => row.type === 'heures')
+    ? 'heures'
+    : 'prime';
+  draftElements.value.push(defaultElement(type));
+}
+function removeDraftElement(index: number): void {
+  draftElements.value.splice(index, 1);
+}
+function changeDraftElement(element: DraftElementForm): void {
+  element.label = draftElementLabels[element.type];
+  element.quantity = '';
+  element.amount = '';
+}
+function resetDraftEditor(): void {
+  draft.id = 0;
+  draft.version = 0;
+  draft.year = year.value;
+  if (!draft.employee_id) {
+    draft.employee_id = n(workspace.value?.employees[0] || {}, 'id');
+  }
+  resetDraftElements();
+}
+function parseDraftElements(row: Record<string, unknown>): DraftElementForm[] {
+  try {
+    const parsed = JSON.parse(s(row, 'variables_snapshot_json'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((element: Record<string, unknown>) => ({
+      key: ++draftElementKey,
+      type: String(element.type) as DraftElementType,
+      label: String(element.libelle || ''),
+      quantity: Number(element.quantite_milli || 0) > 0
+        ? String(Number(element.quantite_milli) / 1000)
+        : '',
+      amount: Number(element.montant_centimes || 0) !== 0
+        ? decimal(
+          String(element.type) === 'absence'
+            ? Math.abs(Number(element.montant_centimes))
+            : Number(element.montant_centimes)
+        )
+        : '',
+      note: String(element.note || '')
+    }));
+  } catch {
+    return [];
+  }
+}
+function draftVariables(row: Record<string, unknown>): string {
+  try {
+    const elements = JSON.parse(s(row, 'variables_snapshot_json'));
+    if (!Array.isArray(elements) || !elements.length) {
+      return 'Salaire contractuel, sans variable';
+    }
+    return elements.map((element: Record<string, unknown>) => {
+      if (String(element.type) === 'heures') {
+        return `${Number(element.quantite_milli || 0) / 1000} h`;
+      }
+      const amount = Math.abs(Number(element.montant_centimes || 0));
+      return `${String(element.libelle || '')} ${decimal(amount)} CHF`;
+    }).join(' · ');
+  } catch {
+    return 'Variables non lisibles';
+  }
+}
 async function reload(payrollId?: number): Promise<void> {
   await store.load(year.value, payrollId);
   if (!workspace.value) return;
@@ -108,13 +242,20 @@ async function reload(payrollId?: number): Promise<void> {
     employer.weekly_hours = String(Number(employerSource.heures_hebdo_milli || 40000) / 1000);
   }
   if (workspace.value.mapping) Object.assign(mapping, workspace.value.mapping);
+  if (!draft.id && draftElements.value.length === 0) resetDraftElements();
 }
-async function mutate(path: string, data: Record<string, unknown>, notice: string): Promise<void> {
+async function mutate(
+  path: string,
+  data: Record<string, unknown>,
+  notice: string
+): Promise<boolean> {
   try {
     await store.mutate(path, data, notice);
     await reload();
+    return true;
   } catch {
     // Le store rend l’erreur structurée.
+    return false;
   }
 }
 async function createEmployee(): Promise<void> {
@@ -136,16 +277,55 @@ async function saveContract(): Promise<void> {
   }, 'Contrat daté enregistré.');
 }
 async function createDraft(): Promise<void> {
-  const isHours = draft.type === 'heures';
-  await mutate('/salaires/fiches', {
-    employee_id: draft.employee_id, year: draft.year, month: draft.month,
-    elements: [{
-      type: draft.type, libelle: draft.label,
-      quantite_milli: isHours ? milli(draft.quantity) : 0,
+  let elements: Array<Record<string, unknown>>;
+  try {
+    elements = draftElements.value.map((element) => ({
+      type: element.type,
+      libelle: element.label.trim(),
+      quantite_milli: element.type === 'heures' ? milli(element.quantity) : 0,
       montant_unitaire_centimes: 0,
-      montant_centimes: isHours ? 0 : cents(draft.amount), note: draft.note
-    }]
-  }, 'Brouillon calculé avec snapshots.');
+      montant_centimes: element.type === 'heures' ? 0 : cents(element.amount),
+      note: element.note.trim()
+    }));
+  } catch (error) {
+    store.error = error instanceof Error
+      ? `${error.message} Corrigez les éléments de la période.`
+      : 'Les éléments de la période sont invalides.';
+    return;
+  }
+  const editing = draft.id > 0;
+  const saved = await mutate('/salaires/fiches', {
+    id: draft.id,
+    version: draft.version,
+    employee_id: draft.employee_id,
+    year: draft.year,
+    month: draft.month,
+    elements
+  }, editing ? 'Brouillon recalculé.' : 'Brouillon calculé et enregistré.');
+  if (saved) resetDraftEditor();
+}
+function editDraft(row: Record<string, unknown>): void {
+  draft.id = n(row, 'id');
+  draft.version = n(row, 'version');
+  draft.employee_id = n(row, 'employe_id');
+  draft.year = n(row, 'annee');
+  draft.month = n(row, 'mois');
+  draftElements.value = parseDraftElements(row);
+  document.getElementById('payroll-draft-editor')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start'
+  });
+}
+async function deleteDraft(row: Record<string, unknown>): Promise<void> {
+  if (!window.confirm(
+    `Supprimer le brouillon de ${employeeName(n(row, 'employe_id'))} `
+    + `pour ${String(n(row, 'mois')).padStart(2, '0')}/${n(row, 'annee')} ?`
+  )) return;
+  const deleted = await mutate('/salaires/fiches/brouillon/supprimer', {
+    id: n(row, 'id'),
+    version: n(row, 'version')
+  }, 'Brouillon supprimé.');
+  if (deleted && draft.id === n(row, 'id')) resetDraftEditor();
 }
 async function validatePayroll(row: Record<string, unknown>): Promise<void> {
   await mutate('/salaires/fiches/valider', { id: n(row, 'id'), version: n(row, 'version') }, 'Fiche validée et figée.');
@@ -203,7 +383,16 @@ function certificateUrl(employeeId: number): string {
 }
 
 watch(() => context.selection?.dossier.id, () => reload());
-watch(year, () => reload());
+watch(year, (value) => {
+  if (!draft.id) draft.year = value;
+  reload();
+});
+watch(
+  () => [draft.employee_id, draft.year, draft.month],
+  () => {
+    if (!draft.id) resetDraftElements();
+  }
+);
 onMounted(() => reload());
 </script>
 
@@ -307,26 +496,204 @@ onMounted(() => reload());
     </template>
 
     <template v-else-if="tab === 'calculs'">
-      <section class="panel">
-        <h2>Traitement d’une période</h2>
-        <form class="form-grid three" @submit.prevent="createDraft">
-          <label>Employé<select v-model.number="draft.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label>
-          <label>Année<input v-model.number="draft.year" type="number"></label>
-          <label>Mois<input v-model.number="draft.month" type="number" min="1" max="12"></label>
-          <label>Élément<select v-model="draft.type"><option value="heures">Heures</option><option value="absence">Absence</option><option value="prime">Prime</option><option value="indemnite">Indemnité</option><option value="ajustement">Ajustement</option></select></label>
-          <label>Libellé<input v-model="draft.label" required></label>
-          <label v-if="draft.type === 'heures'">Nombre d’heures<input v-model="draft.quantity" required></label>
-          <label v-else>Montant<input v-model="draft.amount" required></label>
-          <label>Justification<input v-model="draft.note"></label>
-          <button
-            class="button primary"
-            :disabled="!workspace.capabilities.manage || !workspace.configuration.calculation_ready || store.saving"
-          >
-            Calculer le brouillon
-          </button>
+      <section id="payroll-draft-editor" class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">{{ draft.id ? 'Modification contrôlée' : 'Nouveau calcul' }}</p>
+            <h2>{{ draft.id ? 'Reprendre le brouillon' : 'Préparer une fiche de salaire' }}</h2>
+          </div>
+          <span v-if="draft.id" class="status-chip">Brouillon #{{ draft.id }}</span>
+        </div>
+        <p>
+          Sélectionnez d’abord l’employé et le mois. Le contrat actif fournit automatiquement
+          le taux horaire ou le salaire mensuel ; ajoutez uniquement les éléments propres à
+          cette période.
+        </p>
+
+        <form class="payroll-draft-form" @submit.prevent="createDraft">
+          <fieldset class="payroll-step">
+            <legend><span>1</span> Employé et période</legend>
+            <div class="form-grid three">
+              <label>Employé
+                <select v-model.number="draft.employee_id" :disabled="draft.id > 0" required>
+                  <option :value="0" disabled>Choisir un employé…</option>
+                  <option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">
+                    {{ employeeName(n(row,'id')) }}
+                  </option>
+                </select>
+              </label>
+              <label>Année
+                <input v-model.number="draft.year" type="number" min="2000" max="9999" :disabled="draft.id > 0" required>
+              </label>
+              <label>Mois
+                <select v-model.number="draft.month" :disabled="draft.id > 0" required>
+                  <option v-for="month in 12" :key="month" :value="month">
+                    {{ String(month).padStart(2, '0') }}
+                  </option>
+                </select>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="payroll-step">
+            <legend><span>2</span> Contrat appliqué automatiquement</legend>
+            <div v-if="selectedContract" class="payroll-contract-summary">
+              <div>
+                <small>Type</small>
+                <strong>{{ hourlyContract ? 'Salaire horaire' : 'Salaire mensuel' }}</strong>
+              </div>
+              <div>
+                <small>{{ hourlyContract ? 'Taux contractuel' : 'Base contractuelle' }}</small>
+                <strong>{{ money(n(selectedContract, hourlyContract ? 'taux_horaire_centimes' : 'salaire_mensuel_centimes')) }}</strong>
+              </div>
+              <div>
+                <small>Taux d’activité</small>
+                <strong>{{ (n(selectedContract,'taux_activite_ppm') / 10000).toFixed(2) }} %</strong>
+              </div>
+              <div>
+                <small>Validité</small>
+                <strong>{{ s(selectedContract,'date_debut') }} – {{ s(selectedContract,'date_fin') || 'sans fin' }}</strong>
+              </div>
+            </div>
+            <p v-else class="notice warning" role="alert">
+              Aucun contrat actif pour {{ employeeName(draft.employee_id) }} en
+              {{ periodLabel }}. Créez ou corrigez d’abord le contrat dans l’onglet Employés.
+            </p>
+            <p v-if="selectedContract && !hourlyContract" class="field-hint">
+              Le salaire mensuel est ajouté automatiquement. Ne saisissez ci-dessous que les
+              absences, primes, indemnités ou ajustements du mois.
+            </p>
+            <p v-else-if="selectedContract" class="field-hint">
+              Le taux horaire vient du contrat. Saisissez le nombre total d’heures du mois.
+            </p>
+          </fieldset>
+
+          <fieldset class="payroll-step">
+            <legend><span>3</span> Éléments variables de {{ periodLabel }}</legend>
+            <div
+              v-for="(element,index) in draftElements"
+              :key="element.key"
+              class="payroll-variable-row"
+            >
+              <label>Nature
+                <select v-model="element.type" @change="changeDraftElement(element)">
+                  <option v-if="hourlyContract" value="heures">Heures travaillées</option>
+                  <option value="absence">Absence non rémunérée</option>
+                  <option value="prime">Prime</option>
+                  <option value="indemnite">Indemnité</option>
+                  <option value="ajustement">Ajustement ±</option>
+                </select>
+              </label>
+              <label>Libellé
+                <input v-model="element.label" required>
+              </label>
+              <label v-if="element.type === 'heures'">Nombre d’heures
+                <input v-model="element.quantity" inputmode="decimal" placeholder="ex. 42,5" required>
+              </label>
+              <label v-else>
+                {{ element.type === 'absence' ? 'Montant à déduire' : 'Montant CHF' }}
+                <input v-model="element.amount" inputmode="decimal" placeholder="ex. 250.00" required>
+              </label>
+              <label>Note / justification
+                <input v-model="element.note" placeholder="Facultatif">
+              </label>
+              <button
+                type="button"
+                class="button danger small"
+                :disabled="hourlyContract && element.type === 'heures' && draftElements.filter(item => item.type === 'heures').length === 1"
+                @click="removeDraftElement(index)"
+              >
+                Retirer
+              </button>
+            </div>
+            <p v-if="!draftElements.length" class="notice">
+              Aucun élément variable : le brouillon reprendra uniquement le salaire mensuel contractuel.
+            </p>
+            <button type="button" class="button" :disabled="!selectedContract" @click="addDraftElement">
+              Ajouter un élément variable
+            </button>
+          </fieldset>
+
+          <div class="payroll-draft-summary">
+            <div>
+              <small>Fiche préparée</small>
+              <strong>{{ employeeName(draft.employee_id) }} · {{ periodLabel }}</strong>
+              <span>
+                {{ selectedContract
+                  ? (hourlyContract
+                    ? 'Heures × taux contractuel, puis charges et retenues'
+                    : 'Salaire mensuel + variables, puis charges et retenues')
+                  : 'Contrat requis avant calcul' }}
+              </span>
+            </div>
+            <div class="button-row">
+              <button
+                v-if="draft.id"
+                type="button"
+                class="button"
+                :disabled="store.saving"
+                @click="resetDraftEditor"
+              >
+                Annuler la modification
+              </button>
+              <button
+                class="button primary"
+                :disabled="!workspace.capabilities.manage || !workspace.configuration.calculation_ready || !draftReady || store.saving"
+              >
+                {{ draft.id ? 'Recalculer et enregistrer' : 'Calculer et créer le brouillon' }}
+              </button>
+            </div>
+          </div>
         </form>
       </section>
-      <section class="panel"><h2>Résultats calculés</h2><div class="table-scroll"><table><thead><tr><th>Période</th><th>Employé</th><th>Brut</th><th>Retenues</th><th>Net</th><th>Coût</th><th>Statut</th></tr></thead><tbody><tr v-for="row in workspace.payrolls" :key="n(row,'id')"><td>{{ String(n(row,'mois')).padStart(2,'0') }}/{{ n(row,'annee') }}</td><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'total_deductions_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td>{{ money(n(row,'cout_total_centimes')) }}</td><td>{{ s(row,'statut') }}</td></tr></tbody></table></div></section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Fiches de travail</p>
+            <h2>Brouillons et calculs {{ year }}</h2>
+          </div>
+          <span class="status-chip">{{ periodPayrolls.length }} fiche(s)</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Période</th><th>Employé</th><th>Base et variables</th><th>Brut</th><th>Retenues</th><th>Net</th><th>Statut</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr v-for="row in periodPayrolls" :key="n(row,'id')">
+                <td>{{ String(n(row,'mois')).padStart(2,'0') }}/{{ n(row,'annee') }}</td>
+                <td>{{ employeeName(n(row,'employe_id')) }}</td>
+                <td>{{ draftVariables(row) }}</td>
+                <td>{{ money(n(row,'brut_centimes')) }}</td>
+                <td>{{ money(n(row,'total_deductions_centimes')) }}</td>
+                <td><strong>{{ money(n(row,'net_centimes')) }}</strong></td>
+                <td><span class="status-chip">{{ s(row,'statut') }}</span></td>
+                <td class="button-row">
+                  <button
+                    v-if="s(row,'statut') === 'brouillon'"
+                    class="button small"
+                    :disabled="store.saving"
+                    @click="editDraft(row)"
+                  >
+                    Modifier
+                  </button>
+                  <button
+                    v-if="s(row,'statut') === 'brouillon'"
+                    class="button danger small"
+                    :disabled="store.saving"
+                    @click="deleteDraft(row)"
+                  >
+                    Supprimer
+                  </button>
+                  <span v-else>Fiche figée</span>
+                </td>
+              </tr>
+              <tr v-if="!periodPayrolls.length">
+                <td colspan="8">Aucune fiche calculée pour {{ year }}.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </template>
 
     <template v-else-if="tab === 'fiches'">

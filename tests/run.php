@@ -5378,6 +5378,83 @@ final class Tests
             )['salaire_travail_centimes'],
             'contrat horaire appliqué au millième sans flottant'
         );
+        $hourlyDraft = $payrolls->payroll(
+            $organisationId,
+            $dossierId,
+            $hourlyDraftId,
+            true
+        );
+        $updatedHourlyDraftId = $payrolls->createPeriodDraft(
+            $organisationId,
+            $dossierId,
+            $employee,
+            2026,
+            3,
+            [[
+                'type' => 'heures',
+                'libelle' => 'Heures mars corrigées',
+                'quantite_milli' => 20000,
+            ]],
+            null,
+            $hourlyDraftId,
+            (int) $hourlyDraft['version']
+        );
+        $updatedHourlyDraft = $payrolls->payroll(
+            $organisationId,
+            $dossierId,
+            $updatedHourlyDraftId,
+            true
+        );
+        $this->same(
+            $hourlyDraftId,
+            $updatedHourlyDraftId,
+            'recalcul d’un brouillon sans créer de doublon'
+        );
+        $this->same(
+            60000,
+            (int) $updatedHourlyDraft['salaire_travail_centimes'],
+            'heures corrigées intégralement recalculées'
+        );
+        $this->same(
+            (int) $hourlyDraft['version'] + 1,
+            (int) $updatedHourlyDraft['version'],
+            'version du brouillon incrémentée après recalcul'
+        );
+        $this->same(
+            1,
+            count($payrolls->periodElements($updatedHourlyDraftId)),
+            'variables précédentes remplacées lors du recalcul'
+        );
+        $this->throws(
+            fn () => $payrolls->createPeriodDraft(
+                $organisationId,
+                $dossierId,
+                $employee,
+                2026,
+                3,
+                [[
+                    'type' => 'heures',
+                    'libelle' => 'Doublon mars',
+                    'quantite_milli' => 10000,
+                ]]
+            ),
+            'doublon de période renvoyé vers la modification du brouillon'
+        );
+        $payrolls->deleteDraft(
+            $organisationId,
+            $dossierId,
+            $updatedHourlyDraftId,
+            (int) $updatedHourlyDraft['version']
+        );
+        $this->throws(
+            fn () => $payrolls->payroll(
+                $organisationId,
+                $dossierId,
+                $updatedHourlyDraftId,
+                true
+            ),
+            'suppression définitive du brouillon et de ses données de travail'
+        );
         $monthlyDraftId = $payrolls->createPeriodDraft(
             $organisationId,
             $dossierId,

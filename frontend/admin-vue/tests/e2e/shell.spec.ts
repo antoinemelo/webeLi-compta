@@ -440,8 +440,15 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await expect(page.getByLabel('Employeur', { exact: true })).toHaveValue('Entreprise Alpha SA');
 
   await page.getByRole('link', { name: 'Calculs', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Traitement d’une période' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Calculer le brouillon' })).toBeDisabled();
+  await expect(page.getByRole('heading', { name: 'Préparer une fiche de salaire' })).toBeVisible();
+  await expect(page.getByRole('group', { name: /Employé et période/ })).toBeVisible();
+  await expect(page.getByRole('group', {
+    name: /Contrat appliqué automatiquement/
+  })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Brouillons et calculs 2026' })).toBeVisible();
+  await expect(page.getByRole('button', {
+    name: 'Calculer et créer le brouillon'
+  })).toBeDisabled();
   await page.getByRole('link', { name: 'Fiches', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fiches de salaire' })).toBeVisible();
   await page.getByRole('link', { name: 'Annuels', exact: true }).click();

@@ -68,7 +68,8 @@ Les exemples versionnés sont :
 | GET | `/api/v1/salaires` | employés, contrats, fiches, dettes, paiements et récapitulatifs annuels |
 | POST | `/api/v1/salaires/employes` | création d’un employé genevois |
 | POST | `/api/v1/salaires/contrats` | contrat horaire ou mensuel daté |
-| POST | `/api/v1/salaires/fiches` | calcul d’une période avec variables explicites |
+| POST | `/api/v1/salaires/fiches` | création ou recalcul optimiste d’un brouillon |
+| POST | `/api/v1/salaires/fiches/brouillon/supprimer` | suppression d’un brouillon non validé |
 | POST | `/api/v1/salaires/fiches/valider` | validation et gel des snapshots |
 | POST | `/api/v1/salaires/fiches/comptabiliser` | écriture salariale dans le grand livre |
 | POST | `/api/v1/salaires/fiches/annuler` | correction par contre-passation |

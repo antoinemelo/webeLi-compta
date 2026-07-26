@@ -115,9 +115,32 @@ final class PayrollApiController
                 $data['year'],
                 $data['month'],
                 $data['elements'],
-                $userId
+                $userId,
+                $data['id'] > 0 ? $data['id'] : null,
+                $data['id'] > 0 ? $data['version'] : null
             ),
         ]);
+    }
+
+    public function deleteDraft(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('salaires.manage');
+        $data = $this->validator->identity($request);
+        return $this->execute($request, function () use (
+            $organisationId,
+            $dossierId,
+            $data,
+            $userId
+        ): array {
+            $this->payrolls->deleteDraft(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $userId
+            );
+            return ['deleted' => true, 'id' => $data['id']];
+        });
     }
 
     public function validate(Request $request): Response

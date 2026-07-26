@@ -124,6 +124,13 @@ final class PayrollInputValidator
             throw ApiException::validation(['elements' => ['Liste requise.']]);
         }
         return [
+            'id' => $this->int($d['id'] ?? 0, 'id', 0, PHP_INT_MAX),
+            'version' => $this->int(
+                $d['version'] ?? 0,
+                'version',
+                0,
+                PHP_INT_MAX
+            ),
             'employee_id' => $this->int($d['employee_id'] ?? null, 'employee_id'),
             'year' => $this->int($d['year'] ?? null, 'year', 2000, 9999),
             'month' => $this->int($d['month'] ?? null, 'month', 1, 12),

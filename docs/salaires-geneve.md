@@ -37,6 +37,11 @@ snapshot de l’employé, de l’employeur, des taux et de chaque composant. La
 validation fige ces données et crée les dettes séparées : salaire net, OCAS,
 LAA, LPP et impôt à la source.
 
+Avant validation, un brouillon peut être repris dans le formulaire, recalculé
+avec contrôle de version ou supprimé. Son employé et sa période restent fixes ;
+un changement de périmètre exige de supprimer le brouillon puis d’en créer un
+nouveau. Après validation, aucune édition ni suppression directe n’est permise.
+
 La comptabilisation produit une écriture détaillée et équilibrée. Elle est
 idempotente : rejouer la même action ne crée pas une seconde écriture. Une
 fiche validée ne se modifie pas ; une correction passe par l’annulation et une
