@@ -1,0 +1,74 @@
+{
+  "data": {
+    "kind": "exchange",
+    "exercise": {
+      "id": 8,
+      "label": "Exercice 2026",
+      "start_date": "2026-01-01",
+      "end_date": "2026-12-31",
+      "status": "ouvert"
+    },
+    "window": {
+      "start": "2025-01",
+      "end": "2026-12"
+    },
+    "periods": ["2025-01", "2026-06", "2026-12"],
+    "currencies": ["CHF", "EUR"],
+    "quote_currency": "CHF",
+    "series": [
+      {
+        "id": 1,
+        "code": "EPB@SNB.devkum{M0,EUR1}",
+        "label": "Europe - EUR 1.-",
+        "currency": "EUR",
+        "mode": "moyenne",
+        "base_unit": 1,
+        "unit": "Cours à 11h en CHF",
+        "source_url": "https://data.snb.ch/api/cube/devkum/data/json/fr",
+        "updated_at": "2026-07-26 12:00:00",
+        "values": [
+          {"period": "2026-06", "value": "0.92045", "per_unit": "0.92045"}
+        ]
+      }
+    ],
+    "daily": [
+      {
+        "requested_date": "2026-07-26",
+        "publication_date": "2026-07-24",
+        "validity": ["2026-07-25", "2026-07-26", "2026-07-27"],
+        "currency": "EUR",
+        "base_unit": 1,
+        "value": "0.93883",
+        "per_unit": "0.93883",
+        "source_url": "https://www.backend-rates.bazg.admin.ch/api/xmldaily?d=20260726&locale=fr",
+        "updated_at": "2026-07-26 12:00:00"
+      }
+    ],
+    "refresh": {
+      "monthly": {
+        "status": "succes",
+        "attempted_at": "2026-07-26 12:00:00",
+        "succeeded_at": "2026-07-26 12:00:00",
+        "source_url": "https://data.snb.ch/api/cube/devkum/data/json/fr",
+        "warning": ""
+      },
+      "daily": {
+        "status": "succes",
+        "attempted_at": "2026-07-26 12:00:00",
+        "succeeded_at": "2026-07-26 12:00:00",
+        "source_url": "https://www.backend-rates.bazg.admin.ch/api/xmldaily?d=20260726&locale=fr",
+        "warning": ""
+      }
+    },
+    "definitions": {
+      "monthly": "Cours BNS à 11 h en CHF.",
+      "daily": "Taux de vente OFDF.",
+      "accounting": "Référentiel analytique distinct des snapshots comptables."
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-market-data-0001"
+  },
+  "errors": []
+}

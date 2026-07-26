@@ -69,6 +69,8 @@ use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\OutgoingPaymentService;
 use Compta\Modules\Tresorerie\Pain001Generator;
+use Compta\Modules\Tresorerie\PublicMarketDataService;
+use Compta\Modules\Tresorerie\PublicMarketHttpClient;
 use Compta\Modules\Tresorerie\ReconciliationService;
 use Compta\Modules\Tresorerie\SuggestionService;
 use Compta\Modules\Tresorerie\TreasuryWorkspaceService;
@@ -212,6 +214,7 @@ $apiRoutes = new ApiRouteRegistry(
             $reconciliations,
             new Pain001Generator()
         ),
+        new PublicMarketDataService($pdo, new PublicMarketHttpClient()),
         new TreasuryInputValidator()
     ),
     new BillingApiController(

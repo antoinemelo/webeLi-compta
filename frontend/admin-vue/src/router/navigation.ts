@@ -14,7 +14,9 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
     { key: 'use', label: 'Utilisation', path: '/liquidites' },
     { key: 'bank', label: 'Rapprochement', path: '/liquidites/rapprochement' },
     { key: 'matching', label: 'Lettrage', path: '/liquidites/lettrage' },
-    { key: 'payments', label: 'Paiements', path: '/liquidites/paiements' }
+    { key: 'payments', label: 'Paiements', path: '/liquidites/paiements' },
+    { key: 'exchange-rates', label: 'Taux de change', path: '/liquidites/taux-change' },
+    { key: 'interest-rates', label: 'Taux d’intérêt', path: '/liquidites/taux-interet' }
   ],
   billing: [
     { key: 'sales', label: 'Ventes', path: '/facturation' },

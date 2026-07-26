@@ -6,13 +6,14 @@ import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
+import MarketLineChart from '@/components/ui/MarketLineChart.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { subNavigation } from '@/router/navigation';
 import { useContextStore } from '@/stores/context';
 import { useExpensesStore } from '@/stores/expenses';
 import { useTreasuryStore } from '@/stores/treasury';
 import { useNotificationStore } from '@/stores/notifications';
-import type { ExpenseItem } from '@/api/contracts';
+import type { ExpenseItem, PublicMarketSeries } from '@/api/contracts';
 
 const route = useRoute();
 const context = useContextStore();
@@ -21,6 +22,8 @@ const treasury = useTreasuryStore();
 const notifications = useNotificationStore();
 const activeTab = computed(() => String(route.params.tab || 'use'));
 const workspace = computed(() => store.workspace);
+const exchangeMode = ref<'moyenne' | 'fin_mois'>('moyenne');
+const selectedInterestCode = ref('');
 const today = new Date().toISOString().slice(0, 10);
 const selectedId = ref(0);
 const showExpenseForm = ref(false);
@@ -119,6 +122,39 @@ const recurrenceRows = computed(() => (workspace.value?.recurrences ?? []).map((
   status_label: statusLabel(item.status)
 })));
 
+const exerciseId = computed(() => (
+  context.context?.selection?.exercise?.id
+  ?? treasury.workspace?.catalog.exercises.find((item) => item.statut === 'ouvert')?.id
+  ?? 0
+));
+
+const exchangeSeries = computed(() => (
+  treasury.exchangeHistory?.series.filter((item) => item.mode === exchangeMode.value) ?? []
+));
+
+const exchangeChartSeries = computed(() => marketChartSeries(
+  treasury.exchangeHistory?.periods ?? [],
+  exchangeSeries.value,
+  (series) => `${series.currency} · ${series.base_unit === 1 ? '1 unité' : `${series.base_unit} unités`}`
+));
+
+const selectedInterestSeries = computed(() => (
+  treasury.interestHistory?.series.find((item) => item.code === selectedInterestCode.value)
+  ?? treasury.interestHistory?.series[0]
+  ?? null
+));
+
+const interestChartSeries = computed(() => {
+  const selected = selectedInterestSeries.value;
+  return selected
+    ? marketChartSeries(
+        treasury.interestHistory?.periods ?? [],
+        [selected],
+        (series) => series.label
+      )
+    : [];
+});
+
 onMounted(load);
 watch(
   () => context.context?.selection?.dossier.id,
@@ -131,7 +167,68 @@ watch(
 );
 
 async function load(): Promise<void> {
-  if (context.context?.selection) await Promise.all([store.load(), treasury.load()]);
+  if (!context.context?.selection) return;
+  await Promise.all([store.load(), treasury.load()]);
+  await loadMarketTab();
+}
+
+watch(activeTab, () => { void loadMarketTab(); });
+watch(
+  () => context.context?.selection?.exercise?.id,
+  () => { void loadMarketTab(); }
+);
+
+async function loadMarketTab(): Promise<void> {
+  if (exerciseId.value < 1) return;
+  if (activeTab.value === 'taux-change') {
+    await treasury.loadExchangeHistory(exerciseId.value);
+  }
+  if (activeTab.value === 'taux-interet') {
+    await treasury.loadInterestHistory(exerciseId.value);
+    if (
+      !treasury.interestHistory?.series.some(
+        (item) => item.code === selectedInterestCode.value
+      )
+    ) {
+      selectedInterestCode.value = treasury.interestHistory?.series[0]?.code ?? '';
+    }
+  }
+}
+
+function marketChartSeries(
+  periods: string[],
+  series: PublicMarketSeries[],
+  label: (series: PublicMarketSeries) => string
+): Array<{ key: string; label: string; values: Array<string | null> }> {
+  return series.map((item) => {
+    const values = new Map(item.values.map((value) => [value.period, value.per_unit]));
+    return {
+      key: item.code,
+      label: label(item),
+      values: periods.map((period) => values.get(period) ?? null)
+    };
+  });
+}
+
+function marketValue(series: PublicMarketSeries, period: string): string {
+  return series.values.find((value) => value.period === period)?.per_unit ?? '';
+}
+
+function periodLabel(period: string): string {
+  const [year, month] = period.split('-').map(Number);
+  return new Intl.DateTimeFormat('fr-CH', {
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC'
+  }).format(new Date(Date.UTC(year, month - 1, 1)));
+}
+
+function rate(value: string, suffix = ''): string {
+  if (value === '') return '—';
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? `${new Intl.NumberFormat('fr-CH', { maximumFractionDigits: 6 }).format(number)}${suffix}`
+    : '—';
 }
 
 function newLine(): DraftLine {
@@ -558,6 +655,7 @@ async function toggleRecurrence(item: {
     <CompactTabs :items="subNavigation.liquidity" label="Navigation des liquidités" />
     <ErrorSummary v-if="store.error" title="Impossible de charger les dépenses" :message="store.error" />
     <ErrorSummary v-if="treasury.error" title="Impossible de charger les opérations de trésorerie" :message="treasury.error" />
+    <ErrorSummary v-if="treasury.marketError" title="Impossible de charger les données de marché" :message="treasury.marketError" />
     <SkeletonBlock v-if="store.loading && !workspace" :lines="7" />
 
     <template v-else-if="workspace && activeTab === 'use'">
@@ -1023,6 +1121,227 @@ async function toggleRecurrence(item: {
       </section>
       <EmptyState v-else title="Aucun lot de paiements" description="Sélectionnez une ou plusieurs dettes comptabilisées." />
     </template>
+
+    <template v-else-if="workspace && treasury.workspace && activeTab === 'taux-change'">
+      <div class="toolbar">
+        <div>
+          <p class="eyebrow">Référentiel public partagé</p>
+          <h2>Taux de change</h2>
+          <p v-if="treasury.exchangeHistory">
+            {{ treasury.exchangeHistory.exercise.label }} ·
+            {{ periodLabel(treasury.exchangeHistory.window.start) }} à
+            {{ periodLabel(treasury.exchangeHistory.window.end) }}
+          </p>
+        </div>
+        <label class="compact-control">
+          Valeur mensuelle
+          <select v-model="exchangeMode">
+            <option value="moyenne">Moyenne mensuelle</option>
+            <option value="fin_mois">Fin de mois</option>
+          </select>
+        </label>
+      </div>
+
+      <SkeletonBlock
+        v-if="treasury.marketLoading && !treasury.exchangeHistory"
+        :lines="8"
+      />
+      <template v-else-if="treasury.exchangeHistory">
+        <p
+          v-if="treasury.exchangeHistory.refresh.monthly.warning || treasury.exchangeHistory.refresh.daily.warning"
+          class="market-warning"
+        >
+          {{ treasury.exchangeHistory.refresh.monthly.warning
+            || treasury.exchangeHistory.refresh.daily.warning }}
+        </p>
+        <section class="market-summary">
+          <div>
+            <span>Monnaies suivies</span>
+            <strong>{{ treasury.exchangeHistory.currencies.join(', ') }}</strong>
+          </div>
+          <div>
+            <span>Dernière synchronisation BNS</span>
+            <strong>{{ treasury.exchangeHistory.refresh.monthly.succeeded_at || 'Pas encore disponible' }}</strong>
+          </div>
+          <div>
+            <span>Convention</span>
+            <strong>CHF pour 1 unité</strong>
+          </div>
+        </section>
+
+        <MarketLineChart
+          v-if="exchangeChartSeries.length"
+          :labels="treasury.exchangeHistory.periods.map(periodLabel)"
+          :series="exchangeChartSeries"
+          value-suffix="CHF par unité de monnaie"
+          description="Évolution mensuelle des taux de change contre le franc suisse"
+        />
+        <EmptyState
+          v-else
+          title="Aucune série BNS pour les monnaies actives"
+          description="Activez au moins une devise étrangère prise en charge sous Configuration > Référentiels."
+        />
+
+        <section class="market-panel">
+          <div class="toolbar">
+            <div>
+              <h3>Taux quotidien OFDF</h3>
+              <p>{{ treasury.exchangeHistory.definitions.daily }}</p>
+            </div>
+          </div>
+          <div v-if="treasury.exchangeHistory.daily.length" class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Monnaie</th>
+                  <th>Taux CHF par unité</th>
+                  <th>Publication</th>
+                  <th>Validité</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in treasury.exchangeHistory.daily" :key="item.currency">
+                  <th scope="row">{{ item.currency }}</th>
+                  <td>{{ rate(item.per_unit) }}</td>
+                  <td>{{ item.publication_date }}</td>
+                  <td>{{ item.validity.join(', ') }}</td>
+                  <td><a :href="item.source_url" target="_blank" rel="noreferrer">OFDF</a></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <EmptyState
+            v-else
+            title="Aucun taux quotidien conservé"
+            description="Le cache sera complété automatiquement dès que la source OFDF répondra."
+          />
+        </section>
+
+        <section class="market-panel">
+          <div class="toolbar">
+            <div>
+              <h3>Historique mensuel</h3>
+              <p>{{ treasury.exchangeHistory.definitions.monthly }}</p>
+            </div>
+            <a
+              href="https://data.snb.ch/fr/topics/ziredev/cube/devkum"
+              target="_blank"
+              rel="noreferrer"
+            >Consulter la source BNS</a>
+          </div>
+          <div v-if="exchangeSeries.length" class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mois</th>
+                  <th v-for="item in exchangeSeries" :key="item.code">
+                    {{ item.currency }} / CHF
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="period in treasury.exchangeHistory.periods" :key="period">
+                  <th scope="row">{{ periodLabel(period) }}</th>
+                  <td v-for="item in exchangeSeries" :key="item.code">
+                    {{ rate(marketValue(item, period)) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <p class="market-note">{{ treasury.exchangeHistory.definitions.accounting }}</p>
+      </template>
+    </template>
+
+    <template v-else-if="workspace && treasury.workspace && activeTab === 'taux-interet'">
+      <div class="toolbar">
+        <div>
+          <p class="eyebrow">Référentiel public partagé</p>
+          <h2>Taux d’intérêt</h2>
+          <p v-if="treasury.interestHistory">
+            {{ treasury.interestHistory.exercise.label }} ·
+            {{ periodLabel(treasury.interestHistory.window.start) }} à
+            {{ periodLabel(treasury.interestHistory.window.end) }}
+          </p>
+        </div>
+        <label v-if="treasury.interestHistory?.series.length" class="compact-control">
+          Série
+          <select v-model="selectedInterestCode">
+            <option
+              v-for="item in treasury.interestHistory.series"
+              :key="item.code"
+              :value="item.code"
+            >{{ item.label }}</option>
+          </select>
+        </label>
+      </div>
+
+      <SkeletonBlock
+        v-if="treasury.marketLoading && !treasury.interestHistory"
+        :lines="8"
+      />
+      <template v-else-if="treasury.interestHistory">
+        <p
+          v-if="treasury.interestHistory.refresh.monthly.warning"
+          class="market-warning"
+        >{{ treasury.interestHistory.refresh.monthly.warning }}</p>
+        <section class="market-summary">
+          <div>
+            <span>Monnaies suivies</span>
+            <strong>{{ treasury.interestHistory.currencies.join(', ') }}</strong>
+          </div>
+          <div>
+            <span>Séries disponibles</span>
+            <strong>{{ treasury.interestHistory.series.length }}</strong>
+          </div>
+          <div>
+            <span>Dernière synchronisation BNS</span>
+            <strong>{{ treasury.interestHistory.refresh.monthly.succeeded_at || 'Pas encore disponible' }}</strong>
+          </div>
+        </section>
+
+        <MarketLineChart
+          v-if="selectedInterestSeries && interestChartSeries.length"
+          :labels="treasury.interestHistory.periods.map(periodLabel)"
+          :series="interestChartSeries"
+          value-suffix="En pour-cent"
+          description="Évolution mensuelle du taux d’intérêt sélectionné"
+        />
+        <EmptyState
+          v-else
+          title="Aucune série de taux pour les monnaies actives"
+          description="Les données apparaîtront après synchronisation de la source BNS."
+        />
+
+        <section v-if="selectedInterestSeries" class="market-panel">
+          <div class="toolbar">
+            <div>
+              <h3>{{ selectedInterestSeries.label }}</h3>
+              <p>{{ treasury.interestHistory.definitions.monthly }}</p>
+            </div>
+            <a
+              href="https://data.snb.ch/fr/topics/ziredev/cube/zimoma"
+              target="_blank"
+              rel="noreferrer"
+            >Consulter la source BNS</a>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Mois</th><th>Taux</th><th>Monnaie</th></tr></thead>
+              <tbody>
+                <tr v-for="period in treasury.interestHistory.periods" :key="period">
+                  <th scope="row">{{ periodLabel(period) }}</th>
+                  <td>{{ rate(marketValue(selectedInterestSeries, period), ' %') }}</td>
+                  <td>{{ selectedInterestSeries.currency }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </template>
+    </template>
   </section>
 </template>
 
@@ -1053,8 +1372,19 @@ async function toggleRecurrence(item: {
 .batch-list { display: grid; gap: 1rem; }
 .confirmation-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: .6rem; align-items: center; }
 .confirmation-row select { min-height: 2.7rem; }
+.compact-control { display: grid; gap: .25rem; min-width: min(100%, 22rem); color: var(--muted); font-size: .85rem; }
+.compact-control select { min-height: 2.7rem; }
+.market-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
+.market-summary div { display: grid; gap: .25rem; padding: .9rem; background: var(--surface); border: 1px solid var(--border); border-radius: .65rem; }
+.market-summary span { color: var(--muted); font-size: .8rem; }
+.market-panel { display: grid; gap: 1rem; padding: 1rem; border: 1px solid var(--border); border-radius: .75rem; background: var(--surface); }
+.market-panel h3 { margin: 0; }
+.market-panel table { width: 100%; border-collapse: collapse; }
+.market-panel th, .market-panel td { padding: .65rem; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.market-warning { margin: 0; padding: .75rem 1rem; border-left: 4px solid var(--warning, #a87500); background: var(--surface); }
+.market-note { margin: 0; color: var(--muted); font-size: .9rem; }
 @media (max-width: 850px) {
-  .form-grid, .detail-grid, .reconciliation-grid, .reconciliation-totals, .confirmation-row { grid-template-columns: 1fr; }
+  .form-grid, .detail-grid, .reconciliation-grid, .reconciliation-totals, .confirmation-row, .market-summary { grid-template-columns: 1fr; }
   .line-editor { grid-template-columns: 1fr; }
 }
 </style>

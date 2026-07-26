@@ -61,6 +61,12 @@ Elle couvre également une facture EUR réglée en deux fois à des taux distinc
 les gains et pertes de change réalisés, la réévaluation latente contre-passable,
 la traçabilité des taux et l’absence de régression du parcours mono-CHF.
 
+Les données publiques BNS/OFDF sont testées avec des réponses locales
+déterministes : aucune qualification ne dépend du réseau. Le test vérifie le
+cache global entre deux organisations, les deux conventions mensuelles, le
+taux quotidien, les taux d’intérêt négatifs et le stockage entier à échelle
+fixe.
+
 ## Construire l'archive
 
 Construire depuis un commit qualifié et un arbre Git propre. Installer les

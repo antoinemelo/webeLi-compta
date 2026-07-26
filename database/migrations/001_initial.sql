@@ -625,6 +625,63 @@ CREATE TABLE lignes_reevaluation_change (
     UNIQUE (reevaluation_id, document_id)
 );
 
+-- Référentiel public partagé entre toutes les organisations et tous les
+-- dossiers. Ces valeurs analytiques ne remplacent jamais les snapshots de
+-- change portés par les documents, paiements et écritures.
+CREATE TABLE series_marche_publiques (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    jeu_donnees TEXT NOT NULL CHECK (jeu_donnees IN ('devkum', 'zimoma')),
+    code_serie TEXT NOT NULL,
+    categorie TEXT NOT NULL CHECK (categorie IN ('change', 'interet')),
+    libelle TEXT NOT NULL,
+    devise TEXT NOT NULL CHECK (length(devise) = 3),
+    mode TEXT NOT NULL,
+    unite_base INTEGER NOT NULL DEFAULT 1 CHECK (unite_base > 0),
+    unite TEXT NOT NULL,
+    url_source TEXT NOT NULL,
+    metadonnees_json TEXT NOT NULL DEFAULT '{}',
+    actualisee_le TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (jeu_donnees, code_serie)
+);
+
+CREATE TABLE valeurs_marche_mensuelles (
+    serie_id INTEGER NOT NULL
+        REFERENCES series_marche_publiques(id) ON DELETE CASCADE,
+    periode TEXT NOT NULL CHECK (
+        length(periode) = 7
+        AND substr(periode, 5, 1) = '-'
+    ),
+    valeur_texte TEXT NOT NULL,
+    valeur_echelle INTEGER NOT NULL,
+    echelle INTEGER NOT NULL CHECK (echelle > 0),
+    actualisee_le TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (serie_id, periode)
+);
+
+CREATE TABLE taux_change_publics_quotidiens (
+    date_requise TEXT NOT NULL,
+    date_publication TEXT NOT NULL,
+    validite TEXT NOT NULL,
+    devise TEXT NOT NULL CHECK (length(devise) = 3),
+    unite_base INTEGER NOT NULL CHECK (unite_base > 0),
+    valeur_texte TEXT NOT NULL,
+    valeur_echelle INTEGER NOT NULL CHECK (valeur_echelle > 0),
+    echelle INTEGER NOT NULL CHECK (echelle > 0),
+    url_source TEXT NOT NULL,
+    actualise_le TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (date_requise, devise)
+);
+
+CREATE TABLE actualisations_marche_publiques (
+    jeu_donnees TEXT PRIMARY KEY
+        CHECK (jeu_donnees IN ('devkum', 'zimoma', 'bazg_daily')),
+    url_source TEXT NOT NULL,
+    statut TEXT NOT NULL CHECK (statut IN ('succes', 'echec')),
+    tente_le TEXT NOT NULL,
+    reussie_le TEXT,
+    erreur TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE echeances_amortissement (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     immobilisation_id INTEGER NOT NULL
@@ -2067,6 +2124,12 @@ CREATE INDEX idx_rubriques_scope
 
 CREATE INDEX idx_soldes_bancaires_date
     ON soldes_bancaires(compte_tresorerie_id, date_solde, id);
+
+CREATE INDEX idx_series_marche_selection
+    ON series_marche_publiques(categorie, devise, mode, code_serie);
+
+CREATE INDEX idx_valeurs_marche_periode
+    ON valeurs_marche_mensuelles(periode, serie_id);
 
 CREATE INDEX idx_sorties_immobilisations_scope
     ON sorties_immobilisations(dossier_id, date_sortie, statut);

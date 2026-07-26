@@ -356,6 +356,8 @@ final class ApiRouteRegistry
         }
         if ($this->treasury !== null) {
             $this->add($router, 'GET', '/api/v1/liquidites/banque', $this->treasury->show(...));
+            $this->add($router, 'GET', '/api/v1/liquidites/taux-change', $this->treasury->exchangeRates(...));
+            $this->add($router, 'GET', '/api/v1/liquidites/taux-interet', $this->treasury->interestRates(...));
             $this->add($router, 'POST', '/api/v1/liquidites/banque/imports/previsualiser', $this->treasury->previewImport(...));
             $this->add($router, 'POST', '/api/v1/liquidites/banque/imports/confirmer', $this->treasury->confirmImport(...));
             $this->add($router, 'POST', '/api/v1/liquidites/banque/rapprochements', $this->treasury->reconcile(...));

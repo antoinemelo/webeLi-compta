@@ -65,6 +65,8 @@ use Compta\Modules\Tresorerie\ReconciliationService;
 use Compta\Modules\Tresorerie\SuggestionService;
 use Compta\Modules\Tresorerie\OutgoingPaymentService;
 use Compta\Modules\Tresorerie\Pain001Generator;
+use Compta\Modules\Tresorerie\PublicMarketDataService;
+use Compta\Modules\Tresorerie\PublicMarketHttpClient;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
 use Compta\Modules\Tresorerie\TreasuryWorkspaceService;
@@ -154,6 +156,10 @@ final class Tests
             'trésorerie, CAMT et rapprochements' => [
                 'integration',
                 fn () => $this->treasuryTests(),
+            ],
+            'référentiel public de change et de taux d’intérêt' => [
+                'integration',
+                fn () => $this->publicMarketDataTests(),
             ],
             'lettrage et paiements sortants pain.001' => [
                 'integration',
@@ -1683,6 +1689,15 @@ final class Tests
                     new ReconciliationService($pdo, $httpAudit),
                     new Pain001Generator()
                 ),
+                new PublicMarketDataService(
+                    $pdo,
+                    new PublicMarketHttpClient(
+                        static fn (string $url): string => throw new RuntimeException(
+                            "Réseau interdit pendant le test HTTP : {$url}"
+                        )
+                    ),
+                    new DateTimeImmutable('2026-07-26')
+                ),
                 new TreasuryInputValidator()
             ),
             new BillingApiController(
@@ -1981,6 +1996,46 @@ final class Tests
             && ($apiTreasuryJson['data']['capabilities']['export_payments'] ?? false)
             && ($apiTreasuryJson['data']['capabilities']['confirm_payments'] ?? false),
             'séparation des capacités de paiements sortants exposée en API'
+        );
+        $apiExchangeHistory = $app->handle(new Request(
+            'GET',
+            '/api/v1/liquidites/taux-change',
+            query: ['exercise_id' => (string) $exerciseId]
+        ));
+        $exchangeHistoryJson = $this->responseJson($apiExchangeHistory);
+        $this->same(
+            200,
+            $apiExchangeHistory->status,
+            'historique des changes exposé par exercice'
+        );
+        $this->same(
+            [
+                'kind', 'exercise', 'window', 'periods', 'currencies',
+                'quote_currency', 'series', 'daily', 'refresh', 'definitions',
+            ],
+            array_keys($exchangeHistoryJson['data'] ?? []),
+            'contrat des changes complet malgré une source indisponible'
+        );
+        $apiInterestHistory = $app->handle(new Request(
+            'GET',
+            '/api/v1/liquidites/taux-interet',
+            query: ['exercise_id' => (string) $exerciseId]
+        ));
+        $interestHistoryJson = $this->responseJson($apiInterestHistory);
+        $this->same(
+            'interest',
+            $interestHistoryJson['data']['kind'] ?? '',
+            'historique des taux d’intérêt exposé'
+        );
+        $foreignMarketExercise = $app->handle(new Request(
+            'GET',
+            '/api/v1/liquidites/taux-change',
+            query: ['exercise_id' => (string) $forbiddenExerciseId]
+        ));
+        $this->same(
+            422,
+            $foreignMarketExercise->status,
+            'historique de marché refuse un exercice hors dossier'
         );
         $apiBilling = $app->handle(new Request(
             'GET',
@@ -2745,6 +2800,7 @@ final class Tests
             'assets.success.json',
             'managed-references.success.json',
             'treasury.success.json',
+            'market-data.success.json',
             'billing.success.json',
             'payroll.success.json',
             'pedagogy.success.json',
@@ -7668,6 +7724,264 @@ final class Tests
         $this->true(
             IntegrityChecker::check($pdo)['ok'],
             'intégrité après dépenses et récurrences'
+        );
+    }
+
+    private function publicMarketDataTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $ids = $this->seedScopes($pdo);
+        $scope = new ScopeManager($pdo, new AuditLogger($pdo));
+        $exerciseA = $scope->createExercise(
+            $ids['dossier_a'],
+            'Exercice marché 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $exerciseB = $scope->createExercise(
+            $ids['dossier_b'],
+            'Exercice partagé 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $currency = $pdo->prepare(
+            'INSERT INTO devises_dossier
+             (organisation_id, dossier_id, code, actif)
+             VALUES (?, ?, \'EUR\', 1)'
+        );
+        $currency->execute([$ids['organisation_a'], $ids['dossier_a']]);
+        $currency->execute([$ids['organisation_b'], $ids['dossier_b']]);
+
+        $exchangeJson = json_encode([
+            'timeseries' => [
+                [
+                    'header' => [
+                        ['dim' => 'Moyenne mensuelle/Fin de mois', 'dimItem' => 'Moyenne mensuelle'],
+                        ['dim' => 'Monnaie', 'dimItem' => 'Europe - EUR 1.-'],
+                    ],
+                    'metadata' => [
+                        'key' => 'EPB@SNB.devkum{M0,EUR1}',
+                        'frequency' => 'P1M',
+                        'unit' => 'Cours à 11h en CHF',
+                    ],
+                    'values' => [
+                        ['date' => '2024-12', 'value' => 0.93111],
+                        ['date' => '2025-01', 'value' => 0.94444],
+                        ['date' => '2026-06', 'value' => 0.92045],
+                    ],
+                ],
+                [
+                    'header' => [
+                        ['dim' => 'Moyenne mensuelle/Fin de mois', 'dimItem' => 'Fin de mois'],
+                        ['dim' => 'Monnaie', 'dimItem' => 'Europe - EUR 1.-'],
+                    ],
+                    'metadata' => [
+                        'key' => 'EPB@SNB.devkum{M1,EUR1}',
+                        'frequency' => 'P1M',
+                        'unit' => 'Cours à 11h en CHF',
+                    ],
+                    'values' => [
+                        ['date' => '2025-01', 'value' => 0.94777],
+                        ['date' => '2026-06', 'value' => 0.92218],
+                    ],
+                ],
+                [
+                    'header' => [
+                        ['dim' => 'Moyenne mensuelle/Fin de mois', 'dimItem' => 'Moyenne mensuelle'],
+                        ['dim' => 'Monnaie', 'dimItem' => 'Amérique - États-Unis – USD 1.-'],
+                    ],
+                    'metadata' => [
+                        'key' => 'EPB@SNB.devkum{M0,USD1}',
+                        'frequency' => 'P1M',
+                        'unit' => 'Cours à 11h en CHF',
+                    ],
+                    'values' => [
+                        ['date' => '2026-06', 'value' => 0.7992],
+                    ],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $interestJson = json_encode([
+            'timeseries' => [
+                [
+                    'header' => [[
+                        'dim' => 'Taux',
+                        'dimItem' => 'Suisse - CHF - SARON - 1 jour',
+                    ]],
+                    'metadata' => [
+                        'key' => 'EPB@SNB.zimoma{SARON}',
+                        'frequency' => 'P1M',
+                        'unit' => 'En pour-cent',
+                    ],
+                    'values' => [
+                        ['date' => '2025-01', 'value' => 0.44],
+                        ['date' => '2026-06', 'value' => -0.043903],
+                    ],
+                ],
+                [
+                    'header' => [[
+                        'dim' => 'Taux',
+                        'dimItem' => 'Zone euro - EUR - ESTR - 1 jour',
+                    ]],
+                    'metadata' => [
+                        'key' => 'EPB@SNB.zimoma{ESTR}',
+                        'frequency' => 'P1M',
+                        'unit' => 'En pour-cent',
+                    ],
+                    'values' => [
+                        ['date' => '2025-01', 'value' => 2.9],
+                        ['date' => '2026-06', 'value' => 2.182],
+                    ],
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+        $dailyXml = <<<'XML'
+<?xml version="1.0" encoding="UTF-8"?>
+<wechselkurse xmlns="https://www.backend-rates.bazg.admin.ch/xmldaily">
+  <datum>24.07.2026</datum>
+  <zeit>07:00:04</zeit>
+  <gueltigkeit>25.07.2026,26.07.2026,27.07.2026</gueltigkeit>
+  <devise code="eur">
+    <land_fr>Union monétaire européenne</land_fr>
+    <waehrung>1 EUR</waehrung>
+    <kurs>0.93883</kurs>
+  </devise>
+  <devise code="jpy">
+    <land_fr>Japon</land_fr>
+    <waehrung>100 JPY</waehrung>
+    <kurs>0.54123</kurs>
+  </devise>
+</wechselkurse>
+XML;
+        $calls = ['devkum' => 0, 'zimoma' => 0, 'daily' => 0];
+        $http = new PublicMarketHttpClient(
+            function (string $url) use (
+                &$calls,
+                $exchangeJson,
+                $interestJson,
+                $dailyXml
+            ): string {
+                if (str_contains($url, '/devkum/')) {
+                    $calls['devkum']++;
+                    return $exchangeJson;
+                }
+                if (str_contains($url, '/zimoma/')) {
+                    $calls['zimoma']++;
+                    return $interestJson;
+                }
+                $calls['daily']++;
+                return $dailyXml;
+            }
+        );
+        $service = new PublicMarketDataService(
+            $pdo,
+            $http,
+            new DateTimeImmutable('2026-07-26')
+        );
+        $exchange = $service->exchangeHistory(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseA
+        );
+        $this->same(
+            '2025-01|2026-12',
+            $exchange['window']['start'] . '|' . $exchange['window']['end'],
+            'fenêtre égale à l’exercice plus les douze mois précédents'
+        );
+        $this->same(
+            ['CHF', 'EUR'],
+            $exchange['currencies'],
+            'monnaies actives du dossier uniquement'
+        );
+        $this->same(
+            2,
+            count($exchange['series']),
+            'moyenne et fin de mois EUR disponibles'
+        );
+        $this->same(
+            '0.93883|2026-07-24',
+            $exchange['daily'][0]['per_unit']
+                . '|' . $exchange['daily'][0]['publication_date'],
+            'taux OFDF quotidien et date de publication conservés'
+        );
+        $this->same(
+            ['2026-07-25', '2026-07-26', '2026-07-27'],
+            $exchange['daily'][0]['validity'],
+            'jours de validité OFDF conservés'
+        );
+
+        $shared = $service->exchangeHistory(
+            $ids['organisation_b'],
+            $ids['dossier_b'],
+            $exerciseB
+        );
+        $sharedAverage = array_values(array_filter(
+            $shared['series'],
+            static fn (array $series): bool => $series['mode'] === 'moyenne'
+        ))[0];
+        $this->same(
+            '0.92045',
+            $sharedAverage['values'][1]['per_unit'],
+            'cache de change partagé avec un autre dossier'
+        );
+        $this->same(
+            ['devkum' => 1, 'zimoma' => 0, 'daily' => 1],
+            $calls,
+            'source externe appelée une seule fois pour le cache global'
+        );
+
+        $interest = $service->interestHistory(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseA
+        );
+        $this->same(
+            ['CHF', 'EUR'],
+            array_values(array_unique(array_column($interest['series'], 'currency'))),
+            'taux d’intérêt limités aux monnaies actives'
+        );
+        $saron = array_values(array_filter(
+            $interest['series'],
+            static fn (array $series): bool => $series['currency'] === 'CHF'
+        ))[0];
+        $this->same(
+            '-0.043903',
+            $saron['values'][1]['per_unit'],
+            'taux négatif conservé sans perte de précision'
+        );
+        $this->same(
+            1,
+            $calls['zimoma'],
+            'série de taux BNS synchronisée une seule fois'
+        );
+        $columns = array_column(
+            $pdo->query('PRAGMA table_info(series_marche_publiques)')->fetchAll(),
+            'name'
+        );
+        $this->false(
+            in_array('organisation_id', $columns, true)
+                || in_array('dossier_id', $columns, true),
+            'référentiel de marché réellement global'
+        );
+        $this->same(
+            'integer',
+            (string) $pdo->query(
+                'SELECT typeof(valeur_echelle) FROM valeurs_marche_mensuelles LIMIT 1'
+            )->fetchColumn(),
+            'valeurs publiques persistées en entier à échelle fixe'
+        );
+        $this->throws(
+            fn () => $service->exchangeHistory(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $exerciseB
+            ),
+            'exercice étranger refusé sans fuite de cache'
+        );
+        $this->true(
+            IntegrityChecker::check($pdo)['ok'],
+            'intégrité après synchronisation des données de marché'
         );
     }
 

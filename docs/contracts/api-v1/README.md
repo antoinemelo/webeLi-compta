@@ -120,6 +120,8 @@ Les exemples versionnés sont :
 | POST | `/api/v1/liquidites/recurrences/pause` | suspension ou reprise optimiste |
 | POST | `/api/v1/liquidites/recurrences/generer` | génération idempotente des échéances |
 | GET | `/api/v1/liquidites/banque` | espace banque, lettrage et paiements sortants |
+| GET | `/api/v1/liquidites/taux-change` | historique BNS et taux quotidien OFDF pour les monnaies actives |
+| GET | `/api/v1/liquidites/taux-interet` | taux du marché monétaire BNS pour les monnaies actives |
 | POST | `/api/v1/liquidites/banque/imports/previsualiser` | analyse sans comptabilisation d’un CAMT ou PostFinance |
 | POST | `/api/v1/liquidites/banque/imports/confirmer` | import audité avec source et empreinte archivées |
 | POST | `/api/v1/liquidites/banque/rapprochements` | rapprochement explicite 1–1, 1–N ou N–1 |

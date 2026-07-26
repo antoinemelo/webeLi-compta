@@ -9,6 +9,23 @@ use DateTimeImmutable;
 
 final class TreasuryInputValidator
 {
+    public function marketExercise(Request $request): int
+    {
+        $errors = [];
+        foreach (array_keys($request->query) as $key) {
+            if ($key !== 'exercise_id') {
+                $errors[(string) $key][] = 'Paramètre non autorisé.';
+            }
+        }
+        $raw = (string) ($request->query['exercise_id'] ?? '');
+        $exerciseId = preg_match('/^[1-9][0-9]*$/', $raw) === 1 ? (int) $raw : 0;
+        if ($exerciseId < 1) {
+            $errors['exercise_id'][] = 'Identifiant d’exercice positif attendu.';
+        }
+        $this->fail($errors);
+        return $exerciseId;
+    }
+
     /** @return array{treasury_account_id:int,filename:string,content:string} */
     public function import(Request $request): array
     {

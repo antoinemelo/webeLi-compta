@@ -457,6 +457,71 @@ export type TreasuryWorkspace = {
   definitions: { banking: string; matching: string; pain001: string };
 };
 
+export type PublicMarketValue = {
+  period: string;
+  value: string;
+  per_unit: string;
+};
+
+export type PublicMarketSeries = {
+  id: number;
+  code: string;
+  label: string;
+  currency: string;
+  mode: 'moyenne' | 'fin_mois';
+  base_unit: number;
+  unit: string;
+  source_url: string;
+  updated_at: string;
+  values: PublicMarketValue[];
+};
+
+export type PublicMarketRefresh = {
+  status: 'absent' | 'succes' | 'echec';
+  attempted_at: string | null;
+  succeeded_at: string | null;
+  source_url: string;
+  warning: string;
+};
+
+export type ExchangeHistoryPayload = {
+  kind: 'exchange';
+  exercise: {
+    id: number; label: string; start_date: string; end_date: string; status: string;
+  };
+  window: { start: string; end: string };
+  periods: string[];
+  currencies: string[];
+  quote_currency: 'CHF';
+  series: PublicMarketSeries[];
+  daily: Array<{
+    requested_date: string;
+    publication_date: string;
+    validity: string[];
+    currency: string;
+    base_unit: number;
+    value: string;
+    per_unit: string;
+    source_url: string;
+    updated_at: string;
+  }>;
+  refresh: { monthly: PublicMarketRefresh; daily: PublicMarketRefresh };
+  definitions: { monthly: string; daily: string; accounting: string };
+};
+
+export type InterestHistoryPayload = {
+  kind: 'interest';
+  exercise: {
+    id: number; label: string; start_date: string; end_date: string; status: string;
+  };
+  window: { start: string; end: string };
+  periods: string[];
+  currencies: string[];
+  series: PublicMarketSeries[];
+  refresh: { monthly: PublicMarketRefresh };
+  definitions: { monthly: string; scope: string };
+};
+
 export type AccountingWorkspace = {
   exercise: {
     id: number;

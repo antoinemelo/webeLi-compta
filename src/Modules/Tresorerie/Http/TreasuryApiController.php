@@ -15,6 +15,7 @@ use Compta\Modules\Facturation\BillingException;
 use Compta\Modules\Facturation\PaymentService;
 use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\OutgoingPaymentService;
+use Compta\Modules\Tresorerie\PublicMarketDataService;
 use Compta\Modules\Tresorerie\ReconciliationService;
 use Compta\Modules\Tresorerie\SuggestionService;
 use Compta\Modules\Tresorerie\TreasuryException;
@@ -33,6 +34,7 @@ final class TreasuryApiController
         private readonly SuggestionService $suggestions,
         private readonly PaymentService $payments,
         private readonly OutgoingPaymentService $outgoing,
+        private readonly PublicMarketDataService $market,
         private readonly TreasuryInputValidator $validator,
     ) {
     }
@@ -58,6 +60,34 @@ final class TreasuryApiController
             ];
             return $data;
         });
+    }
+
+    public function exchangeRates(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('tresorerie.view');
+        $exerciseId = $this->validator->marketExercise($request);
+        return $this->execute(
+            $request,
+            fn (): array => $this->market->exchangeHistory(
+                $organisationId,
+                $dossierId,
+                $exerciseId
+            )
+        );
+    }
+
+    public function interestRates(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('tresorerie.view');
+        $exerciseId = $this->validator->marketExercise($request);
+        return $this->execute(
+            $request,
+            fn (): array => $this->market->interestHistory(
+                $organisationId,
+                $dossierId,
+                $exerciseId
+            )
+        );
     }
 
     public function previewImport(Request $request): Response

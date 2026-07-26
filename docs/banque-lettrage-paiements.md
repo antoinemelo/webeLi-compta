@@ -1,5 +1,10 @@
 # Banque, lettrage et paiements sortants
 
+Les deux onglets placés après « Paiements » présentent les taux de change et
+les taux d’intérêt publics. Leur cache SQLite est global à l’instance et ne
+duplique pas les données entre dossiers. Voir
+[`donnees-marche-publiques.md`](donnees-marche-publiques.md).
+
 L’espace Vue **Liquidités** sépare volontairement trois réalités :
 
 1. le relevé bancaire importé, qui constate les mouvements de la banque ;
