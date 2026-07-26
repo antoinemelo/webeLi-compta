@@ -56,6 +56,12 @@ const routes: RouteRecordRaw[] = [
     meta: { label: 'Configuration', section: 'settings' }
   },
   {
+    path: '/configuration/referentiels/:section',
+    name: 'managed-reference',
+    component: ConfigurationView,
+    meta: { label: 'Configuration', section: 'settings' }
+  },
+  {
     path: '/configuration/:tab?',
     name: 'settings',
     component: ConfigurationView,

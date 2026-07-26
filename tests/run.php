@@ -2754,6 +2754,15 @@ final class Tests
         );
         $deepShell = $app->handle(new Request('GET', '/app/compta/etats'));
         $this->same(200, $deepShell->status, 'rafraîchissement de route Vue profonde');
+        $deepCurrencyReference = $app->handle(new Request(
+            'GET',
+            '/app/configuration/referentiels/currencies'
+        ));
+        $this->same(
+            200,
+            $deepCurrencyReference->status,
+            'rafraîchissement direct du référentiel Devises et change'
+        );
         $this->true(
             str_contains($deepShell->body, 'name="compta-api-base-url" content="/edu/api/v1"')
             && str_contains($deepShell->body, 'type="module"')

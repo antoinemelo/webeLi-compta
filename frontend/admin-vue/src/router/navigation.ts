@@ -2,7 +2,19 @@ export type SubNavigationItem = {
   key: string;
   label: string;
   path: string;
+  activePrefix?: string;
 };
+
+export const referenceNavigation: SubNavigationItem[] = [
+  { key: 'plan', label: 'Plan comptable', path: '/configuration/referentiels/plan' },
+  { key: 'treasury', label: 'Trésorerie', path: '/configuration/referentiels/treasury' },
+  { key: 'currencies', label: 'Devises et change', path: '/configuration/referentiels/currencies' },
+  { key: 'contacts', label: 'Débiteurs et créanciers', path: '/configuration/referentiels/contacts' },
+  { key: 'vat', label: 'TVA', path: '/configuration/referentiels/vat' },
+  { key: 'payroll', label: 'Charges sociales', path: '/configuration/referentiels/payroll' },
+  { key: 'journals', label: 'Journaux', path: '/configuration/referentiels/journals' },
+  { key: 'exercises', label: 'Exercices et périodes', path: '/configuration/referentiels/exercises' }
+];
 
 export const subNavigation: Record<string, SubNavigationItem[]> = {
   learning: [
@@ -46,7 +58,8 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
     {
       key: 'references',
       label: 'Référentiels',
-      path: '/configuration/referentiels/plan'
+      path: '/configuration/referentiels/plan',
+      activePrefix: '/configuration/referentiels'
     },
     { key: 'payroll', label: 'Salaires', path: '/configuration/salaires' },
     { key: 'access', label: 'Accès', path: '/configuration/acces' },

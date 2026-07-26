@@ -8,7 +8,7 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { runtimeConfig } from '@/config';
 import type { AccountingWorkspace } from '@/api/contracts';
-import { subNavigation } from '@/router/navigation';
+import { referenceNavigation, subNavigation } from '@/router/navigation';
 import { useAccountingStore } from '@/stores/accounting';
 import { useContextStore } from '@/stores/context';
 
@@ -659,13 +659,11 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
   />
 
   <nav v-if="allowed && isChartSettings" class="subtabs" aria-label="Référentiels gérés">
-    <strong>Plan comptable</strong>
-    <RouterLink to="/configuration/referentiels?section=treasury">Trésorerie</RouterLink>
-    <RouterLink to="/configuration/referentiels?section=contacts">Débiteurs et créanciers</RouterLink>
-    <RouterLink to="/configuration/referentiels?section=vat">TVA</RouterLink>
-    <RouterLink to="/configuration/referentiels?section=payroll">Charges sociales</RouterLink>
-    <RouterLink to="/configuration/referentiels?section=journals">Journaux</RouterLink>
-    <RouterLink to="/configuration/referentiels?section=exercises">Exercices et périodes</RouterLink>
+    <RouterLink
+      v-for="item in referenceNavigation"
+      :key="item.key"
+      :to="item.path"
+    >{{ item.label }}</RouterLink>
   </nav>
 
   <EmptyState

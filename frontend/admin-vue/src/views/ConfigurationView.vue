@@ -8,7 +8,7 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { markUnsavedChanges } from '@/composables/unsavedChanges';
-import { subNavigation } from '@/router/navigation';
+import { referenceNavigation, subNavigation } from '@/router/navigation';
 import { useConfigurationStore } from '@/stores/configuration';
 import { useContextStore } from '@/stores/context';
 import { useNotificationStore } from '@/stores/notifications';
@@ -18,13 +18,16 @@ const context = useContextStore();
 const store = useConfigurationStore();
 const notifications = useNotificationStore();
 const tabs = subNavigation.settings;
-const activeTab = computed(() => String(route.params.tab || 'entity'));
+const activeTab = computed(() => (
+  route.name === 'managed-reference'
+    ? 'referentiels'
+    : String(route.params.tab || 'entity')
+));
 const configuration = computed(() => store.configuration);
 const managedReferences = computed(() => store.managedReferences);
 const canManage = computed(() => context.can('dossier.manage'));
 const currentUserId = computed(() => context.context?.user.id ?? 0);
 const today = new Date().toISOString().slice(0, 10);
-const requestedReferenceSection = String(route.query.section || 'treasury');
 type ReferenceSection =
   | 'treasury'
   | 'currencies'
@@ -36,11 +39,12 @@ type ReferenceSection =
 const referenceSections: ReferenceSection[] = [
   'treasury', 'currencies', 'contacts', 'vat', 'payroll', 'journals', 'exercises'
 ];
-const referenceSection = ref<ReferenceSection>(
-  referenceSections.includes(requestedReferenceSection as ReferenceSection)
-    ? requestedReferenceSection as ReferenceSection
-    : 'treasury'
-);
+const referenceSection = computed<ReferenceSection>(() => {
+  const requested = String(
+    route.params.section || route.query.section || 'treasury'
+  ) as ReferenceSection;
+  return referenceSections.includes(requested) ? requested : 'treasury';
+});
 
 const identity = reactive({
   organization_version: 0,
@@ -1005,56 +1009,11 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
 
       <section v-else-if="activeTab === 'referentiels'" class="configuration-stack">
         <nav class="subtabs" aria-label="Référentiels gérés">
-          <RouterLink to="/configuration/referentiels/plan">Plan comptable</RouterLink>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'treasury' }"
-            @click="referenceSection = 'treasury'"
-          >
-            Trésorerie
-          </button>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'currencies' }"
-            @click="referenceSection = 'currencies'"
-          >
-            Devises et change
-          </button>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'contacts' }"
-            @click="referenceSection = 'contacts'"
-          >
-            Débiteurs et créanciers
-          </button>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'vat' }"
-            @click="referenceSection = 'vat'"
-          >
-            TVA
-          </button>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'payroll' }"
-            @click="referenceSection = 'payroll'"
-          >
-            Charges sociales
-          </button>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'journals' }"
-            @click="referenceSection = 'journals'"
-          >
-            Journaux
-          </button>
-          <button
-            type="button"
-            :class="{ active: referenceSection === 'exercises' }"
-            @click="referenceSection = 'exercises'"
-          >
-            Exercices et périodes
-          </button>
+          <RouterLink
+            v-for="item in referenceNavigation"
+            :key="item.key"
+            :to="item.path"
+          >{{ item.label }}</RouterLink>
         </nav>
 
         <template v-if="managedReferences && referenceSection === 'treasury'">

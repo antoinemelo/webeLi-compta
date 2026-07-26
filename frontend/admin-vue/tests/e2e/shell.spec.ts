@@ -156,6 +156,7 @@ test('suivi formateur expose assignation, score, contributeurs et export', async
 });
 
 test('configuration des modules et référentiels', async ({ page }) => {
+  test.setTimeout(90_000);
   await loginAsAdministrator(page);
   await page.getByLabel('Dossier', { exact: true }).selectOption({
     label: 'Comptabilité principale'
@@ -189,14 +190,48 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
   await expect(page.getByText('Vue d’ensemble', { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByLabel('Navigation Configuration').getByRole('link', {
+      name: 'Référentiels',
+      exact: true
+    })
+  ).toHaveAttribute('aria-current', 'page');
+
+  const referenceNavigation = page.getByLabel('Référentiels gérés');
+  expect(await referenceNavigation.getByRole('link').allTextContents()).toEqual([
+    'Plan comptable',
+    'Trésorerie',
+    'Devises et change',
+    'Débiteurs et créanciers',
+    'TVA',
+    'Charges sociales',
+    'Journaux',
+    'Exercices et périodes'
+  ]);
+  await referenceNavigation.getByRole('link', {
+    name: 'Devises et change',
+    exact: true
+  }).click();
+  await expect(page).toHaveURL(/\/configuration\/referentiels\/currencies$/);
+  await expect(page.getByRole('heading', { name: 'Devises autorisées' })).toBeVisible();
+  await expect(page.getByRole('heading', {
+    name: 'Comptes des différences de change'
+  })).toBeVisible();
+  await expect(page.getByRole('link', {
+    name: 'Devises et change',
+    exact: true
+  })).toHaveAttribute('aria-current', 'page');
+
+  await page.getByRole('link', { name: 'Plan comptable', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
 
   await page.getByRole('link', { name: 'Trésorerie', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau compte de trésorerie' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Débiteurs et créanciers' }).click();
+  await page.getByRole('link', { name: 'Débiteurs et créanciers' }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau débiteur ou créancier' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'TVA', exact: true }).click();
+  await page.getByRole('link', { name: 'TVA', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau code TVA' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Taux TVA suisses' })).toBeVisible();
   const vatRow = page.getByRole('row').filter({ hasText: 'VE81' });
@@ -213,14 +248,14 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByLabel('Libellé').fill('Ventes 8,1 %');
   await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
 
-  await page.getByRole('button', { name: 'Charges sociales' }).click();
+  await page.getByRole('link', { name: 'Charges sociales' }).click();
   await expect(page.getByRole('heading', { name: 'Taux annuels des charges sociales' })).toBeVisible();
   await expect(page.getByText(/Salaires → Annuels/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Charger les valeurs OCAS 2026' })).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Journaux' }).click();
+  await page.getByRole('link', { name: 'Journaux' }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau journal' })).toBeVisible();
-  await page.getByRole('button', { name: 'Exercices et périodes' }).click();
+  await page.getByRole('link', { name: 'Exercices et périodes' }).click();
   await expect(page.getByRole('heading', { name: 'Nouvel exercice comptable' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Nouvelle période' })).toBeVisible();
 
