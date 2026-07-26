@@ -46,7 +46,11 @@
       "accounts": [],
       "vat_codes": [],
       "exercises": [],
-      "journals": []
+      "journals": [],
+      "currencies": [
+        { "code": "CHF", "active": true, "is_base": true, "version": 1 }
+      ],
+      "exchange_rates": []
     },
     "definitions": {},
     "capabilities": {

@@ -6,6 +6,7 @@ namespace Compta\Modules\Configuration\Application;
 use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Facturation\ContactService;
+use Compta\Modules\Devises\ExchangeRateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tva\VatConfigurationService;
@@ -14,6 +15,8 @@ use Throwable;
 
 final class ManagedReferencesService
 {
+    private ExchangeRateService $exchange;
+
     public function __construct(
         private readonly PDO $pdo,
         private readonly ContactService $contacts,
@@ -23,6 +26,7 @@ final class ManagedReferencesService
         private readonly AccountingSetupService $accountingSetup,
         private readonly AuditLogger $audit,
     ) {
+        $this->exchange = new ExchangeRateService($pdo, $audit);
     }
 
     /** @return array<string,mixed> */
@@ -74,11 +78,61 @@ final class ManagedReferencesService
                 'exercises' => $this->exercises($organisationId, $dossierId),
                 'periods' => $this->periods($organisationId, $dossierId),
             ],
+            'currencies' => $this->exchange->configuration(
+                $organisationId,
+                $dossierId
+            ) + ['accounts' => $this->accounts($organisationId, $dossierId)],
             'access' => [
                 'users' => $this->users($organisationId, $dossierId),
                 'roles' => $this->roles(),
             ],
         ];
+    }
+
+    public function saveCurrency(
+        int $organisationId,
+        int $dossierId,
+        string $currency,
+        bool $active,
+        int $actorId,
+    ): void {
+        $this->exchange->saveCurrency(
+            $organisationId,
+            $dossierId,
+            $currency,
+            $active,
+            $actorId
+        );
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveExchangeRate(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        return $this->exchange->saveRate(
+            $organisationId,
+            $dossierId,
+            $data,
+            $actorId
+        );
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveExchangeMapping(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): void {
+        $this->exchange->saveMapping(
+            $organisationId,
+            $dossierId,
+            $data,
+            $actorId
+        );
     }
 
     /** @param array<string,mixed> $data */

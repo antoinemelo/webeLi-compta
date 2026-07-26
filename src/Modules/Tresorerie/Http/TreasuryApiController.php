@@ -175,7 +175,8 @@ final class TreasuryApiController
                 $data['ledger_account_id'],
                 $userId,
                 $data['bank_line_id'],
-                $data['currency']
+                $data['currency'],
+                $data['exchange_rate_id']
             ),
         ], 201);
     }

@@ -82,6 +82,29 @@
       "exercises": [],
       "periods": []
     },
+    "currencies": {
+      "base_currency": "CHF",
+      "currencies": [
+        { "code": "CHF", "active": true, "is_base": true, "version": 1 },
+        { "code": "EUR", "active": true, "is_base": false, "version": 1 }
+      ],
+      "rates": [
+        {
+          "id": 1,
+          "source_currency": "EUR",
+          "target_currency": "CHF",
+          "rate_date": "2026-07-26",
+          "numerator": 95,
+          "denominator": 100,
+          "source": "Saisie contrôlée",
+          "verified_on": "2026-07-26",
+          "active": true,
+          "version": 1
+        }
+      ],
+      "mapping": null,
+      "accounts": []
+    },
     "access": {
       "users": [],
       "roles": []
@@ -92,6 +115,7 @@
       "payroll": true,
       "treasury": true,
       "accounting_setup": true,
+      "currencies": true,
       "access": true
     }
   },

@@ -125,12 +125,16 @@ final class TreasuryInputValidator
         if (!$this->validDate($date)) {
             $errors['date'][] = 'Date AAAA-MM-JJ requise.';
         }
-        if (!in_array($currency, ['CHF', 'EUR'], true)) {
+        if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
             $errors['currency'][] = 'Devise de paiement invalide.';
         }
         $bankLineId = $data['bank_line_id'] ?? null;
         if ($bankLineId !== null && (!is_int($bankLineId) || $bankLineId < 1)) {
             $errors['bank_line_id'][] = 'Identifiant positif requis.';
+        }
+        $rateId = $data['exchange_rate_id'] ?? null;
+        if ($rateId !== null && (!is_int($rateId) || $rateId < 1)) {
+            $errors['exchange_rate_id'][] = 'Identifiant de taux positif requis.';
         }
         $result = [
             'contact_id' => $this->positiveInt($data, 'contact_id', $errors),
@@ -145,6 +149,7 @@ final class TreasuryInputValidator
             ),
             'bank_line_id' => $bankLineId,
             'currency' => $currency,
+            'exchange_rate_id' => $rateId,
         ];
         $this->fail($errors);
         return $result;

@@ -92,6 +92,24 @@ final class ApiRouteRegistry
             $this->add(
                 $router,
                 'POST',
+                '/api/v1/configuration/references/currencies',
+                $this->configuration->saveCurrency(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/exchange-rates',
+                $this->configuration->saveExchangeRate(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/exchange-mapping',
+                $this->configuration->saveExchangeMapping(...)
+            );
+            $this->add(
+                $router,
+                'POST',
                 '/api/v1/configuration/references/vat-codes',
                 $this->configuration->saveVatCode(...)
             );
@@ -162,6 +180,18 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/accounting/entries',
                 $this->accounting->createEntry(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/exchange-revaluations',
+                $this->accounting->postExchangeRevaluation(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/exchange-revaluations/reverse',
+                $this->accounting->reverseExchangeRevaluation(...)
             );
             $this->add(
                 $router,

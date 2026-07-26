@@ -40,6 +40,8 @@ const documentDraft = reactive({
   due_date: today,
   external_number: '',
   collective_account_id: 0,
+  currency: context.context?.selection?.dossier.currency || 'CHF',
+  exchange_rate_id: 0,
   lines: [newLine()] as DraftLine[]
 });
 const contactDraft = reactive({
@@ -82,7 +84,9 @@ const paymentDraft = reactive({
   date: today,
   amount: '',
   reference: '',
-  ledger_account_id: 0
+  ledger_account_id: 0,
+  currency: context.context?.selection?.dossier.currency || 'CHF',
+  exchange_rate_id: 0
 });
 const allocationDraft = reactive({
   payment_id: 0,
@@ -107,12 +111,34 @@ const documentVatCodes = computed(() =>
 const recurrenceVatCodes = computed(() =>
   availableVatCodes(recurrenceDraft.type, recurrenceDraft.next_date)
 );
+const documentExchangeRates = computed(() =>
+  (workspace.value?.catalog.exchange_rates ?? []).filter((rate) =>
+    rate.source_currency === documentDraft.currency
+    && rate.rate_date <= documentDraft.document_date
+  )
+);
+const paymentExchangeRates = computed(() =>
+  (workspace.value?.catalog.exchange_rates ?? []).filter((rate) =>
+    rate.source_currency === paymentDraft.currency
+    && rate.rate_date <= paymentDraft.date
+  )
+);
 const documentRows = computed(() =>
   (workspace.value?.documents ?? []).map((item) => ({
     ...item,
     display_number: item.number || `Brouillon #${item.id}`,
-    amount: money(item.gross_cents, item.currency),
-    open: money(item.open_cents, item.currency),
+    amount: dualMoney(
+      item.gross_cents,
+      item.currency,
+      item.gross_base_cents,
+      item.base_currency
+    ),
+    open: dualMoney(
+      item.open_cents,
+      item.currency,
+      item.open_base_cents,
+      item.base_currency
+    ),
     status_label: statusLabel(item.status),
     payment_label: paymentLabel(item.payment_state)
   }))
@@ -213,6 +239,18 @@ function money(value: number, currency = 'CHF'): string {
   } ${currency}`;
 }
 
+function dualMoney(
+  originalCents: number,
+  originalCurrency: string,
+  baseCents: number,
+  baseCurrency: string
+): string {
+  const original = money(originalCents, originalCurrency);
+  return originalCurrency === baseCurrency
+    ? original
+    : `${original} · ${money(baseCents, baseCurrency)}`;
+}
+
 function statusLabel(status: string): string {
   return {
     brouillon: 'Brouillon',
@@ -292,6 +330,8 @@ async function saveDocument(): Promise<void> {
       document_date: documentDraft.document_date,
       due_date: documentDraft.due_date,
       collective_account_id: Number(documentDraft.collective_account_id),
+      currency: documentDraft.currency,
+      exchange_rate_id: documentDraft.exchange_rate_id || null,
       external_number: documentDraft.external_number,
       attachment: documentAttachment.value,
       lines: apiLines(documentDraft.lines, documentDraft.document_date)
@@ -497,7 +537,9 @@ async function savePayment(): Promise<void> {
       date: paymentDraft.date,
       amount_cents: cents(paymentDraft.amount),
       reference: paymentDraft.reference,
-      ledger_account_id: Number(paymentDraft.ledger_account_id)
+      ledger_account_id: Number(paymentDraft.ledger_account_id),
+      currency: paymentDraft.currency,
+      exchange_rate_id: paymentDraft.exchange_rate_id || null
     });
     notifications.push('Paiement saisi indépendamment des factures.', 'success');
   } catch {
@@ -612,6 +654,21 @@ async function allocatePayment(): Promise<void> {
               <select id="billing-collective" v-model.number="documentDraft.collective_account_id" :aria-describedby="describedBy" required>
                 <option :value="0" disabled>Sélectionner</option>
                 <option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option>
+              </select>
+            </template>
+          </FormField>
+          <FormField id="billing-currency" label="Devise">
+            <template #default="{ describedBy }">
+              <select id="billing-currency" v-model="documentDraft.currency" :aria-describedby="describedBy" required @change="documentDraft.exchange_rate_id = 0">
+                <option v-for="currencyItem in workspace.catalog.currencies" :key="currencyItem.code" :value="currencyItem.code">{{ currencyItem.code }}{{ currencyItem.is_base ? ' · base' : '' }}</option>
+              </select>
+            </template>
+          </FormField>
+          <FormField v-if="documentDraft.currency !== context.context?.selection?.dossier.currency" id="billing-rate" label="Taux figé" hint="Taux vers la devise de base, daté au plus tard le jour du document.">
+            <template #default="{ describedBy }">
+              <select id="billing-rate" v-model.number="documentDraft.exchange_rate_id" :aria-describedby="describedBy" required>
+                <option :value="0" disabled>Sélectionner</option>
+                <option v-for="rate in documentExchangeRates" :key="rate.id" :value="rate.id">{{ rate.rate_date }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option>
               </select>
             </template>
           </FormField>
@@ -770,13 +827,15 @@ async function allocatePayment(): Promise<void> {
           <FormField id="payment-contact" label="Contact"><template #default="{ describedBy }"><select id="payment-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="contact in workspace.contacts" :key="contact.id" :value="contact.id">{{ contact.label }}</option></select></template></FormField>
           <FormField id="payment-direction" label="Sens"><template #default="{ describedBy }"><select id="payment-direction" v-model="paymentDraft.direction" :aria-describedby="describedBy"><option value="encaissement">Encaissement client</option><option value="decaissement">Décaissement fournisseur</option></select></template></FormField>
           <FormField id="payment-date" label="Date"><template #default="{ describedBy }"><input id="payment-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
-          <FormField id="payment-amount" label="Montant CHF"><template #default="{ describedBy }"><input id="payment-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
+          <FormField id="payment-amount" :label="`Montant ${paymentDraft.currency}`"><template #default="{ describedBy }"><input id="payment-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
+          <FormField id="payment-currency" label="Devise"><template #default="{ describedBy }"><select id="payment-currency" v-model="paymentDraft.currency" :aria-describedby="describedBy" required @change="paymentDraft.exchange_rate_id = 0"><option v-for="currencyItem in workspace.catalog.currencies" :key="currencyItem.code" :value="currencyItem.code">{{ currencyItem.code }}{{ currencyItem.is_base ? ' · base' : '' }}</option></select></template></FormField>
+          <FormField v-if="paymentDraft.currency !== context.context?.selection?.dossier.currency" id="payment-rate" label="Taux figé"><template #default="{ describedBy }"><select id="payment-rate" v-model.number="paymentDraft.exchange_rate_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="rate in paymentExchangeRates" :key="rate.id" :value="rate.id">{{ rate.rate_date }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option></select></template></FormField>
           <FormField id="payment-account" label="Compte de trésorerie"><template #default="{ describedBy }"><select id="payment-account" v-model.number="paymentDraft.ledger_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option></select></template></FormField>
           <button class="button primary" :disabled="store.saving">Enregistrer</button>
         </form>
         <form v-if="workspace.capabilities.pay" class="editor-card" @submit.prevent="allocatePayment">
           <h3>Allouer un paiement</h3>
-          <FormField id="allocation-payment" label="Paiement disponible"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="payment in workspace.payments.filter((item) => item.unallocated_cents > 0)" :key="payment.id" :value="payment.id">{{ payment.contact }} · {{ money(payment.unallocated_cents) }}</option></select></template></FormField>
+          <FormField id="allocation-payment" label="Paiement disponible"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="payment in workspace.payments.filter((item) => item.unallocated_cents > 0)" :key="payment.id" :value="payment.id">{{ payment.contact }} · {{ money(payment.unallocated_cents, payment.currency) }}</option></select></template></FormField>
           <FormField id="allocation-document" label="Facture ouverte"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="document in workspace.documents.filter((item) => item.open_cents > 0 && item.type.startsWith('facture_'))" :key="document.id" :value="document.id">{{ document.number }} · {{ document.contact }} · {{ money(document.open_cents) }}</option></select></template></FormField>
           <FormField id="allocation-amount" label="Montant à allouer"><template #default="{ describedBy }"><input id="allocation-amount" v-model="allocationDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
           <button class="button primary" :disabled="store.saving">Lettrer</button>

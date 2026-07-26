@@ -9,6 +9,46 @@ use DateTimeImmutable;
 
 final class AccountingInputValidator
 {
+    /** @return array{exercise_id:int,journal_id:int,date:string,idempotency_key:string} */
+    public function exchangeRevaluation(Request $request): array
+    {
+        $data = $this->only(
+            $request,
+            ['exercise_id', 'journal_id', 'date', 'idempotency_key']
+        );
+        $key = trim((string) ($data['idempotency_key'] ?? ''));
+        if ($key === '') {
+            throw ApiException::validation([
+                'idempotency_key' => ['Clé idempotente requise.'],
+            ]);
+        }
+        return [
+            'exercise_id' => $this->positiveInteger(
+                $data['exercise_id'] ?? null,
+                'exercise_id'
+            ),
+            'journal_id' => $this->positiveInteger(
+                $data['journal_id'] ?? null,
+                'journal_id'
+            ),
+            'date' => $this->requiredDate($data['date'] ?? null, 'date'),
+            'idempotency_key' => $key,
+        ];
+    }
+
+    /** @return array{revaluation_id:int,date:string} */
+    public function exchangeRevaluationReversal(Request $request): array
+    {
+        $data = $this->only($request, ['revaluation_id', 'date']);
+        return [
+            'revaluation_id' => $this->positiveInteger(
+                $data['revaluation_id'] ?? null,
+                'revaluation_id'
+            ),
+            'date' => $this->requiredDate($data['date'] ?? null, 'date'),
+        ];
+    }
+
     /** @return array{exercise_id:int,account_id:?int,date_start:?string,date_end:?string,vat_statement_id:?int} */
     public function query(Request $request): array
     {

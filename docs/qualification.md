@@ -57,6 +57,10 @@ La suite d’intégration mesure aussi la projection du tableau de bord sur
 supérieure à 500 ms, contrôle les plans SQLite et compare les indicateurs aux
 rapports, allocations et soldes bancaires de référence.
 
+Elle couvre également une facture EUR réglée en deux fois à des taux distincts,
+les gains et pertes de change réalisés, la réévaluation latente contre-passable,
+la traçabilité des taux et l’absence de régression du parcours mono-CHF.
+
 ## Construire l'archive
 
 Construire depuis un commit qualifié et un arbre Git propre. Installer les

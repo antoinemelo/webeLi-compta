@@ -83,6 +83,10 @@ final class BillingInputValidator
             $errors['due_date'][] = 'L’échéance doit suivre la date du document.';
         }
         $external = trim((string) ($data['external_number'] ?? ''));
+        $currency = strtoupper(trim((string) ($data['currency'] ?? '')));
+        if ($currency !== '' && preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
+            $errors['currency'][] = 'Code devise ISO requis.';
+        }
         if (str_contains($type, 'fournisseur') && $external === '') {
             $errors['external_number'][] = 'Numéro fournisseur requis.';
         }
@@ -99,6 +103,12 @@ final class BillingInputValidator
             'external_number' => $external,
             'lines' => $this->lines($data['lines'] ?? null, $errors),
             'attachment' => $this->attachment($data['attachment'] ?? null, $errors),
+            'currency' => $currency,
+            'exchange_rate_id' => $this->optionalPositiveInt(
+                $data,
+                'exchange_rate_id',
+                $errors
+            ),
         ];
         $this->fail($errors);
         return $result;
@@ -325,11 +335,15 @@ final class BillingInputValidator
         $errors = [];
         $direction = (string) ($data['direction'] ?? '');
         $date = (string) ($data['date'] ?? '');
+        $currency = strtoupper(trim((string) ($data['currency'] ?? '')));
         if (!in_array($direction, ['encaissement', 'decaissement'], true)) {
             $errors['direction'][] = 'Sens de paiement invalide.';
         }
         if (!$this->validDate($date)) {
             $errors['date'][] = 'Date AAAA-MM-JJ requise.';
+        }
+        if ($currency !== '' && preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
+            $errors['currency'][] = 'Code devise ISO requis.';
         }
         $result = [
             'contact_id' => $this->positiveInt($data, 'contact_id', $errors),
@@ -340,6 +354,12 @@ final class BillingInputValidator
             'ledger_account_id' => $this->positiveInt(
                 $data,
                 'ledger_account_id',
+                $errors
+            ),
+            'currency' => $currency,
+            'exchange_rate_id' => $this->optionalPositiveInt(
+                $data,
+                'exchange_rate_id',
                 $errors
             ),
         ];
@@ -488,6 +508,22 @@ final class BillingInputValidator
             return 0;
         }
         return $value;
+    }
+
+    /** @param array<string,mixed> $data @param array<string,list<string>> $errors */
+    private function optionalPositiveInt(
+        array $data,
+        string $field,
+        array &$errors,
+    ): ?int {
+        if (
+            !array_key_exists($field, $data)
+            || $data[$field] === null
+            || $data[$field] === ''
+        ) {
+            return null;
+        }
+        return $this->positiveInt($data, $field, $errors);
     }
 
     /** @param array<string,mixed> $data @param array<string,list<string>> $errors */

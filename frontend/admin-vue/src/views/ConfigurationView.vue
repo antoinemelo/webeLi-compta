@@ -27,13 +27,14 @@ const today = new Date().toISOString().slice(0, 10);
 const requestedReferenceSection = String(route.query.section || 'treasury');
 type ReferenceSection =
   | 'treasury'
+  | 'currencies'
   | 'contacts'
   | 'vat'
   | 'payroll'
   | 'journals'
   | 'exercises';
 const referenceSections: ReferenceSection[] = [
-  'treasury', 'contacts', 'vat', 'payroll', 'journals', 'exercises'
+  'treasury', 'currencies', 'contacts', 'vat', 'payroll', 'journals', 'exercises'
 ];
 const referenceSection = ref<ReferenceSection>(
   referenceSections.includes(requestedReferenceSection as ReferenceSection)
@@ -159,6 +160,28 @@ const treasuryDraft = reactive({
   accounting_multiplier: 1 as -1 | 1,
   active: true
 });
+const currencyDraft = reactive({ currency: 'EUR', active: true });
+const exchangeRateDraft = reactive({
+  source_currency: 'EUR',
+  rate_date: today,
+  numerator: 100,
+  denominator: 100,
+  source: '',
+  verified_on: today,
+  active: true
+});
+const exchangeMappingDraft = reactive({
+  realized_gain_account_id: 0,
+  realized_loss_account_id: 0,
+  unrealized_gain_account_id: 0,
+  unrealized_loss_account_id: 0
+});
+const exchangeMappingFields = [
+  ['realized_gain_account_id', 'Gain réalisé'],
+  ['realized_loss_account_id', 'Perte réalisée'],
+  ['unrealized_gain_account_id', 'Gain latent'],
+  ['unrealized_loss_account_id', 'Perte latente']
+] as const;
 const journalDraft = reactive({
   id: 0,
   version: 0,
@@ -263,6 +286,9 @@ watch(
     payrollMappingFields.forEach(([key]) => {
       payrollSettings.mapping[key] = Number(value.payroll.mapping?.[key] || 0);
     });
+    if (value.currencies.mapping) {
+      Object.assign(exchangeMappingDraft, value.currencies.mapping);
+    }
   },
   { deep: true }
 );
@@ -526,6 +552,21 @@ async function saveTreasuryAccount(): Promise<void> {
   await store.saveTreasuryAccount({ ...treasuryDraft });
   resetTreasuryDraft();
   notifications.push('Compte de trésorerie enregistré.', 'success');
+}
+
+async function saveCurrency(): Promise<void> {
+  await store.saveCurrency({ ...currencyDraft });
+  notifications.push('Devise du dossier enregistrée.', 'success');
+}
+
+async function saveExchangeRate(): Promise<void> {
+  await store.saveExchangeRate({ ...exchangeRateDraft });
+  notifications.push('Taux daté et sourcé enregistré.', 'success');
+}
+
+async function saveExchangeMapping(): Promise<void> {
+  await store.saveExchangeMapping({ ...exchangeMappingDraft });
+  notifications.push('Comptes de différences de change enregistrés.', 'success');
 }
 
 function resetJournalDraft(): void {
@@ -974,6 +1015,13 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           </button>
           <button
             type="button"
+            :class="{ active: referenceSection === 'currencies' }"
+            @click="referenceSection = 'currencies'"
+          >
+            Devises et change
+          </button>
+          <button
+            type="button"
             :class="{ active: referenceSection === 'contacts' }"
             @click="referenceSection = 'contacts'"
           >
@@ -1113,6 +1161,83 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               description="Créez le premier compte et liez-le au grand livre."
             />
           </article>
+        </template>
+
+        <template v-else-if="managedReferences && referenceSection === 'currencies'">
+          <article class="panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Devise fonctionnelle {{ managedReferences.currencies.base_currency }}</p>
+                <h2>Devises autorisées</h2>
+              </div>
+            </div>
+            <form v-if="managedReferences.capabilities.currencies" class="configuration-grid" @submit.prevent="saveCurrency">
+              <label>Code ISO
+                <input v-model="currencyDraft.currency" maxlength="3" required>
+              </label>
+              <label class="checkbox-field">
+                <input v-model="currencyDraft.active" type="checkbox"> Devise active
+              </label>
+              <button class="button primary" type="submit" :disabled="store.saving">Enregistrer</button>
+            </form>
+            <ul class="summary-list">
+              <li v-for="item in managedReferences.currencies.currencies" :key="item.code">
+                <strong>{{ item.code }}</strong>
+                <span>{{ item.is_base ? 'Devise de base' : item.active ? 'Active' : 'Inactive' }}</span>
+              </li>
+            </ul>
+          </article>
+
+          <form v-if="managedReferences.capabilities.currencies" class="panel configuration-form" @submit.prevent="saveExchangeRate">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Sans flottants</p><h2>Nouveau taux daté</h2></div>
+            </div>
+            <div class="configuration-grid">
+              <label>Devise source
+                <select v-model="exchangeRateDraft.source_currency" required>
+                  <option v-for="item in managedReferences.currencies.currencies.filter((entry) => !entry.is_base && entry.active)" :key="item.code" :value="item.code">{{ item.code }}</option>
+                </select>
+              </label>
+              <label>Date du taux<input v-model="exchangeRateDraft.rate_date" type="date" required></label>
+              <label>Numérateur<input v-model.number="exchangeRateDraft.numerator" type="number" min="1" required></label>
+              <label>Dénominateur<input v-model.number="exchangeRateDraft.denominator" type="number" min="1" required></label>
+              <label>Source<input v-model="exchangeRateDraft.source" placeholder="Banque, publication ou saisie contrôlée" required></label>
+              <label>Vérifié le<input v-model="exchangeRateDraft.verified_on" type="date" required></label>
+            </div>
+            <p class="form-help">Le ratio signifie : centimes {{ managedReferences.currencies.base_currency }} par centime de la devise source.</p>
+            <button class="button primary" type="submit" :disabled="store.saving">Ajouter le taux</button>
+          </form>
+
+          <article class="panel">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Date</th><th>Paire</th><th>Ratio exact</th><th>Source</th></tr></thead>
+                <tbody>
+                  <tr v-for="rate in managedReferences.currencies.rates" :key="rate.id">
+                    <td>{{ rate.rate_date }}</td>
+                    <td>{{ rate.source_currency }}/{{ rate.target_currency }}</td>
+                    <td>{{ rate.numerator }}/{{ rate.denominator }}</td>
+                    <td>{{ rate.source }}<br><small>Vérifié le {{ rate.verified_on }}</small></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+
+          <form v-if="managedReferences.capabilities.currencies" class="panel configuration-form" @submit.prevent="saveExchangeMapping">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Grand livre unique</p><h2>Comptes des différences de change</h2></div>
+            </div>
+            <div class="configuration-grid">
+              <label v-for="field in exchangeMappingFields" :key="field[0]">{{ field[1] }}
+                <select v-model.number="exchangeMappingDraft[field[0]]" required>
+                  <option :value="0">Choisir…</option>
+                  <option v-for="account in managedReferences.currencies.accounts" :key="account.id" :value="account.id">{{ account.number }} — {{ account.label }}</option>
+                </select>
+              </label>
+            </div>
+            <button class="button primary" type="submit" :disabled="store.saving">Enregistrer les comptes</button>
+          </form>
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'contacts'">

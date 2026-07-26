@@ -268,6 +268,25 @@ export type ManagedReferencesPayload = {
       version: number;
     }>;
   };
+  currencies: {
+    base_currency: string;
+    currencies: Array<{
+      code: string; active: boolean; is_base: boolean; version: number;
+    }>;
+    rates: Array<{
+      id: number; source_currency: string; target_currency: string;
+      rate_date: string; numerator: number; denominator: number;
+      source: string; verified_on: string; active: boolean; version: number;
+    }>;
+    mapping: null | {
+      realized_gain_account_id: number;
+      realized_loss_account_id: number;
+      unrealized_gain_account_id: number;
+      unrealized_loss_account_id: number;
+      version: number;
+    };
+    accounts: Array<{ id: number; number: string; label: string }>;
+  };
   access: {
     roles: Array<{ id: number; code: string; label: string }>;
     users: Array<{
@@ -285,6 +304,7 @@ export type ManagedReferencesPayload = {
     payroll: boolean;
     treasury: boolean;
     accounting_setup: boolean;
+    currencies: boolean;
     access: boolean;
   };
 };
@@ -533,6 +553,15 @@ export type AccountingWorkspace = {
       debit_centimes: number;
       credit_centimes: number;
       solde_centimes: number;
+      devise_origine: string;
+      montant_origine_centimes: number | null;
+      devise_base: string;
+      taux_change_numerateur: number | null;
+      taux_change_denominateur: number | null;
+      taux_change_date: string;
+      taux_change_source: string;
+      montant_base_centimes: number | null;
+      ecart_arrondi_centimes: number;
     }>;
     account: {
       id: number;
@@ -670,6 +699,12 @@ export type AccountingWorkspace = {
     }>;
     definition: string;
   };
+  exchange_revaluations: Array<{
+    id: number; date: string; status: 'comptabilisee' | 'contre_passee';
+    entry_id: number; entry_number: string;
+    reversal_entry_id: number | null; reversal_number: string;
+    item_count: number; net_difference_cents: number;
+  }>;
   tax_file: {
     status: 'preparatoire'; official_declaration: false; disclaimer: string;
     period: { start_date: string; end_date: string };
@@ -964,6 +999,14 @@ export type BillingDocument = {
   net_cents: number;
   vat_cents: number;
   gross_cents: number;
+  base_currency: string;
+  net_base_cents: number;
+  vat_base_cents: number;
+  gross_base_cents: number;
+  open_base_cents: number;
+  exchange_rate: {
+    numerator: number; denominator: number; date: string; source: string;
+  };
   allocated_cents: number;
   open_cents: number;
   reminder_count: number;
@@ -1090,6 +1133,14 @@ export type BillingPayload = {
     }>;
     exercises: Array<{ id: number; label: string }>;
     journals: Array<{ id: number; code: string; label: string }>;
+    currencies: Array<{
+      code: string; active: boolean; is_base: boolean; version: number;
+    }>;
+    exchange_rates: Array<{
+      id: number; source_currency: string; target_currency: string;
+      rate_date: string; numerator: number; denominator: number;
+      source: string; verified_on: string; active: boolean; version: number;
+    }>;
   };
   capabilities: {
     manage: boolean;
@@ -1110,6 +1161,9 @@ export type BillingPayment = {
   amount_cents: number;
   allocated_cents: number;
   unallocated_cents: number;
+  amount_base_cents: number;
+  unallocated_base_cents: number;
+  base_currency: string;
   currency: string;
   reference: string;
   status: string;

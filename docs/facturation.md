@@ -1,5 +1,10 @@
 # Facturation, contacts et échéancier
 
+Les ventes, achats, paiements et lettrages acceptent les devises activées pour
+le dossier. Le montant original et sa conversion figée sont affichés ensemble ;
+les gains ou pertes réalisés proviennent exclusivement du lettrage. Voir
+[`multidevise.md`](multidevise.md).
+
 L’espace Vue `/app/facturation` est propre au dossier sélectionné. Il sépare
 les ventes, achats, récurrences, contacts et échéancier sans créer de registre
 ou de moteur parallèle. L’ancienne route `/facturation` redirige vers Vue.

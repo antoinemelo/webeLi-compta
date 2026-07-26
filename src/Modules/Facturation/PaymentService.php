@@ -5,6 +5,7 @@ namespace Compta\Modules\Facturation;
 
 use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Compta\EntryService;
+use Compta\Modules\Devises\ExchangeRateService;
 use Compta\Modules\Tva\VatCalculator;
 use Compta\Modules\Tva\VatLineService;
 use PDO;
@@ -14,6 +15,7 @@ final class PaymentService
 {
     private bool $transactionActive = false;
     private VatLineService $vat;
+    private ExchangeRateService $exchange;
 
     public function __construct(
         private readonly PDO $pdo,
@@ -21,6 +23,7 @@ final class PaymentService
         private readonly EntryService $entries,
     ) {
         $this->vat = new VatLineService($pdo, $audit);
+        $this->exchange = new ExchangeRateService($pdo, $audit);
     }
 
     public function create(
@@ -35,13 +38,21 @@ final class PaymentService
         ?int $actorId = null,
         ?int $bankLineId = null,
         string $currency = 'CHF',
+        ?int $exchangeRateId = null,
     ): int {
         $currency = strtoupper(trim($currency));
+        if ($currency === '') {
+            $stmt = $this->pdo->prepare(
+                'SELECT monnaie FROM dossiers WHERE id = ? AND organisation_id = ?'
+            );
+            $stmt->execute([$dossierId, $organisationId]);
+            $currency = strtoupper((string) $stmt->fetchColumn());
+        }
         if (
             !in_array($direction, ['encaissement', 'decaissement'], true)
             || !$this->validDate($date)
             || $amountCents <= 0
-            || !in_array($currency, ['CHF', 'EUR'], true)
+            || preg_match('/^[A-Z]{3}$/', $currency) !== 1
         ) {
             throw new BillingException('Paiement invalide.');
         }
@@ -56,7 +67,8 @@ final class PaymentService
             $treasuryAccountId,
             $actorId,
             $bankLineId,
-            $currency
+            $currency,
+            $exchangeRateId
         ): int {
             $this->assertPaymentScope(
                 $organisationId,
@@ -73,17 +85,33 @@ final class PaymentService
                     $amountCents
                 );
             }
+            $rate = $this->exchange->snapshot(
+                $organisationId,
+                $dossierId,
+                $currency,
+                $date,
+                $exchangeRateId
+            );
+            $baseAmount = ExchangeRateService::convert(
+                $amountCents,
+                $rate['numerator'],
+                $rate['denominator']
+            );
             $stmt = $this->pdo->prepare(
                 'INSERT INTO paiements
                  (organisation_id, dossier_id, contact_id, sens, date_paiement,
                   montant_centimes, monnaie, reference, compte_tresorerie_id,
-                  ligne_bancaire_id, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                  ligne_bancaire_id, cree_par, devise_base,
+                  taux_change_numerateur, taux_change_denominateur,
+                  taux_change_date, taux_change_source, montant_base_centimes)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $contactId, $direction, $date,
                 $amountCents, $currency, trim($reference), $treasuryAccountId,
                 $bankLineId, $actorId,
+                $rate['base_currency'], $rate['numerator'], $rate['denominator'],
+                $rate['rate_date'], $rate['source'], $baseAmount,
             ]);
             $id = (int) $this->pdo->lastInsertId();
             $this->audit->log(
@@ -133,6 +161,14 @@ final class PaymentService
             ) {
                 throw new BillingException('Paiement et facture incompatibles.');
             }
+            if (
+                $payment['ecriture_id'] !== null
+                && (string) $payment['monnaie'] !== (string) $payment['devise_base']
+            ) {
+                throw new BillingException(
+                    'Lettrez un paiement en devise avant sa comptabilisation.'
+                );
+            }
             $this->assertAllocationCapacity(
                 'paiement_id',
                 $paymentId,
@@ -141,6 +177,19 @@ final class PaymentService
                 abs((int) $document['total_brut_centimes']),
                 $amountCents
             );
+            $documentBase = ExchangeRateService::convert(
+                $amountCents,
+                (int) $document['taux_change_numerateur'],
+                (int) $document['taux_change_denominateur']
+            );
+            $paymentBase = ExchangeRateService::convert(
+                $amountCents,
+                (int) $payment['taux_change_numerateur'],
+                (int) $payment['taux_change_denominateur']
+            );
+            $realized = $payment['sens'] === 'encaissement'
+                ? $paymentBase - $documentBase
+                : $documentBase - $paymentBase;
             $allocationId = $this->insertAllocation(
                 $organisationId,
                 $dossierId,
@@ -148,7 +197,10 @@ final class PaymentService
                 null,
                 $documentId,
                 $amountCents,
-                $actorId
+                $actorId,
+                $documentBase,
+                $paymentBase,
+                $realized
             );
             $this->recordVatAllocation(
                 $organisationId,
@@ -189,6 +241,7 @@ final class PaymentService
                 $expected === ''
                 || $document['type'] !== $expected
                 || (int) $document['contact_id'] !== (int) $credit['contact_id']
+                || (string) $document['monnaie'] !== (string) $credit['monnaie']
                 || !in_array($credit['statut'], ['emis', 'comptabilise'], true)
             ) {
                 throw new BillingException('Avoir et facture incompatibles.');
@@ -201,6 +254,11 @@ final class PaymentService
                 abs((int) $document['total_brut_centimes']),
                 $amountCents
             );
+            $documentBase = ExchangeRateService::convert(
+                $amountCents,
+                (int) $document['taux_change_numerateur'],
+                (int) $document['taux_change_denominateur']
+            );
             return $this->insertAllocation(
                 $organisationId,
                 $dossierId,
@@ -208,7 +266,9 @@ final class PaymentService
                 $creditId,
                 $documentId,
                 $amountCents,
-                $actorId
+                $actorId,
+                $documentBase,
+                $documentBase
             );
         }, true);
     }
@@ -238,8 +298,60 @@ final class PaymentService
             if ($payment['compte_tresorerie_id'] === null || $payment['statut'] !== 'valide') {
                 throw new BillingException('Compte de trésorerie absent ou paiement annulé.');
             }
-            $amount = (int) $payment['montant_centimes'];
+            $amount = (int) $payment['montant_base_centimes'];
             $incoming = $payment['sens'] === 'encaissement';
+            $postingLines = [
+                $this->paymentLine(
+                    $incoming
+                        ? (int) $payment['compte_tresorerie_id']
+                        : $collectiveAccountId,
+                    $amount,
+                    true,
+                    $payment
+                ),
+                $this->paymentLine(
+                    $incoming
+                        ? $collectiveAccountId
+                        : (int) $payment['compte_tresorerie_id'],
+                    $amount,
+                    false,
+                    $payment
+                ),
+            ];
+            $differences = $this->pdo->prepare(
+                "SELECT COALESCE(SUM(ecart_change_realise_centimes), 0)
+                 FROM allocations
+                 WHERE paiement_id = ? AND statut = 'valide'"
+            );
+            $differences->execute([$paymentId]);
+            $realized = (int) $differences->fetchColumn();
+            if ($realized !== 0) {
+                $mapping = $this->exchange->mapping($organisationId, $dossierId);
+                if ($realized > 0) {
+                    $postingLines[] = [
+                        'compte_id' => $collectiveAccountId,
+                        'libelle' => 'Gain de change réalisé',
+                        'debit_centimes' => $realized,
+                    ];
+                    $postingLines[] = [
+                        'compte_id' => $mapping['realized_gain'],
+                        'libelle' => 'Gain de change réalisé',
+                        'credit_centimes' => $realized,
+                    ];
+                } else {
+                    $loss = abs($realized);
+                    $postingLines[] = [
+                        'compte_id' => $mapping['realized_loss'],
+                        'libelle' => 'Perte de change réalisée',
+                        'debit_centimes' => $loss,
+                    ];
+                    $postingLines[] = [
+                        'compte_id' => $collectiveAccountId,
+                        'libelle' => 'Perte de change réalisée',
+                        'credit_centimes' => $loss,
+                    ];
+                }
+            }
             $entryId = $this->entries->postGenerated([
                 'organisation_id' => $organisationId,
                 'dossier_id' => $dossierId,
@@ -251,25 +363,15 @@ final class PaymentService
                 'source_type' => 'paiement',
                 'source_id' => (string) $paymentId,
                 'source_action' => 'comptabiliser',
-                'lignes' => [
-                    [
-                        'compte_id' => $incoming
-                            ? (int) $payment['compte_tresorerie_id']
-                            : $collectiveAccountId,
-                        'libelle' => 'Paiement',
-                        'debit_centimes' => $amount,
-                    ],
-                    [
-                        'compte_id' => $incoming
-                            ? $collectiveAccountId
-                            : (int) $payment['compte_tresorerie_id'],
-                        'libelle' => 'Paiement',
-                        'credit_centimes' => $amount,
-                    ],
-                ],
+                'lignes' => $postingLines,
             ], 'paiement:' . $paymentId . ':comptabiliser', $actorId);
             $this->pdo->prepare(
                 'UPDATE paiements SET ecriture_id = ? WHERE id = ? AND ecriture_id IS NULL'
+            )->execute([$entryId, $paymentId]);
+            $this->pdo->prepare(
+                "UPDATE allocations SET ecriture_ecart_change_id = ?
+                 WHERE paiement_id = ? AND statut = 'valide'
+                   AND ecart_change_realise_centimes <> 0"
             )->execute([$entryId, $paymentId]);
             $this->audit->log(
                 'facturation.paiement_comptabilise',
@@ -356,6 +458,11 @@ final class PaymentService
             }
             if ($allocation['statut'] === 'annule') {
                 return;
+            }
+            if ($allocation['ecriture_ecart_change_id'] !== null) {
+                throw new BillingException(
+                    'Contre-passez le paiement comptabilisé avant de supprimer ce lettrage.'
+                );
             }
             $open = $this->pdo->prepare(
                 "SELECT 1 FROM periodes
@@ -549,16 +656,23 @@ final class PaymentService
         int $documentId,
         int $amountCents,
         ?int $actorId,
+        int $documentBaseCents = 0,
+        int $paymentBaseCents = 0,
+        int $realizedExchangeCents = 0,
     ): int {
         $stmt = $this->pdo->prepare(
             'INSERT INTO allocations
              (organisation_id, dossier_id, paiement_id, avoir_id,
-              document_id, montant_centimes, cree_par)
-             VALUES (?, ?, ?, ?, ?, ?, ?)'
+              document_id, montant_centimes, cree_par,
+              montant_document_base_centimes,
+              montant_paiement_base_centimes,
+              ecart_change_realise_centimes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
             $organisationId, $dossierId, $paymentId, $creditId,
             $documentId, $amountCents, $actorId,
+            $documentBaseCents, $paymentBaseCents, $realizedExchangeCents,
         ]);
         $id = (int) $this->pdo->lastInsertId();
         $this->audit->log(
@@ -640,6 +754,35 @@ final class PaymentService
                 );
             }
         }
+    }
+
+    /**
+     * @param array<string,mixed> $payment
+     * @return array<string,mixed>
+     */
+    private function paymentLine(
+        int $accountId,
+        int $baseAmount,
+        bool $debit,
+        array $payment,
+    ): array {
+        $baseSigned = $debit ? $baseAmount : -$baseAmount;
+        $original = (int) $payment['montant_centimes'];
+        $line = [
+            'compte_id' => $accountId,
+            'libelle' => 'Paiement',
+            'devise_origine' => (string) $payment['monnaie'],
+            'montant_origine_centimes' => $debit ? $original : -$original,
+            'devise_base' => (string) $payment['devise_base'],
+            'taux_change_numerateur' => (int) $payment['taux_change_numerateur'],
+            'taux_change_denominateur' => (int) $payment['taux_change_denominateur'],
+            'taux_change_date' => (string) $payment['taux_change_date'],
+            'taux_change_source' => (string) $payment['taux_change_source'],
+            'montant_base_centimes' => $baseSigned,
+            'ecart_arrondi_centimes' => 0,
+        ];
+        $line[$debit ? 'debit_centimes' : 'credit_centimes'] = $baseAmount;
+        return $line;
     }
 
     private function validDate(string $date): bool

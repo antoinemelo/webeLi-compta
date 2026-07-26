@@ -30,6 +30,11 @@ const reportStart = ref('');
 const reportEnd = ref('');
 const selectedVatStatementId = ref(0);
 const vatPeriod = reactive({ start: '', end: '' });
+const exchangeRevaluation = reactive({
+  date: '',
+  journal_id: 0,
+  idempotency_key: ''
+});
 const taxAdjustment = reactive({
   label: '',
   nature: 'information',
@@ -187,6 +192,12 @@ watch(
     if (!entry.journal_id && value.catalog.journals.length) {
       entry.journal_id = value.catalog.journals[0].id;
     }
+    if (!exchangeRevaluation.date) {
+      exchangeRevaluation.date = value.exercise.end_date;
+    }
+    if (!exchangeRevaluation.journal_id && value.catalog.journals.length) {
+      exchangeRevaluation.journal_id = value.catalog.journals[0].id;
+    }
   },
   { deep: true }
 );
@@ -244,10 +255,10 @@ function centsToInput(cents: number): string {
   return `${sign}${Math.floor(absolute / 100)}.${String(absolute % 100).padStart(2, '0')}`;
 }
 
-function formatMoney(cents: number): string {
+function formatMoney(cents: number, displayCurrency = currency.value): string {
   const sign = cents < 0 ? '−' : '';
   const absolute = Math.abs(cents);
-  return `${sign}${currency.value} ${Math.floor(absolute / 100).toLocaleString('fr-CH')}.${String(absolute % 100).padStart(2, '0')}`;
+  return `${sign}${displayCurrency} ${Math.floor(absolute / 100).toLocaleString('fr-CH')}.${String(absolute % 100).padStart(2, '0')}`;
 }
 
 function addLine(): void {
@@ -562,6 +573,25 @@ async function togglePeriod(period: AccountingWorkspace['closing']['periods'][nu
   }, status === 'fermee' ? 'Période fermée.' : 'Période rouverte.');
 }
 
+async function postExchangeRevaluation(): Promise<void> {
+  if (!exchangeRevaluation.idempotency_key) {
+    exchangeRevaluation.idempotency_key = crypto.randomUUID();
+  }
+  await mutateAndReload('/accounting/exchange-revaluations', {
+    exercise_id: exerciseId.value,
+    journal_id: exchangeRevaluation.journal_id,
+    date: exchangeRevaluation.date,
+    idempotency_key: exchangeRevaluation.idempotency_key
+  }, 'Réévaluation de change comptabilisée.');
+}
+
+async function reverseExchangeRevaluation(id: number): Promise<void> {
+  await mutateAndReload('/accounting/exchange-revaluations/reverse', {
+    revaluation_id: id,
+    date: exchangeRevaluation.date
+  }, 'Réévaluation de change contre-passée.');
+}
+
 async function createTaxAdjustment(): Promise<void> {
   if (!taxAdjustment.idempotency_key) {
     taxAdjustment.idempotency_key = crypto.randomUUID();
@@ -762,9 +792,10 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             <span><small>Solde naturel</small><strong>{{ formatMoney(workspace.ledger.solde_centimes) }}</strong></span>
           </div>
           <div v-if="ledgerMode === 'list'" class="table-scroll">
-            <table><thead><tr><th>Date</th><th>N°</th><th>Journal</th><th>Libellé</th><th>Débit</th><th>Crédit</th><th>Solde</th></tr></thead>
+            <table><thead><tr><th>Date</th><th>N°</th><th>Journal</th><th>Libellé</th><th>Montant d’origine et taux</th><th>Débit</th><th>Crédit</th><th>Solde</th></tr></thead>
               <tbody><tr v-for="row in workspace.ledger.items" :key="`${row.ecriture_id}-${row.date_comptable}-${row.libelle}`">
                 <td>{{ row.date_comptable }}</td><td>{{ row.numero }}</td><td>{{ row.journal }}</td><td>{{ row.libelle }}</td>
+                <td><template v-if="row.devise_origine">{{ formatMoney(Math.abs(row.montant_origine_centimes || 0), row.devise_origine) }}<br><small>{{ row.taux_change_date }} · {{ row.taux_change_numerateur }}/{{ row.taux_change_denominateur }} · {{ row.taux_change_source }}</small></template><span v-else>—</span></td>
                 <td>{{ row.debit_centimes ? formatMoney(row.debit_centimes) : '—' }}</td>
                 <td>{{ row.credit_centimes ? formatMoney(row.credit_centimes) : '—' }}</td>
                 <td>{{ formatMoney(row.solde_centimes) }}</td>
@@ -983,6 +1014,38 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         <section class="panel">
           <h3>Contrôles documentés</h3>
           <form v-for="control in workspace.closing.manual_controls" :key="control.code" class="closing-control" @submit.prevent="saveClosingControl(control)"><strong>{{ control.label }}</strong><select v-model="control.status" :disabled="!workspace.capabilities.setup"><option value="a_faire">À faire</option><option value="termine">Terminé</option><option value="non_applicable">Non applicable</option></select><input v-model="control.note" :disabled="!workspace.capabilities.setup" placeholder="Note de revue"><button class="button small" :disabled="!workspace.capabilities.setup">Enregistrer</button></form>
+        </section>
+        <section class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Action explicite et réversible</p>
+              <h3>Réévaluation des postes en devises</h3>
+            </div>
+          </div>
+          <p>Les factures ouvertes sont valorisées au dernier taux daté disponible. Le taux, sa source et l’écart latent restent attachés à l’écriture.</p>
+          <form class="form-grid three" @submit.prevent="postExchangeRevaluation">
+            <label>Date de clôture<input v-model="exchangeRevaluation.date" type="date" required></label>
+            <label>Journal
+              <select v-model.number="exchangeRevaluation.journal_id" required>
+                <option :value="0">Choisir…</option>
+                <option v-for="journal in workspace.catalog.journals" :key="journal.id" :value="journal.id">{{ journal.code }} — {{ journal.label }}</option>
+              </select>
+            </label>
+            <button class="button primary" :disabled="!workspace.capabilities.validate">Comptabiliser la réévaluation</button>
+          </form>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Date</th><th>Écriture</th><th>Postes</th><th>Écart net</th><th>Statut</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="item in workspace.exchange_revaluations" :key="item.id">
+                  <td>{{ item.date }}</td><td>{{ item.entry_number }}</td><td>{{ item.item_count }}</td>
+                  <td>{{ formatMoney(item.net_difference_cents) }}</td><td>{{ item.status }}</td>
+                  <td><button v-if="item.status === 'comptabilisee'" class="button small danger" type="button" :disabled="!workspace.capabilities.validate" @click="reverseExchangeRevaluation(item.id)">Contre-passer</button></td>
+                </tr>
+                <tr v-if="!workspace.exchange_revaluations.length"><td colspan="6">Aucune réévaluation comptabilisée.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </section>
         <section class="panel">
           <div class="section-heading"><h3>Périodes</h3><button class="button secondary" :disabled="!workspace.capabilities.export" @click="createArchive('cloture')">Archiver la clôture</button></div>

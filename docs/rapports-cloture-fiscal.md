@@ -1,5 +1,9 @@
 # Rapports, clôture, TVA et dossier fiscal
 
+La clôture comprend la réévaluation explicite et contre-passable des factures
+ouvertes en devises. Le grand livre expose le montant d’origine et le snapshot
+du taux ; les états financiers restent exprimés dans la devise fonctionnelle.
+
 Ce parcours est disponible sous `/app/compta/etats`, `/app/compta/tva`,
 `/app/compta/cloture` et `/app/compta/fiscal`. Il lit le même grand livre
 SQLite que la journalisation, la facturation, les liquidités et les salaires.

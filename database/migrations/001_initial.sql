@@ -28,6 +28,10 @@ CREATE TABLE allocations (
     avoir_id INTEGER REFERENCES documents_financiers(id) ON DELETE RESTRICT,
     document_id INTEGER NOT NULL REFERENCES documents_financiers(id) ON DELETE RESTRICT,
     montant_centimes INTEGER NOT NULL CHECK (montant_centimes > 0),
+    montant_document_base_centimes INTEGER NOT NULL DEFAULT 0,
+    montant_paiement_base_centimes INTEGER NOT NULL DEFAULT 0,
+    ecart_change_realise_centimes INTEGER NOT NULL DEFAULT 0,
+    ecriture_ecart_change_id INTEGER REFERENCES ecritures(id) ON DELETE RESTRICT,
     statut TEXT NOT NULL DEFAULT 'valide' CHECK (statut IN ('valide', 'annule')),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
@@ -404,12 +408,22 @@ CREATE TABLE documents_financiers (
     numero_externe TEXT NOT NULL DEFAULT '',
     date_document TEXT NOT NULL,
     date_echeance TEXT NOT NULL,
-    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (monnaie IN ('CHF', 'EUR')),
+    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (length(monnaie) = 3),
+    devise_base TEXT NOT NULL DEFAULT 'CHF' CHECK (length(devise_base) = 3),
+    taux_change_numerateur INTEGER NOT NULL DEFAULT 1
+        CHECK (taux_change_numerateur > 0),
+    taux_change_denominateur INTEGER NOT NULL DEFAULT 1
+        CHECK (taux_change_denominateur > 0),
+    taux_change_date TEXT NOT NULL DEFAULT '',
+    taux_change_source TEXT NOT NULL DEFAULT 'devise_base',
     adresse_snapshot_json TEXT NOT NULL,
     contact_snapshot_json TEXT NOT NULL,
     total_net_centimes INTEGER NOT NULL DEFAULT 0,
     total_tva_centimes INTEGER NOT NULL DEFAULT 0,
     total_brut_centimes INTEGER NOT NULL DEFAULT 0,
+    total_net_base_centimes INTEGER NOT NULL DEFAULT 0,
+    total_tva_base_centimes INTEGER NOT NULL DEFAULT 0,
+    total_brut_base_centimes INTEGER NOT NULL DEFAULT 0,
     compte_collectif_id INTEGER REFERENCES comptes(id) ON DELETE RESTRICT,
     ecriture_id INTEGER REFERENCES ecritures(id) ON DELETE RESTRICT,
     ecriture_annulation_id INTEGER REFERENCES ecritures(id) ON DELETE RESTRICT,
@@ -528,6 +542,87 @@ CREATE TABLE dossiers (
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     version INTEGER NOT NULL DEFAULT 1,
     UNIQUE (organisation_id, slug)
+);
+
+CREATE TABLE devises_dossier (
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE CASCADE,
+    code TEXT NOT NULL CHECK (length(code) = 3),
+    actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (dossier_id, code)
+);
+
+CREATE TABLE taux_change (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE CASCADE,
+    devise_source TEXT NOT NULL CHECK (length(devise_source) = 3),
+    devise_cible TEXT NOT NULL CHECK (length(devise_cible) = 3),
+    date_taux TEXT NOT NULL,
+    numerateur INTEGER NOT NULL CHECK (numerateur > 0),
+    denominateur INTEGER NOT NULL CHECK (denominateur > 0),
+    source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+    verifie_le TEXT NOT NULL,
+    actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    CHECK (devise_source <> devise_cible),
+    UNIQUE (dossier_id, devise_source, devise_cible, date_taux, source)
+);
+
+CREATE TABLE parametres_change (
+    dossier_id INTEGER PRIMARY KEY REFERENCES dossiers(id) ON DELETE CASCADE,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    compte_gain_realise_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_perte_realisee_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_gain_latent_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_perte_latente_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
+    modifie_le TEXT NOT NULL DEFAULT (datetime('now')),
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE reevaluations_change (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    exercice_id INTEGER NOT NULL REFERENCES exercices(id) ON DELETE RESTRICT,
+    journal_id INTEGER NOT NULL REFERENCES journaux(id) ON DELETE RESTRICT,
+    date_reevaluation TEXT NOT NULL,
+    ecriture_id INTEGER NOT NULL UNIQUE REFERENCES ecritures(id) ON DELETE RESTRICT,
+    ecriture_contrepassation_id INTEGER UNIQUE REFERENCES ecritures(id) ON DELETE RESTRICT,
+    statut TEXT NOT NULL DEFAULT 'comptabilisee'
+        CHECK (statut IN ('comptabilisee', 'contre_passee')),
+    cle_idempotence TEXT NOT NULL,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    contrepassee_le TEXT,
+    contrepassee_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    UNIQUE (dossier_id, cle_idempotence)
+);
+
+CREATE TABLE lignes_reevaluation_change (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reevaluation_id INTEGER NOT NULL REFERENCES reevaluations_change(id) ON DELETE CASCADE,
+    document_id INTEGER NOT NULL REFERENCES documents_financiers(id) ON DELETE RESTRICT,
+    devise TEXT NOT NULL CHECK (length(devise) = 3),
+    montant_ouvert_centimes INTEGER NOT NULL CHECK (montant_ouvert_centimes > 0),
+    valeur_historique_base_centimes INTEGER NOT NULL,
+    valeur_reevaluee_base_centimes INTEGER NOT NULL,
+    ecart_latent_centimes INTEGER NOT NULL,
+    taux_change_numerateur INTEGER NOT NULL CHECK (taux_change_numerateur > 0),
+    taux_change_denominateur INTEGER NOT NULL CHECK (taux_change_denominateur > 0),
+    taux_change_date TEXT NOT NULL,
+    taux_change_source TEXT NOT NULL,
+    UNIQUE (reevaluation_id, document_id)
 );
 
 CREATE TABLE echeances_amortissement (
@@ -924,6 +1019,15 @@ CREATE TABLE lignes_ecriture (
     libelle TEXT NOT NULL DEFAULT '',
     debit_centimes INTEGER NOT NULL DEFAULT 0 CHECK (debit_centimes >= 0),
     credit_centimes INTEGER NOT NULL DEFAULT 0 CHECK (credit_centimes >= 0),
+    devise_origine TEXT NOT NULL DEFAULT '',
+    montant_origine_centimes INTEGER,
+    devise_base TEXT NOT NULL DEFAULT '',
+    taux_change_numerateur INTEGER,
+    taux_change_denominateur INTEGER,
+    taux_change_date TEXT NOT NULL DEFAULT '',
+    taux_change_source TEXT NOT NULL DEFAULT '',
+    montant_base_centimes INTEGER,
+    ecart_arrondi_centimes INTEGER NOT NULL DEFAULT 0,
     ordre INTEGER NOT NULL DEFAULT 0,
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     CHECK (
@@ -1070,7 +1174,15 @@ CREATE TABLE paiements (
     sens TEXT NOT NULL CHECK (sens IN ('encaissement', 'decaissement')),
     date_paiement TEXT NOT NULL,
     montant_centimes INTEGER NOT NULL CHECK (montant_centimes > 0),
-    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (monnaie IN ('CHF', 'EUR')),
+    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (length(monnaie) = 3),
+    devise_base TEXT NOT NULL DEFAULT 'CHF' CHECK (length(devise_base) = 3),
+    taux_change_numerateur INTEGER NOT NULL DEFAULT 1
+        CHECK (taux_change_numerateur > 0),
+    taux_change_denominateur INTEGER NOT NULL DEFAULT 1
+        CHECK (taux_change_denominateur > 0),
+    taux_change_date TEXT NOT NULL DEFAULT '',
+    taux_change_source TEXT NOT NULL DEFAULT 'devise_base',
+    montant_base_centimes INTEGER NOT NULL DEFAULT 0,
     reference TEXT NOT NULL DEFAULT '',
     compte_tresorerie_id INTEGER REFERENCES comptes(id) ON DELETE RESTRICT,
     ecriture_id INTEGER REFERENCES ecritures(id) ON DELETE RESTRICT,
@@ -2035,6 +2147,61 @@ CREATE UNIQUE INDEX uq_rubriques_code
 
 -- TRIGGERS
 
+CREATE TRIGGER documents_financiers_base_insert
+AFTER INSERT ON documents_financiers
+WHEN NEW.monnaie = NEW.devise_base
+ AND NEW.taux_change_numerateur = 1
+ AND NEW.taux_change_denominateur = 1
+BEGIN
+    UPDATE documents_financiers
+    SET total_net_base_centimes = NEW.total_net_centimes,
+        total_tva_base_centimes = NEW.total_tva_centimes,
+        total_brut_base_centimes = NEW.total_brut_centimes
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER documents_financiers_base_update
+AFTER UPDATE OF total_net_centimes, total_tva_centimes, total_brut_centimes
+ON documents_financiers
+WHEN NEW.monnaie = NEW.devise_base
+ AND NEW.taux_change_numerateur = 1
+ AND NEW.taux_change_denominateur = 1
+BEGIN
+    UPDATE documents_financiers
+    SET total_net_base_centimes = NEW.total_net_centimes,
+        total_tva_base_centimes = NEW.total_tva_centimes,
+        total_brut_base_centimes = NEW.total_brut_centimes
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER paiements_base_insert
+AFTER INSERT ON paiements
+WHEN NEW.monnaie = NEW.devise_base
+ AND NEW.taux_change_numerateur = 1
+ AND NEW.taux_change_denominateur = 1
+BEGIN
+    UPDATE paiements
+    SET montant_base_centimes = NEW.montant_centimes
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER allocations_base_insert
+AFTER INSERT ON allocations
+WHEN NEW.montant_document_base_centimes = 0
+BEGIN
+    UPDATE allocations
+    SET montant_document_base_centimes = NEW.montant_centimes,
+        montant_paiement_base_centimes = NEW.montant_centimes
+    WHERE id = NEW.id
+      AND EXISTS (
+        SELECT 1 FROM documents_financiers d
+        WHERE d.id = NEW.document_id
+          AND d.monnaie = d.devise_base
+          AND d.taux_change_numerateur = 1
+          AND d.taux_change_denominateur = 1
+      );
+END;
+
 CREATE TRIGGER trg_archives_rapports_immutable_delete
 BEFORE DELETE ON archives_rapports_financiers
 BEGIN SELECT RAISE(ABORT, 'archive financière non supprimable'); END;
@@ -2286,6 +2453,11 @@ BEGIN
         OR NEW.date_document <> OLD.date_document
         OR NEW.date_echeance <> OLD.date_echeance
         OR NEW.monnaie <> OLD.monnaie
+        OR NEW.devise_base <> OLD.devise_base
+        OR NEW.taux_change_numerateur <> OLD.taux_change_numerateur
+        OR NEW.taux_change_denominateur <> OLD.taux_change_denominateur
+        OR NEW.taux_change_date <> OLD.taux_change_date
+        OR NEW.taux_change_source <> OLD.taux_change_source
         OR NEW.adresse_snapshot_json <> OLD.adresse_snapshot_json
         OR NEW.contact_snapshot_json <> OLD.contact_snapshot_json
         OR NEW.total_net_centimes <> OLD.total_net_centimes
@@ -2293,6 +2465,21 @@ BEGIN
         OR NEW.total_brut_centimes <> OLD.total_brut_centimes
         OR COALESCE(NEW.compte_collectif_id, 0) <> COALESCE(OLD.compte_collectif_id, 0)
         THEN RAISE(ABORT, 'contenu du document émis immuable') END;
+    SELECT CASE WHEN (
+        NEW.total_net_base_centimes <> OLD.total_net_base_centimes
+        OR NEW.total_tva_base_centimes <> OLD.total_tva_base_centimes
+        OR NEW.total_brut_base_centimes <> OLD.total_brut_base_centimes
+    ) AND NOT (
+        OLD.monnaie = OLD.devise_base
+        AND OLD.taux_change_numerateur = 1
+        AND OLD.taux_change_denominateur = 1
+        AND OLD.total_net_base_centimes = 0
+        AND OLD.total_tva_base_centimes = 0
+        AND OLD.total_brut_base_centimes = 0
+        AND NEW.total_net_base_centimes = OLD.total_net_centimes
+        AND NEW.total_tva_base_centimes = OLD.total_tva_centimes
+        AND NEW.total_brut_base_centimes = OLD.total_brut_centimes
+    ) THEN RAISE(ABORT, 'conversion du document émis immuable') END;
 END;
 
 CREATE TRIGGER trg_documents_historique_delete
@@ -2708,6 +2895,56 @@ BEGIN
         SELECT 1 FROM comptes c WHERE c.id = NEW.compte_tresorerie_id
           AND c.organisation_id = NEW.organisation_id AND c.dossier_id = NEW.dossier_id
     ) THEN RAISE(ABORT, 'compte de trésorerie hors scope') END;
+END;
+
+CREATE TRIGGER trg_paiements_snapshot_immutable
+BEFORE UPDATE ON paiements
+WHEN NEW.organisation_id <> OLD.organisation_id
+  OR NEW.dossier_id <> OLD.dossier_id
+  OR NEW.contact_id <> OLD.contact_id
+  OR NEW.sens <> OLD.sens
+  OR NEW.date_paiement <> OLD.date_paiement
+  OR NEW.montant_centimes <> OLD.montant_centimes
+  OR NEW.monnaie <> OLD.monnaie
+  OR NEW.devise_base <> OLD.devise_base
+  OR NEW.taux_change_numerateur <> OLD.taux_change_numerateur
+  OR NEW.taux_change_denominateur <> OLD.taux_change_denominateur
+  OR NEW.taux_change_date <> OLD.taux_change_date
+  OR NEW.taux_change_source <> OLD.taux_change_source
+  OR (
+    NEW.montant_base_centimes <> OLD.montant_base_centimes
+    AND NOT (
+      OLD.montant_base_centimes = 0
+      AND NEW.montant_base_centimes = OLD.montant_centimes
+      AND OLD.monnaie = OLD.devise_base
+    )
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'snapshot du paiement immuable');
+END;
+
+CREATE TRIGGER trg_allocations_change_immutable
+BEFORE UPDATE ON allocations
+WHEN NEW.organisation_id <> OLD.organisation_id
+  OR NEW.dossier_id <> OLD.dossier_id
+  OR COALESCE(NEW.paiement_id, 0) <> COALESCE(OLD.paiement_id, 0)
+  OR COALESCE(NEW.avoir_id, 0) <> COALESCE(OLD.avoir_id, 0)
+  OR NEW.document_id <> OLD.document_id
+  OR NEW.montant_centimes <> OLD.montant_centimes
+  OR (
+    NEW.montant_document_base_centimes <> OLD.montant_document_base_centimes
+    OR NEW.montant_paiement_base_centimes <> OLD.montant_paiement_base_centimes
+    OR NEW.ecart_change_realise_centimes <> OLD.ecart_change_realise_centimes
+  ) AND NOT (
+    OLD.montant_document_base_centimes = 0
+    AND OLD.montant_paiement_base_centimes = 0
+    AND OLD.ecart_change_realise_centimes = 0
+    AND NEW.montant_document_base_centimes = OLD.montant_centimes
+    AND NEW.montant_paiement_base_centimes = OLD.montant_centimes
+    AND NEW.ecart_change_realise_centimes = 0
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'montants du lettrage immuables');
 END;
 
 CREATE TRIGGER trg_periodes_scope_insert

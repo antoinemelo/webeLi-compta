@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace Compta\Modules\Compta;
 
 use Compta\Modules\Tva\VatWorkspaceService;
+use Compta\Modules\Devises\ExchangeRevaluationService;
+use Compta\Modules\Devises\ExchangeRateException;
 
 final class AccountingWorkspaceService
 {
@@ -14,6 +16,7 @@ final class AccountingWorkspaceService
         private readonly FinancialReportingService $financial,
         private readonly VatWorkspaceService $vat,
         private readonly ClosingAndTaxService $closing,
+        private readonly ?ExchangeRevaluationService $revaluations = null,
     ) {
     }
 
@@ -176,7 +179,51 @@ final class AccountingWorkspaceService
             'vat' => $vat,
             'closing' => $closing['closing'],
             'tax_file' => $closing['tax_file'],
+            'exchange_revaluations' => $this->revaluations?->history(
+                $organisationId,
+                $dossierId
+            ) ?? [],
         ];
+    }
+
+    /** @param array<string,mixed> $data */
+    public function postExchangeRevaluation(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        if ($this->revaluations === null) {
+            throw new ExchangeRateException('Service de réévaluation indisponible.');
+        }
+        return $this->revaluations->post(
+            $organisationId,
+            $dossierId,
+            (int) $data['exercise_id'],
+            (int) $data['journal_id'],
+            (string) $data['date'],
+            (string) $data['idempotency_key'],
+            $actorId
+        );
+    }
+
+    /** @param array<string,mixed> $data */
+    public function reverseExchangeRevaluation(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        if ($this->revaluations === null) {
+            throw new ExchangeRateException('Service de réévaluation indisponible.');
+        }
+        return $this->revaluations->reverse(
+            $organisationId,
+            $dossierId,
+            (int) $data['revaluation_id'],
+            (string) $data['date'],
+            $actorId
+        );
     }
 
     public function createVatPeriod(

@@ -13,6 +13,73 @@ use DateTimeImmutable;
 
 final class ConfigurationInputValidator
 {
+    /** @return array{currency:string,active:bool} */
+    public function currency(Request $request): array
+    {
+        $this->rejectScope($request);
+        $data = $request->input();
+        $errors = [];
+        $currency = strtoupper(trim((string) ($data['currency'] ?? '')));
+        if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
+            $errors['currency'][] = 'Code devise ISO requis.';
+        }
+        if (!is_bool($data['active'] ?? null)) {
+            $errors['active'][] = 'État actif explicite requis.';
+        }
+        $this->fail($errors);
+        return ['currency' => $currency, 'active' => (bool) $data['active']];
+    }
+
+    /** @return array<string,mixed> */
+    public function exchangeRate(Request $request): array
+    {
+        $this->rejectScope($request);
+        $data = $request->input();
+        $errors = [];
+        $currency = strtoupper(trim((string) ($data['source_currency'] ?? '')));
+        if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
+            $errors['source_currency'][] = 'Code devise ISO requis.';
+        }
+        foreach (['rate_date', 'verified_on'] as $field) {
+            if (!$this->validDate((string) ($data[$field] ?? ''))) {
+                $errors[$field][] = 'Date AAAA-MM-JJ requise.';
+            }
+        }
+        if (trim((string) ($data['source'] ?? '')) === '') {
+            $errors['source'][] = 'Source du taux requise.';
+        }
+        $result = [
+            'source_currency' => $currency,
+            'rate_date' => (string) ($data['rate_date'] ?? ''),
+            'numerator' => $this->positiveInt($data, 'numerator', $errors),
+            'denominator' => $this->positiveInt($data, 'denominator', $errors),
+            'source' => trim((string) ($data['source'] ?? '')),
+            'verified_on' => (string) ($data['verified_on'] ?? ''),
+            'active' => is_bool($data['active'] ?? null) ? $data['active'] : true,
+        ];
+        $this->fail($errors);
+        return $result;
+    }
+
+    /** @return array<string,int> */
+    public function exchangeMapping(Request $request): array
+    {
+        $this->rejectScope($request);
+        $data = $request->input();
+        $errors = [];
+        $result = [];
+        foreach ([
+            'realized_gain_account_id',
+            'realized_loss_account_id',
+            'unrealized_gain_account_id',
+            'unrealized_loss_account_id',
+        ] as $field) {
+            $result[$field] = $this->positiveInt($data, $field, $errors);
+        }
+        $this->fail($errors);
+        return $result;
+    }
+
     /** @return array<string,mixed> */
     public function identity(Request $request): array
     {

@@ -12,6 +12,7 @@ use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Security\SessionStore;
 use Compta\Modules\Tva\VatException;
+use Compta\Modules\Devises\ExchangeRateException;
 use PDOException;
 
 final class AccountingApiController
@@ -426,6 +427,32 @@ final class AccountingApiController
         ));
     }
 
+    public function postExchangeRevaluation(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.validate');
+        return $this->execute($request, fn (): array => [
+            'id' => $this->workspace->postExchangeRevaluation(
+                $organisationId,
+                $dossierId,
+                $this->validator->exchangeRevaluation($request),
+                $userId
+            ),
+        ]);
+    }
+
+    public function reverseExchangeRevaluation(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.validate');
+        return $this->execute($request, fn (): array => [
+            'entry_id' => $this->workspace->reverseExchangeRevaluation(
+                $organisationId,
+                $dossierId,
+                $this->validator->exchangeRevaluationReversal($request),
+                $userId
+            ),
+        ]);
+    }
+
     public function saveTypes(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
@@ -576,7 +603,7 @@ final class AccountingApiController
     {
         try {
             return ApiResponse::success($request, $callback());
-        } catch (AccountingException|VatException $exception) {
+        } catch (AccountingException|VatException|ExchangeRateException $exception) {
             $message = $exception->getMessage();
             if (
                 str_contains($message, 'modifié')
@@ -599,7 +626,7 @@ final class AccountingApiController
     {
         try {
             return $callback();
-        } catch (AccountingException|VatException $exception) {
+        } catch (AccountingException|VatException|ExchangeRateException $exception) {
             throw ApiException::validation([
                 'accounting' => [$exception->getMessage()],
             ]);

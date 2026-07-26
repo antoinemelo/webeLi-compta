@@ -106,6 +106,7 @@
         "transmitted_by_application": false
       }
     },
+    "exchange_revaluations": [],
     "closing": {
       "periods": [],
       "automatic_controls": [],

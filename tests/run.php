@@ -51,6 +51,8 @@ use Compta\Modules\Facturation\Http\BillingApiController;
 use Compta\Modules\Facturation\Http\BillingInputValidator;
 use Compta\Modules\Facturation\ScorReference;
 use Compta\Modules\Facturation\SwissQrService;
+use Compta\Modules\Devises\ExchangeRateService;
+use Compta\Modules\Devises\ExchangeRevaluationService;
 use Compta\Modules\Immobilisations\AssetApiController;
 use Compta\Modules\Immobilisations\AssetInputValidator;
 use Compta\Modules\Immobilisations\AssetService;
@@ -164,6 +166,10 @@ final class Tests
             'débiteurs, créanciers, paiements et QR-facture' => [
                 'integration',
                 fn () => $this->billingTests(),
+            ],
+            'multidevise, écarts de change et réévaluation' => [
+                'integration',
+                fn () => $this->multiCurrencyTests(),
             ],
             'dépenses, approbation et récurrences' => [
                 'integration',
@@ -6282,6 +6288,295 @@ final class Tests
         );
         $this->same(1, count($replayed['ignores']), 'rejeu AVS/période idempotent');
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après salaires');
+    }
+
+    private function multiCurrencyTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $ids = $this->seedScopes($pdo);
+        $organisationId = $ids['organisation_a'];
+        $dossierId = $ids['dossier_a'];
+        $audit = new AuditLogger($pdo);
+        $scope = new ScopeManager($pdo, $audit);
+        $exerciseId = $scope->createExercise(
+            $dossierId,
+            'Exercice 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $setup = new AccountingSetupService($pdo, $audit);
+        $setup->createPeriod(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            '2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $journalId = $setup->createJournal(
+            $organisationId,
+            $dossierId,
+            'OD',
+            'Opérations diverses'
+        );
+        (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))
+            ->installForDossier($organisationId, $dossierId, 'personne_morale');
+        $receivable = $this->accountId($pdo, $dossierId, '1100');
+        $bank = $this->accountId($pdo, $dossierId, '1020');
+        $gain = $this->accountId($pdo, $dossierId, '3400');
+        $loss = $this->accountId($pdo, $dossierId, '6500');
+        $contactId = (new ContactService($pdo, $audit))->create(
+            $organisationId,
+            $dossierId,
+            ['type_personne' => 'entreprise', 'raison_sociale' => 'Client EUR'],
+            ['client'],
+            [
+                'ligne1' => 'Rue du Change 1',
+                'code_postal' => '1200',
+                'localite' => 'Genève',
+                'pays' => 'CH',
+            ]
+        );
+        $exchange = new ExchangeRateService($pdo, $audit);
+        $exchange->saveCurrency(
+            $organisationId,
+            $dossierId,
+            'EUR',
+            true
+        );
+        $invoiceRate = $exchange->saveRate(
+            $organisationId,
+            $dossierId,
+            [
+                'source_currency' => 'EUR',
+                'rate_date' => '2026-01-10',
+                'numerator' => 95,
+                'denominator' => 100,
+                'source' => 'Taux de test contrôlé',
+                'verified_on' => '2026-01-10',
+                'active' => true,
+            ]
+        );
+        $firstPaymentRate = $exchange->saveRate(
+            $organisationId,
+            $dossierId,
+            [
+                'source_currency' => 'EUR',
+                'rate_date' => '2026-02-01',
+                'numerator' => 96,
+                'denominator' => 100,
+                'source' => 'Taux de test contrôlé',
+                'verified_on' => '2026-02-01',
+                'active' => true,
+            ]
+        );
+        $secondPaymentRate = $exchange->saveRate(
+            $organisationId,
+            $dossierId,
+            [
+                'source_currency' => 'EUR',
+                'rate_date' => '2026-03-01',
+                'numerator' => 94,
+                'denominator' => 100,
+                'source' => 'Taux de test contrôlé',
+                'verified_on' => '2026-03-01',
+                'active' => true,
+            ]
+        );
+        $exchange->saveMapping(
+            $organisationId,
+            $dossierId,
+            [
+                'realized_gain_account_id' => $gain,
+                'realized_loss_account_id' => $loss,
+                'unrealized_gain_account_id' => $gain,
+                'unrealized_loss_account_id' => $loss,
+            ]
+        );
+        $rate = $exchange->snapshot(
+            $organisationId,
+            $dossierId,
+            'EUR',
+            '2026-01-15',
+            $invoiceRate
+        );
+        $this->same(9500, ExchangeRateService::convert(10000, 95, 100), 'conversion rationnelle EUR/CHF exacte');
+        $document = $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, statut, numero,
+              date_document, date_echeance, monnaie, devise_base,
+              taux_change_numerateur, taux_change_denominateur,
+              taux_change_date, taux_change_source,
+              adresse_snapshot_json, contact_snapshot_json,
+              total_net_centimes, total_tva_centimes, total_brut_centimes,
+              total_net_base_centimes, total_tva_base_centimes,
+              total_brut_base_centimes, compte_collectif_id)
+             VALUES (?, ?, ?, 'facture_client', 'comptabilise', 'F-EUR-001',
+                     '2026-01-15', '2026-02-15', 'EUR', 'CHF',
+                     ?, ?, ?, ?, '{}', '{}',
+                     10000, 0, 10000, 9500, 0, 9500, ?)"
+        );
+        $document->execute([
+            $organisationId, $dossierId, $contactId,
+            $rate['numerator'], $rate['denominator'],
+            $rate['rate_date'], $rate['source'], $receivable,
+        ]);
+        $documentId = (int) $pdo->lastInsertId();
+        $entries = new EntryService($pdo, $audit);
+        $payments = new PaymentService($pdo, $audit, $entries);
+        $paymentOne = $payments->create(
+            $organisationId,
+            $dossierId,
+            $contactId,
+            'encaissement',
+            '2026-02-01',
+            4000,
+            'EUR-1',
+            $bank,
+            currency: 'EUR',
+            exchangeRateId: $firstPaymentRate
+        );
+        $allocationOne = $payments->allocatePayment(
+            $organisationId,
+            $dossierId,
+            $paymentOne,
+            $documentId,
+            4000
+        );
+        $payments->post(
+            $organisationId,
+            $dossierId,
+            $paymentOne,
+            $receivable,
+            $exerciseId,
+            $journalId
+        );
+        $first = $pdo->query(
+            "SELECT * FROM allocations WHERE id = {$allocationOne}"
+        )->fetch();
+        $this->same(3800, (int) $first['montant_document_base_centimes'], 'premier paiement libère la créance au taux historique');
+        $this->same(3840, (int) $first['montant_paiement_base_centimes'], 'premier paiement conserve sa conversion figée');
+        $this->same(40, (int) $first['ecart_change_realise_centimes'], 'gain réalisé du premier paiement');
+
+        $revaluations = new ExchangeRevaluationService($pdo, $audit, $entries);
+        $revaluationId = $revaluations->post(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $journalId,
+            '2026-02-15',
+            'reevaluation-eur-2026-02'
+        );
+        $latent = $pdo->query(
+            "SELECT * FROM lignes_reevaluation_change
+             WHERE reevaluation_id = {$revaluationId}"
+        )->fetch();
+        $this->same(60, (int) $latent['ecart_latent_centimes'], 'écart latent calculé sur le solde ouvert');
+        $this->same('Taux de test contrôlé', (string) $latent['taux_change_source'], 'source du taux de clôture archivée');
+        $reversalId = $revaluations->reverse(
+            $organisationId,
+            $dossierId,
+            $revaluationId,
+            '2026-02-15'
+        );
+        $this->true($reversalId > 0, 'réévaluation explicitement contre-passable');
+
+        $paymentTwo = $payments->create(
+            $organisationId,
+            $dossierId,
+            $contactId,
+            'encaissement',
+            '2026-03-01',
+            6000,
+            'EUR-2',
+            $bank,
+            currency: 'EUR',
+            exchangeRateId: $secondPaymentRate
+        );
+        $allocationTwo = $payments->allocatePayment(
+            $organisationId,
+            $dossierId,
+            $paymentTwo,
+            $documentId,
+            6000
+        );
+        $payments->post(
+            $organisationId,
+            $dossierId,
+            $paymentTwo,
+            $receivable,
+            $exerciseId,
+            $journalId
+        );
+        $second = $pdo->query(
+            "SELECT * FROM allocations WHERE id = {$allocationTwo}"
+        )->fetch();
+        $this->same(5700, (int) $second['montant_document_base_centimes'], 'second paiement solde la valeur historique au centime');
+        $this->same(5640, (int) $second['montant_paiement_base_centimes'], 'second paiement converti à son propre taux');
+        $this->same(-60, (int) $second['ecart_change_realise_centimes'], 'perte réalisée du second paiement');
+        $this->same(
+            -20,
+            (int) $pdo->query(
+                "SELECT SUM(ecart_change_realise_centimes)
+                 FROM allocations WHERE document_id = {$documentId}"
+            )->fetchColumn(),
+            'deux paiements à des taux différents réconciliés au centime'
+        );
+        $this->same(
+            0,
+            10000 - (int) $pdo->query(
+                "SELECT SUM(montant_centimes)
+                 FROM allocations WHERE document_id = {$documentId}
+                   AND statut = 'valide'"
+            )->fetchColumn(),
+            'facture EUR intégralement soldée en devise d’origine'
+        );
+        $ledgerSnapshot = $pdo->query(
+            "SELECT devise_origine, taux_change_date, taux_change_source,
+                    montant_origine_centimes, montant_base_centimes
+             FROM lignes_ecriture
+             WHERE devise_origine = 'EUR' ORDER BY id LIMIT 1"
+        )->fetch();
+        $this->same('EUR', (string) $ledgerSnapshot['devise_origine'], 'devise d’origine traçable depuis le grand livre');
+        $this->same('Taux de test contrôlé', (string) $ledgerSnapshot['taux_change_source'], 'source du taux traçable depuis le grand livre');
+        $this->throws(
+            fn () => $exchange->snapshot(
+                $organisationId,
+                $dossierId,
+                'USD',
+                '2026-01-15'
+            ),
+            'devise non activée clairement refusée'
+        );
+        $this->throws(
+            fn () => $exchange->snapshot(
+                $organisationId,
+                $dossierId,
+                'EUR',
+                '2026-01-01',
+                $firstPaymentRate
+            ),
+            'taux futur clairement refusé'
+        );
+        $chfPayment = $payments->create(
+            $organisationId,
+            $dossierId,
+            $contactId,
+            'encaissement',
+            '2026-04-01',
+            12345,
+            'CHF',
+            $bank
+        );
+        $this->same(
+            12345,
+            (int) $pdo->query(
+                "SELECT montant_base_centimes FROM paiements WHERE id = {$chfPayment}"
+            )->fetchColumn(),
+            'parcours mono-CHF strictement inchangé'
+        );
+        $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après opérations multidevises');
     }
 
     private function billingTests(): void

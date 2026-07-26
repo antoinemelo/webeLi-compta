@@ -200,6 +200,10 @@ final class ReportingService
             "SELECT e.id AS ecriture_id, e.numero, e.date_comptable, j.code AS journal,
                     e.reference, COALESCE(NULLIF(l.libelle, ''), e.libelle) AS libelle,
                     l.debit_centimes, l.credit_centimes,
+                    l.devise_origine, l.montant_origine_centimes, l.devise_base,
+                    l.taux_change_numerateur, l.taux_change_denominateur,
+                    l.taux_change_date, l.taux_change_source,
+                    l.montant_base_centimes, l.ecart_arrondi_centimes,
                     SUM({$normalMovement}) OVER (
                         ORDER BY e.date_comptable, e.id, l.ordre
                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW

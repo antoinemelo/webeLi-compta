@@ -1,5 +1,9 @@
 # Configuration du dossier
 
+Le référentiel « Devises et change » centralise les devises autorisées, les
+taux rationnels datés et sourcés ainsi que les comptes de gains et pertes de
+change. La devise de base reste portée par l’identité du dossier.
+
 L’écran Vue `/app/configuration` rassemble les réglages transversaux sans
 dupliquer les données métier. Il exige la permission `dossier.manage` sur le
 dossier sélectionné.

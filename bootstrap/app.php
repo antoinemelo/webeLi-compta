@@ -39,6 +39,7 @@ use Compta\Modules\Facturation\InvoicePdfService;
 use Compta\Modules\Facturation\PaymentService;
 use Compta\Modules\Facturation\RecurringBillingService;
 use Compta\Modules\Facturation\Http\BillingApiController;
+use Compta\Modules\Devises\ExchangeRevaluationService;
 use Compta\Modules\Facturation\Http\BillingInputValidator;
 use Compta\Modules\Immobilisations\AssetApiController;
 use Compta\Modules\Immobilisations\AssetInputValidator;
@@ -180,7 +181,8 @@ $apiRoutes = new ApiRouteRegistry(
             $reports,
             $financialReports,
             $vatWorkspace,
-            $closingAndTax
+            $closingAndTax,
+            new ExchangeRevaluationService($pdo, $audit, $entries)
         ),
         new AccountingInputValidator(),
         $audit

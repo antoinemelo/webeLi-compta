@@ -50,6 +50,15 @@ export const useConfigurationStore = defineStore('configuration', {
     async saveTreasuryAccount(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/treasury-accounts', data);
     },
+    async saveCurrency(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/currencies', data);
+    },
+    async saveExchangeRate(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/exchange-rates', data);
+    },
+    async saveExchangeMapping(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/exchange-mapping', data);
+    },
     async saveJournal(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/journals', data);
     },

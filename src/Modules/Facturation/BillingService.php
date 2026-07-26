@@ -6,6 +6,7 @@ namespace Compta\Modules\Facturation;
 use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Configuration\Application\PaymentTermsService;
+use Compta\Modules\Devises\ExchangeRateService;
 use Compta\Modules\Tva\VatCalculator;
 use Compta\Modules\Tva\VatLineService;
 use PDO;
@@ -17,6 +18,7 @@ final class BillingService
     private ContactService $contacts;
     private PaymentTermsService $paymentTerms;
     private VatLineService $vat;
+    private ExchangeRateService $exchange;
 
     public function __construct(
         private readonly PDO $pdo,
@@ -26,6 +28,7 @@ final class BillingService
         $this->contacts = new ContactService($pdo, $audit);
         $this->paymentTerms = new PaymentTermsService($pdo);
         $this->vat = new VatLineService($pdo, $audit);
+        $this->exchange = new ExchangeRateService($pdo, $audit);
     }
 
     /**
@@ -50,6 +53,8 @@ final class BillingService
         ?int $actorId = null,
         string $workflow = 'facturation',
         string $generationKey = '',
+        string $currency = '',
+        ?int $exchangeRateId = null,
     ): int {
         return $this->transaction(function () use (
             $organisationId,
@@ -65,7 +70,9 @@ final class BillingService
             $attachmentId,
             $actorId,
             $workflow,
-            $generationKey
+            $generationKey,
+            $currency,
+            $exchangeRateId
         ): int {
             $this->assertType($type);
             if (!in_array($workflow, ['facturation', 'depense'], true)) {
@@ -109,6 +116,21 @@ final class BillingService
                 $lines
             );
             $contact = $this->contacts->snapshot($organisationId, $dossierId, $contactId);
+            if (trim($currency) === '') {
+                $baseCurrency = $this->pdo->prepare(
+                    'SELECT monnaie FROM dossiers
+                     WHERE id = ? AND organisation_id = ?'
+                );
+                $baseCurrency->execute([$dossierId, $organisationId]);
+                $currency = (string) $baseCurrency->fetchColumn();
+            }
+            $rate = $this->exchange->snapshot(
+                $organisationId,
+                $dossierId,
+                $currency,
+                $documentDate,
+                $exchangeRateId
+            );
             $snapshot = json_encode($contact, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
             $address = json_encode(
                 $contact['adresse'],
@@ -121,8 +143,11 @@ final class BillingService
                   compte_collectif_id, numero_externe, document_origine_id,
                   justificatif_id, condition_paiement_id,
                   condition_paiement_snapshot_json, cree_par, workflow,
-                  cle_generation)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                  cle_generation, monnaie, devise_base,
+                  taux_change_numerateur, taux_change_denominateur,
+                  taux_change_date, taux_change_source)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                         ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $contactId, $type,
@@ -137,6 +162,12 @@ final class BillingService
                 $actorId,
                 $workflow,
                 trim($generationKey),
+                $rate['currency'],
+                $rate['base_currency'],
+                $rate['numerator'],
+                $rate['denominator'],
+                $rate['rate_date'],
+                $rate['source'],
             ]);
             $id = (int) $this->pdo->lastInsertId();
             $this->replaceLines(
@@ -250,16 +281,30 @@ final class BillingService
                 $vat += (int) $quote['vat_cents'];
                 $gross += (int) $quote['gross_cents'];
             }
+            $baseNet = ExchangeRateService::convert(
+                $net,
+                (int) $document['taux_change_numerateur'],
+                (int) $document['taux_change_denominateur']
+            );
+            $baseGross = ExchangeRateService::convert(
+                $gross,
+                (int) $document['taux_change_numerateur'],
+                (int) $document['taux_change_denominateur']
+            );
             $update = $this->pdo->prepare(
                 "UPDATE documents_financiers
                  SET total_net_centimes = ?, total_tva_centimes = ?,
-                     total_brut_centimes = ?, modifie_le = datetime('now'),
+                     total_brut_centimes = ?, total_net_base_centimes = ?,
+                     total_tva_base_centimes = ?,
+                     total_brut_base_centimes = ?,
+                     modifie_le = datetime('now'),
                      version = version + 1
                  WHERE id = ? AND organisation_id = ? AND dossier_id = ?
                    AND statut = 'brouillon' AND version = ?"
             );
             $update->execute([
-                $net, $vat, $gross, $documentId,
+                $net, $vat, $gross, $baseNet, $baseGross - $baseNet,
+                $baseGross, $documentId,
                 $organisationId, $dossierId, $expectedVersion,
             ]);
             if ($update->rowCount() !== 1) {
@@ -395,10 +440,13 @@ final class BillingService
             $postingLines = [];
             $client = str_contains((string) $document['type'], 'client');
             $total = (int) $document['total_brut_centimes'];
-            $this->appendSigned(
+            $totalBase = (int) $document['total_brut_base_centimes'];
+            $this->appendConvertedSigned(
                 $postingLines,
                 (int) $document['compte_collectif_id'],
+                $client ? $totalBase : -$totalBase,
                 $client ? $total : -$total,
+                $document,
                 'Compte collectif'
             );
             foreach ($lines as $line) {
@@ -406,10 +454,16 @@ final class BillingService
                     ? -(int) $line['base_nette_centimes']
                     : (int) $line['total_brut_centimes']
                         - (int) $line['tva_deductible_centimes'];
-                $this->appendSigned(
+                $this->appendConvertedSigned(
                     $postingLines,
                     (int) $line['compte_id'],
+                    ExchangeRateService::convert(
+                        $primary,
+                        (int) $document['taux_change_numerateur'],
+                        (int) $document['taux_change_denominateur']
+                    ),
                     $primary,
+                    $document,
                     'document:' . $documentId . ':ligne:' . $line['id']
                 );
                 $vatAmount = $client
@@ -421,14 +475,21 @@ final class BillingService
                             'Le code TVA de la ligne ne possède pas de compte comptable.'
                         );
                     }
-                    $this->appendSigned(
+                    $this->appendConvertedSigned(
                         $postingLines,
                         (int) $line['compte_tva_id'],
+                        ExchangeRateService::convert(
+                            $vatAmount,
+                            (int) $document['taux_change_numerateur'],
+                            (int) $document['taux_change_denominateur']
+                        ),
                         $vatAmount,
+                        $document,
                         'TVA ' . $line['code_tva_snapshot']
                     );
                 }
             }
+            $this->balanceConvertedLines($postingLines);
             $entryId = $this->entries->postGenerated([
                 'organisation_id' => $organisationId,
                 'dossier_id' => $dossierId,
@@ -462,6 +523,11 @@ final class BillingService
                 if (str_starts_with((string) $document['type'], 'avoir_')) {
                     $inputAmount *= -1;
                 }
+                $inputAmount = ExchangeRateService::convert(
+                    $inputAmount,
+                    (int) $document['taux_change_numerateur'],
+                    (int) $document['taux_change_denominateur']
+                );
                 $this->vat->attach(
                     $organisationId,
                     $dossierId,
@@ -553,7 +619,8 @@ final class BillingService
                 ? 'AV-' . $source['numero_externe']
                 : '',
             $documentId,
-            actorId: $actorId
+            actorId: $actorId,
+            currency: (string) $source['monnaie']
         );
     }
 
@@ -704,11 +771,23 @@ final class BillingService
              ORDER BY code'
         );
         $journals->execute([$organisationId, $dossierId]);
+        $currencyConfiguration = $this->exchange->configuration(
+            $organisationId,
+            $dossierId
+        );
         return [
             'accounts' => $accounts->fetchAll(),
             'vat_codes' => $vatCodes->fetchAll(),
             'exercises' => $exercises->fetchAll(),
             'journals' => $journals->fetchAll(),
+            'currencies' => array_values(array_filter(
+                $currencyConfiguration['currencies'],
+                static fn (array $item): bool => (bool) $item['active']
+            )),
+            'exchange_rates' => array_values(array_filter(
+                $currencyConfiguration['rates'],
+                static fn (array $item): bool => (bool) $item['active']
+            )),
         ];
     }
 
@@ -832,15 +911,71 @@ final class BillingService
         }, true);
     }
 
-    /** @param list<array<string,int|string>> $lines */
-    private function appendSigned(array &$lines, int $accountId, int $signed, string $label): void
-    {
-        if ($signed === 0) {
+    /**
+     * @param list<array<string,mixed>> $lines
+     * @param array<string,mixed> $snapshot
+     */
+    private function appendConvertedSigned(
+        array &$lines,
+        int $accountId,
+        int $baseSigned,
+        int $originalSigned,
+        array $snapshot,
+        string $label,
+    ): void {
+        if ($baseSigned === 0) {
             return;
         }
-        $lines[] = $signed > 0
-            ? ['compte_id' => $accountId, 'libelle' => $label, 'debit_centimes' => $signed]
-            : ['compte_id' => $accountId, 'libelle' => $label, 'credit_centimes' => abs($signed)];
+        $line = [
+            'compte_id' => $accountId,
+            'libelle' => $label,
+            'devise_origine' => (string) $snapshot['monnaie'],
+            'montant_origine_centimes' => $originalSigned,
+            'devise_base' => (string) $snapshot['devise_base'],
+            'taux_change_numerateur' => (int) $snapshot['taux_change_numerateur'],
+            'taux_change_denominateur' => (int) $snapshot['taux_change_denominateur'],
+            'taux_change_date' => (string) $snapshot['taux_change_date'],
+            'taux_change_source' => (string) $snapshot['taux_change_source'],
+            'montant_base_centimes' => $baseSigned,
+            'ecart_arrondi_centimes' => 0,
+        ];
+        if ($baseSigned > 0) {
+            $line['debit_centimes'] = $baseSigned;
+        } else {
+            $line['credit_centimes'] = abs($baseSigned);
+        }
+        $lines[] = $line;
+    }
+
+    /** @param list<array<string,mixed>> $lines */
+    private function balanceConvertedLines(array &$lines): void
+    {
+        $balance = 0;
+        foreach ($lines as $line) {
+            $balance += (int) ($line['debit_centimes'] ?? 0)
+                - (int) ($line['credit_centimes'] ?? 0);
+        }
+        if ($balance === 0 || count($lines) < 2) {
+            return;
+        }
+        $index = count($lines) - 1;
+        $signed = (int) ($lines[$index]['debit_centimes'] ?? 0)
+            - (int) ($lines[$index]['credit_centimes'] ?? 0);
+        $adjusted = $signed - $balance;
+        if ($adjusted === 0 || (($signed > 0) !== ($adjusted > 0))) {
+            throw new BillingException(
+                'L’arrondi de change ne peut pas être imputé sans inverser une ligne.'
+            );
+        }
+        unset($lines[$index]['debit_centimes'], $lines[$index]['credit_centimes']);
+        if ($adjusted > 0) {
+            $lines[$index]['debit_centimes'] = $adjusted;
+        } else {
+            $lines[$index]['credit_centimes'] = abs($adjusted);
+        }
+        $lines[$index]['montant_base_centimes'] = $adjusted;
+        $lines[$index]['ecart_arrondi_centimes'] =
+            (int) $lines[$index]['ecart_arrondi_centimes'] - $balance;
     }
 
     /** @param array<string,mixed> $document */

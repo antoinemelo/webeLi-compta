@@ -11,6 +11,7 @@ use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Security\SessionStore;
 use Compta\Modules\Compta\AccountingException;
+use Compta\Modules\Devises\ExchangeRateException;
 use Compta\Modules\Facturation\BillingException;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
@@ -177,7 +178,9 @@ final class BillingApiController
                 $data['collective_account_id'],
                 $data['external_number'],
                 attachmentId: $attachmentId,
-                actorId: $userId
+                actorId: $userId,
+                currency: $data['currency'],
+                exchangeRateId: $data['exchange_rate_id']
             )];
         }, 201);
     }
@@ -391,7 +394,9 @@ final class BillingApiController
                 $data['amount_cents'],
                 $data['reference'],
                 $data['ledger_account_id'],
-                $userId
+                $userId,
+                currency: $data['currency'],
+                exchangeRateId: $data['exchange_rate_id']
             ),
         ], 201);
     }
@@ -494,7 +499,7 @@ final class BillingApiController
     ): Response {
         try {
             return ApiResponse::success($request, $callback(), status: $status);
-        } catch (BillingException|AccountingException $exception) {
+        } catch (BillingException|AccountingException|ExchangeRateException $exception) {
             $message = $exception->getMessage();
             if (
                 str_contains($message, 'modifié')

@@ -330,7 +330,8 @@ final class DashboardReadService
     ): array {
         $stmt = $this->pdo->prepare(
             "WITH target_allocations AS (
-                SELECT a.document_id, SUM(a.montant_centimes) AS allocated_cents
+                SELECT a.document_id,
+                       SUM(a.montant_document_base_centimes) AS allocated_cents
                 FROM allocations a
                 LEFT JOIN paiements p ON p.id = a.paiement_id
                 LEFT JOIN documents_financiers credit ON credit.id = a.avoir_id
@@ -347,7 +348,8 @@ final class DashboardReadService
                 GROUP BY a.document_id
              ),
              credit_allocations AS (
-                SELECT a.avoir_id, SUM(a.montant_centimes) AS allocated_cents
+                SELECT a.avoir_id,
+                       SUM(a.montant_document_base_centimes) AS allocated_cents
                 FROM allocations a
                 JOIN documents_financiers credit ON credit.id = a.avoir_id
                 WHERE a.organisation_id = :organisation
@@ -368,12 +370,12 @@ final class DashboardReadService
                          WHEN d.type IN ('facture_client', 'facture_fournisseur')
                            THEN MAX(
                              0,
-                             ABS(d.total_brut_centimes)
+                             ABS(d.total_brut_base_centimes)
                                - COALESCE(target.allocated_cents, 0)
                            )
                          ELSE -MAX(
                            0,
-                           ABS(d.total_brut_centimes)
+                           ABS(d.total_brut_base_centimes)
                              - COALESCE(credit.allocated_cents, 0)
                          )
                        END AS open_cents
@@ -479,7 +481,8 @@ final class DashboardReadService
     ): array {
         $stmt = $this->pdo->prepare(
             "WITH allocated AS (
-                SELECT paiement_id, SUM(montant_centimes) AS allocated_cents
+                SELECT paiement_id,
+                       SUM(montant_paiement_base_centimes) AS allocated_cents
                 FROM allocations
                 WHERE organisation_id = :organisation
                   AND dossier_id = :dossier
@@ -488,7 +491,7 @@ final class DashboardReadService
              ),
              pending AS (
                 SELECT p.sens,
-                       p.montant_centimes - COALESCE(a.allocated_cents, 0)
+                       p.montant_base_centimes - COALESCE(a.allocated_cents, 0)
                          AS remaining_cents
                 FROM paiements p
                 LEFT JOIN allocated a ON a.paiement_id = p.id
@@ -496,7 +499,7 @@ final class DashboardReadService
                   AND p.dossier_id = :dossier
                   AND p.statut = 'valide'
                   AND p.date_paiement <= :as_of_date
-                  AND p.montant_centimes > COALESCE(a.allocated_cents, 0)
+                  AND p.montant_base_centimes > COALESCE(a.allocated_cents, 0)
              )
              SELECT sens, COUNT(*) AS payment_count,
                     COALESCE(SUM(remaining_cents), 0) AS amount_cents

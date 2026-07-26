@@ -14,6 +14,7 @@ use Compta\Modules\Compta\AccountingException;
 use Compta\Modules\Configuration\Application\ConfigurationException;
 use Compta\Modules\Configuration\Application\ConfigurationService;
 use Compta\Modules\Configuration\Application\ManagedReferencesService;
+use Compta\Modules\Devises\ExchangeRateException;
 use Compta\Modules\Facturation\BillingException;
 use Compta\Modules\Salaires\PayrollException;
 use Compta\Modules\Tva\VatException;
@@ -164,9 +165,62 @@ final class ConfigurationApiController
                 $dossierId,
                 'compta.setup'
             ),
+            'currencies' => $this->hasPermission(
+                $userId,
+                $organisationId,
+                $dossierId,
+                'compta.setup'
+            ),
             'access' => true,
         ];
         return ApiResponse::success($request, $result);
+    }
+
+    public function saveCurrency(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        return $this->referenceMutation($request, function () use (
+            $request, $userId, $organisationId, $dossierId
+        ): array {
+            $data = $this->validator->currency($request);
+            $this->managedReferences->saveCurrency(
+                $organisationId,
+                $dossierId,
+                $data['currency'],
+                $data['active'],
+                $userId
+            );
+            return ['saved' => true];
+        });
+    }
+
+    public function saveExchangeRate(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        return $this->referenceMutation($request, fn (): array => [
+            'id' => $this->managedReferences->saveExchangeRate(
+                $organisationId,
+                $dossierId,
+                $this->validator->exchangeRate($request),
+                $userId
+            ),
+        ]);
+    }
+
+    public function saveExchangeMapping(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        return $this->referenceMutation($request, function () use (
+            $request, $userId, $organisationId, $dossierId
+        ): array {
+            $this->managedReferences->saveExchangeMapping(
+                $organisationId,
+                $dossierId,
+                $this->validator->exchangeMapping($request),
+                $userId
+            );
+            return ['saved' => true];
+        });
     }
 
     public function createContact(Request $request): Response
@@ -466,6 +520,7 @@ final class ConfigurationApiController
             AccountingException
             |BillingException
             |ConfigurationException
+            |ExchangeRateException
             |PayrollException
             |TreasuryException
             |VatException $exception

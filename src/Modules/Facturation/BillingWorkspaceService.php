@@ -77,9 +77,9 @@ final class BillingWorkspaceService
                 ? 'receivables'
                 : 'payables';
             $aging[$side]['unallocated_payments_cents'] +=
-                (int) $payment['unallocated_cents'];
+                (int) $payment['unallocated_base_cents'];
             $aging[$side]['net_open_cents'] -=
-                (int) $payment['unallocated_cents'];
+                (int) $payment['unallocated_base_cents'];
         }
         $contacts = $this->contacts(
             $organisationId,
@@ -158,10 +158,30 @@ final class BillingWorkspaceService
                         )
                     ), 0) AS target_allocated_cents,
                     COALESCE((
+                      SELECT SUM(a.montant_document_base_centimes)
+                      FROM allocations a
+                      LEFT JOIN paiements p ON p.id = a.paiement_id
+                      LEFT JOIN documents_financiers av ON av.id = a.avoir_id
+                      WHERE a.document_id = d.id AND a.statut = 'valide'
+                        AND (
+                          (p.id IS NOT NULL AND p.statut = 'valide'
+                            AND p.date_paiement <= :as_of)
+                          OR
+                          (av.id IS NOT NULL
+                            AND av.statut IN ('emis', 'comptabilise')
+                            AND av.date_document <= :as_of)
+                        )
+                    ), 0) AS target_allocated_base_cents,
+                    COALESCE((
                       SELECT SUM(a.montant_centimes)
                       FROM allocations a
                       WHERE a.avoir_id = d.id AND a.statut = 'valide'
                     ), 0) AS credit_allocated_cents,
+                    COALESCE((
+                      SELECT SUM(a.montant_document_base_centimes)
+                      FROM allocations a
+                      WHERE a.avoir_id = d.id AND a.statut = 'valide'
+                    ), 0) AS credit_allocated_base_cents,
                     (SELECT COUNT(*) FROM rappels_factures r
                      WHERE r.document_id = d.id) AS reminder_count
              FROM documents_financiers d
@@ -184,13 +204,22 @@ final class BillingWorkspaceService
                 : 'purchases';
             $isCredit = str_starts_with((string) $row['type'], 'avoir_');
             $open = 0;
+            $openBase = 0;
             if (in_array($row['statut'], ['emis', 'comptabilise'], true)) {
                 $allocated = $isCredit
                     ? (int) $row['credit_allocated_cents']
                     : (int) $row['target_allocated_cents'];
                 $open = max(0, abs((int) $row['total_brut_centimes']) - $allocated);
+                $allocatedBase = $isCredit
+                    ? (int) $row['credit_allocated_base_cents']
+                    : (int) $row['target_allocated_base_cents'];
+                $openBase = max(
+                    0,
+                    abs((int) $row['total_brut_base_centimes']) - $allocatedBase
+                );
                 if ($isCredit) {
                     $open *= -1;
+                    $openBase *= -1;
                 }
             }
             $paymentState = $this->paymentState($row, $open, $asOfDate);
@@ -234,10 +263,21 @@ final class BillingWorkspaceService
                 'net_cents' => (int) $row['total_net_centimes'],
                 'vat_cents' => (int) $row['total_tva_centimes'],
                 'gross_cents' => (int) $row['total_brut_centimes'],
+                'base_currency' => (string) $row['devise_base'],
+                'net_base_cents' => (int) $row['total_net_base_centimes'],
+                'vat_base_cents' => (int) $row['total_tva_base_centimes'],
+                'gross_base_cents' => (int) $row['total_brut_base_centimes'],
+                'exchange_rate' => [
+                    'numerator' => (int) $row['taux_change_numerateur'],
+                    'denominator' => (int) $row['taux_change_denominateur'],
+                    'date' => (string) $row['taux_change_date'],
+                    'source' => (string) $row['taux_change_source'],
+                ],
                 'allocated_cents' => $isCredit
                     ? (int) $row['credit_allocated_cents']
                     : (int) $row['target_allocated_cents'],
                 'open_cents' => $open,
+                'open_base_cents' => $openBase,
                 'reminder_count' => (int) $row['reminder_count'],
                 'entry_id' => $row['ecriture_id'] === null
                     ? null : (int) $row['ecriture_id'],
@@ -266,7 +306,7 @@ final class BillingWorkspaceService
         ];
         $result = ['receivables' => $blank(), 'payables' => $blank()];
         foreach ($documents as $document) {
-            $open = (int) $document['open_cents'];
+            $open = (int) $document['open_base_cents'];
             if (
                 $open === 0
                 || !in_array($document['status'], ['emis', 'comptabilise'], true)
@@ -337,6 +377,8 @@ final class BillingWorkspaceService
             "SELECT p.id, p.contact_id, p.sens AS direction,
                     p.date_paiement AS payment_date,
                     p.montant_centimes AS amount_cents, p.monnaie AS currency,
+                    p.montant_base_centimes AS amount_base_cents,
+                    p.devise_base AS base_currency,
                     p.reference, p.statut AS status,
                     COALESCE(NULLIF(c.raison_sociale, ''),
                              trim(c.prenom || ' ' || c.nom)) AS contact,
@@ -354,6 +396,12 @@ final class BillingWorkspaceService
         return array_map(static function (array $row): array {
             $amount = (int) $row['amount_cents'];
             $allocated = (int) $row['allocated_cents'];
+            $unallocated = $row['status'] === 'valide'
+                ? max(0, $amount - $allocated) : 0;
+            $baseAmount = (int) $row['amount_base_cents'];
+            $baseUnallocated = $amount < 1
+                ? 0
+                : intdiv(($baseAmount * $unallocated) + intdiv($amount, 2), $amount);
             return [
                 'id' => (int) $row['id'],
                 'contact_id' => (int) $row['contact_id'],
@@ -362,8 +410,10 @@ final class BillingWorkspaceService
                 'payment_date' => (string) $row['payment_date'],
                 'amount_cents' => $amount,
                 'allocated_cents' => $allocated,
-                'unallocated_cents' => $row['status'] === 'valide'
-                    ? max(0, $amount - $allocated) : 0,
+                'unallocated_cents' => $unallocated,
+                'amount_base_cents' => $baseAmount,
+                'unallocated_base_cents' => $baseUnallocated,
+                'base_currency' => (string) $row['base_currency'],
                 'currency' => (string) $row['currency'],
                 'reference' => (string) $row['reference'],
                 'status' => (string) $row['status'],
@@ -519,9 +569,9 @@ final class BillingWorkspaceService
                 continue;
             }
             if ($document['direction'] === 'sales') {
-                $receivable += (int) $document['open_cents'];
+                $receivable += (int) $document['open_base_cents'];
             } else {
-                $payable += (int) $document['open_cents'];
+                $payable += (int) $document['open_base_cents'];
             }
         }
         foreach ($payments as $payment) {
@@ -529,9 +579,9 @@ final class BillingWorkspaceService
                 continue;
             }
             if ($payment['direction'] === 'encaissement') {
-                $receivable -= (int) $payment['unallocated_cents'];
+                $receivable -= (int) $payment['unallocated_base_cents'];
             } else {
-                $payable -= (int) $payment['unallocated_cents'];
+                $payable -= (int) $payment['unallocated_base_cents'];
             }
         }
         return [

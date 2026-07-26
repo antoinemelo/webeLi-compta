@@ -261,7 +261,11 @@ final class EntryService
                 );
             }
             $lines = $this->pdo->prepare(
-                'SELECT compte_id, libelle, debit_centimes, credit_centimes
+                'SELECT compte_id, libelle, debit_centimes, credit_centimes,
+                        devise_origine, montant_origine_centimes, devise_base,
+                        taux_change_numerateur, taux_change_denominateur,
+                        taux_change_date, taux_change_source,
+                        montant_base_centimes, ecart_arrondi_centimes
                  FROM lignes_ecriture WHERE ecriture_id = ? ORDER BY ordre'
             );
             $lines->execute([$entryId]);
@@ -272,6 +276,19 @@ final class EntryService
                     'libelle' => (string) $line['libelle'],
                     'debit_centimes' => (int) $line['credit_centimes'],
                     'credit_centimes' => (int) $line['debit_centimes'],
+                    'devise_origine' => (string) $line['devise_origine'],
+                    'montant_origine_centimes' =>
+                        $line['montant_origine_centimes'] === null
+                            ? null : -(int) $line['montant_origine_centimes'],
+                    'devise_base' => (string) $line['devise_base'],
+                    'taux_change_numerateur' => $line['taux_change_numerateur'],
+                    'taux_change_denominateur' => $line['taux_change_denominateur'],
+                    'taux_change_date' => (string) $line['taux_change_date'],
+                    'taux_change_source' => (string) $line['taux_change_source'],
+                    'montant_base_centimes' =>
+                        $line['montant_base_centimes'] === null
+                            ? null : -(int) $line['montant_base_centimes'],
+                    'ecart_arrondi_centimes' => -(int) $line['ecart_arrondi_centimes'],
                 ];
             }
             $newId = $this->insertDraft([
@@ -317,7 +334,7 @@ final class EntryService
     }
 
     /**
-     * @param list<array{compte_id:int,libelle?:string,debit_centimes?:int,credit_centimes?:int}> $lines
+     * @param list<array<string,mixed>> $lines
      */
     public function postOpeningBalances(
         int $organisationId,
@@ -634,8 +651,12 @@ final class EntryService
     {
         $stmt = $this->pdo->prepare(
             'INSERT INTO lignes_ecriture
-                (ecriture_id, compte_id, libelle, debit_centimes, credit_centimes, ordre)
-             VALUES (?, ?, ?, ?, ?, ?)'
+                (ecriture_id, compte_id, libelle, debit_centimes, credit_centimes,
+                 devise_origine, montant_origine_centimes, devise_base,
+                 taux_change_numerateur, taux_change_denominateur,
+                 taux_change_date, taux_change_source, montant_base_centimes,
+                 ecart_arrondi_centimes, ordre)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         foreach (array_values($lines) as $position => $line) {
             $accountId = (int) ($line['compte_id'] ?? 0);
@@ -657,6 +678,23 @@ final class EntryService
                 trim((string) ($line['libelle'] ?? '')),
                 $debit,
                 $credit,
+                trim((string) ($line['devise_origine'] ?? '')),
+                array_key_exists('montant_origine_centimes', $line)
+                    && $line['montant_origine_centimes'] !== null
+                    ? (int) $line['montant_origine_centimes'] : null,
+                trim((string) ($line['devise_base'] ?? '')),
+                array_key_exists('taux_change_numerateur', $line)
+                    && $line['taux_change_numerateur'] !== null
+                    ? (int) $line['taux_change_numerateur'] : null,
+                array_key_exists('taux_change_denominateur', $line)
+                    && $line['taux_change_denominateur'] !== null
+                    ? (int) $line['taux_change_denominateur'] : null,
+                trim((string) ($line['taux_change_date'] ?? '')),
+                trim((string) ($line['taux_change_source'] ?? '')),
+                array_key_exists('montant_base_centimes', $line)
+                    && $line['montant_base_centimes'] !== null
+                    ? (int) $line['montant_base_centimes'] : null,
+                (int) ($line['ecart_arrondi_centimes'] ?? 0),
                 $position + 1,
             ]);
         }
