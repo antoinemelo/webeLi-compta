@@ -2,6 +2,10 @@
 
 Applique le prompt maître.
 
+Ce lot construit le moteur de consolidation. Il n’achève pas à lui seul
+l’administration des structures : exécute ensuite les lots 14b à 14e avant le
+lot 15.
+
 Objectif : gérer plusieurs entités et une consolidation optionnelle sans
 affaiblir l'isolation.
 

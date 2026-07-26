@@ -26,8 +26,8 @@ PostgreSQL. La cible est un monolithe modulaire :
 - `docs/06-matrice-reprise-gaeld.md` : ce qui est repris, adapté ou refusé.
 - `docs/07-sources.md` : sources locales et publiques effectivement consultées.
 - `prompts/00-prompt-maitre.md` : garde-fous à fournir dans chaque session.
-- `prompts/01` à `14` : lots d'implémentation ordonnés.
-- `prompts/15-revue-finale.md` : audit contradictoire avant livraison.
+- `prompts/01` à `14`, puis `14b` à `14e` : lots d'implémentation ordonnés.
+- `prompts/15-qualification-finale.md` : audit contradictoire avant livraison.
 
 ## Mode d'emploi
 
@@ -40,6 +40,11 @@ PostgreSQL. La cible est un monolithe modulaire :
 5. Jusqu'au gel de production, maintenir une base initiale propre et
    reconstruire les données de développement. Après le gel, une migration
    appliquée n'est jamais réécrite.
+
+Les lots 14b à 14e ferment le cycle de vie des structures avant la
+qualification : organisations, dossiers initialisés, accès explicites, puis
+agrégation interne ou consolidation légale. Ils ne doivent pas être sautés au
+motif que le moteur de balance consolidée du lot 14 est déjà présent.
 
 La consolidation et la multi-devise sont volontairement placées après les
 parcours mono-entité en CHF. Elles sont importantes, mais ne doivent pas

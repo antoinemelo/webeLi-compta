@@ -23,6 +23,15 @@ amortissements, paie mensuelle, décomptes annuels et archives.
 Multi-devise, multi-entités, réconciliation inter-entités et consolidation.
 Chaque fonction est activable et ne change pas le comportement mono-entité CHF.
 
+Après le moteur du lot 14, exécuter obligatoirement :
+
+1. 14b — registre et cycle de vie des organisations ;
+2. 14c — dossiers multiples et initialisation transactionnelle ;
+3. 14d — gouvernance explicite des accès ;
+4. 14e — agrégation interne et consolidation légale exploitables.
+
+Le lot 15 ne commence qu’après validation de ces quatre portes.
+
 ### Palier E — pédagogie et finition
 
 Parcours pédagogiques ciblés dans la nouvelle interface, accessibilité,
@@ -54,9 +63,13 @@ performance, restauration et audit final contradictoire.
    période fermée refuse les écritures.
 5. Devise étrangère : facture, paiement partiel et gain/perte de change sont
    équilibrés au centime.
-6. Deux entités : aucune fuite de données ; la consolidation est réconciliable
-   avec leurs balances et ses éliminations.
-7. Exercice pédagogique : aucune donnée réelle n'est visible ou réinitialisée.
+6. Une organisation, deux dossiers : l’agrégation interne est réconciliable,
+   drillable et n’altère aucun livre source.
+7. Deux entités légales : aucune fuite de données ; la consolidation est
+   réconciliable avec leurs balances et ses éliminations.
+8. Cycle de vie : une structure vide est supprimable, une structure utilisée
+   est seulement archivable et son historique reste consultable.
+9. Exercice pédagogique : aucune donnée réelle n'est visible ou réinitialisée.
 
 ## Budgets techniques
 
