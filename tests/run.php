@@ -84,7 +84,7 @@ use Compta\Modules\Tva\VatWorkspaceService;
 use Compta\Modules\Salaires\PayrollCalculator;
 use Compta\Modules\Salaires\PayrollCertificateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
-use Compta\Modules\Salaires\LassoRateImportService;
+use Compta\Modules\Salaires\OcasRateImportService;
 use Compta\Modules\Salaires\PayrollApiController;
 use Compta\Modules\Salaires\PayrollInputValidator;
 use Compta\Modules\Salaires\PayrollImportService;
@@ -115,7 +115,7 @@ final class Tests
         }
         $cases = [
             'unités configuration et sécurité' => ['quick', fn () => $this->unitTests()],
-            'parité des 32 calculs salaires Lasso' => [
+            'parité des 32 calculs salaires OCAS' => [
                 'quick',
                 fn () => $this->payrollCalculatorParityTests(),
             ],
@@ -569,41 +569,41 @@ final class Tests
             'impot_source_ppm' => 0,
         ];
         $result = $calculator->calculate($employee, 192000, $rates);
-        $this->same(192000, $result['salaire_travail_centimes'], 'Lasso salaire_travail');
-        $this->same(15994, $result['supplement_centimes'], 'Lasso supplément vacances');
-        $this->same(207994, $result['brut_centimes'], 'Lasso salaire brut');
-        $this->same(11024, $result['ded_avs_centimes'], 'Lasso AVS employé');
-        $this->same(2205, $result['ded_ac_centimes'], 'Lasso AC employé');
-        $this->same(60, $result['ded_amat_centimes'], 'Lasso A.mat employé');
-        $this->same(2205, $result['ded_laa_centimes'], 'Lasso LAA employé');
-        $this->same(14560, $result['ded_lpp_centimes'], 'Lasso LPP employé');
-        $this->same(0, $result['ded_impot_source_centimes'], 'Lasso sans impôt source');
-        $this->same(0, $result['ded_caf_centimes'], 'Lasso CAF supprimée');
-        $this->same(30054, $result['total_deductions_centimes'], 'Lasso total déductions');
-        $this->same(177940, $result['net_centimes'], 'Lasso salaire net');
+        $this->same(192000, $result['salaire_travail_centimes'], 'OCAS salaire_travail');
+        $this->same(15994, $result['supplement_centimes'], 'OCAS supplément vacances');
+        $this->same(207994, $result['brut_centimes'], 'OCAS salaire brut');
+        $this->same(11024, $result['ded_avs_centimes'], 'OCAS AVS employé');
+        $this->same(2205, $result['ded_ac_centimes'], 'OCAS AC employé');
+        $this->same(60, $result['ded_amat_centimes'], 'OCAS A.mat employé');
+        $this->same(2205, $result['ded_laa_centimes'], 'OCAS LAA employé');
+        $this->same(14560, $result['ded_lpp_centimes'], 'OCAS LPP employé');
+        $this->same(0, $result['ded_impot_source_centimes'], 'OCAS sans impôt source');
+        $this->same(0, $result['ded_caf_centimes'], 'OCAS CAF supprimée');
+        $this->same(30054, $result['total_deductions_centimes'], 'OCAS total déductions');
+        $this->same(177940, $result['net_centimes'], 'OCAS salaire net');
 
-        $this->same(11024, $result['emp_avs_centimes'], 'Lasso AVS employeur');
-        $this->same(4867, $result['emp_af_centimes'], 'Lasso AF employeur');
-        $this->same(14560, $result['emp_lpp_centimes'], 'Lasso LPP employeur');
-        $this->same(32799, $result['total_charges_employeur_centimes'], 'Lasso charges employeur');
-        $this->same(240793, $result['cout_total_centimes'], 'Lasso coût employeur');
+        $this->same(11024, $result['emp_avs_centimes'], 'OCAS AVS employeur');
+        $this->same(4867, $result['emp_af_centimes'], 'OCAS AF employeur');
+        $this->same(14560, $result['emp_lpp_centimes'], 'OCAS LPP employeur');
+        $this->same(32799, $result['total_charges_employeur_centimes'], 'OCAS charges employeur');
+        $this->same(240793, $result['cout_total_centimes'], 'OCAS coût employeur');
 
         $source = $calculator->calculate([
             'supplement_vacances_ppm' => 0,
             'procedure' => 'ordinaire_impot_source',
             'impot_source_ppm' => 100000,
         ], 100000, $rates);
-        $this->same(100000, $source['brut_centimes'], 'Lasso brut sans supplément');
-        $this->same(10000, $source['ded_impot_source_centimes'], 'Lasso impôt source 10 %');
+        $this->same(100000, $source['brut_centimes'], 'OCAS brut sans supplément');
+        $this->same(10000, $source['ded_impot_source_centimes'], 'OCAS impôt source 10 %');
 
         $withoutVacation = $calculator->calculate([
             'supplement_vacances_ppm' => 0,
             'procedure' => 'ordinaire',
             'impot_source_ppm' => 0,
         ], 50000, $rates);
-        $this->same(0, $withoutVacation['supplement_centimes'], 'Lasso supplément nul');
-        $this->same(50000, $withoutVacation['brut_centimes'], 'Lasso brut égal au travail');
-        $this->same(0, $withoutVacation['ded_caf_centimes'], 'Lasso aucune CAF cantonale');
+        $this->same(0, $withoutVacation['supplement_centimes'], 'OCAS supplément nul');
+        $this->same(50000, $withoutVacation['brut_centimes'], 'OCAS brut égal au travail');
+        $this->same(0, $withoutVacation['ded_caf_centimes'], 'OCAS aucune CAF cantonale');
 
         $withCantonalEmployerRates = $calculator->calculate([
             'supplement_vacances_ppm' => 0,
@@ -613,16 +613,16 @@ final class Tests
             'emp_cpe_ppm' => 700,
             'emp_lfp_ppm' => 820,
         ]);
-        $this->same(70, $withCantonalEmployerRates['emp_cpe_centimes'], 'Lasso CPE employeur');
-        $this->same(82, $withCantonalEmployerRates['emp_lfp_centimes'], 'Lasso LFP employeur');
+        $this->same(70, $withCantonalEmployerRates['emp_cpe_centimes'], 'OCAS CPE employeur');
+        $this->same(82, $withCantonalEmployerRates['emp_lfp_centimes'], 'OCAS LFP employeur');
         $this->same(
             15921,
             $withCantonalEmployerRates['total_charges_employeur_centimes'],
-            'Lasso total employeur avec CPE/LFP'
+            'OCAS total employeur avec CPE/LFP'
         );
 
-        $this->same(35.43, round($calculator->monthlyHourThreshold(2026, 1), 2), 'Lasso seuil janvier');
-        $this->same(32.0, round($calculator->monthlyHourThreshold(2026, 2), 2), 'Lasso seuil février');
+        $this->same(35.43, round($calculator->monthlyHourThreshold(2026, 1), 2), 'OCAS seuil janvier');
+        $this->same(32.0, round($calculator->monthlyHourThreshold(2026, 2), 2), 'OCAS seuil février');
         $accidentRates = [
             'laa_reduit_ppm' => 5300,
             'laa_plein_ppm' => 9600,
@@ -630,19 +630,19 @@ final class Tests
             'emp_laa_plein_ppm' => 9600,
         ];
         $reduced = $calculator->effectiveAccidentRates($accidentRates, 30.0, 2026, 1);
-        $this->same(5300, $reduced['laa_ppm'], 'Lasso 30 h LAA employé réduit');
-        $this->same(5300, $reduced['emp_laa_ppm'], 'Lasso 30 h LAA employeur réduit');
+        $this->same(5300, $reduced['laa_ppm'], 'OCAS 30 h LAA employé réduit');
+        $this->same(5300, $reduced['emp_laa_ppm'], 'OCAS 30 h LAA employeur réduit');
         $full = $calculator->effectiveAccidentRates($accidentRates, 40.0, 2026, 1);
-        $this->same(9600, $full['laa_ppm'], 'Lasso 40 h LAA plein');
+        $this->same(9600, $full['laa_ppm'], 'OCAS 40 h LAA plein');
         $threshold = $calculator->effectiveAccidentRates($accidentRates, 35.43, 2026, 1);
-        $this->same(5300, $threshold['laa_ppm'], 'Lasso seuil arrondi LAA réduit');
+        $this->same(5300, $threshold['laa_ppm'], 'OCAS seuil arrondi LAA réduit');
 
         $lppExample = $calculator->calculate([
             'supplement_vacances_ppm' => 0,
             'procedure' => 'ordinaire',
             'impot_source_ppm' => 0,
         ], 100000, $rates);
-        $this->same(7000, $lppExample['ded_lpp_centimes'], 'Lasso LPP 7 %');
+        $this->same(7000, $lppExample['ded_lpp_centimes'], 'OCAS LPP 7 %');
     }
 
     private function authAndScopeTests(): void
@@ -1716,7 +1716,7 @@ final class Tests
                 $httpPayrolls,
                 $httpPayrollPayments,
                 $httpPayrollCertificates,
-                new LassoRateImportService(
+                new OcasRateImportService(
                     '',
                     $httpPayrollConfiguration,
                     $httpAudit
@@ -2050,7 +2050,7 @@ final class Tests
         $this->same(
             [],
             $managedReferencesJson['data']['payroll']['suggested_rates'] ?? null,
-            'aucun millésime Lasso inventé dans Configuration'
+            'aucun millésime OCAS inventé dans Configuration'
         );
         $this->same(
             4,
@@ -2438,7 +2438,7 @@ final class Tests
             'emp_cpe_ppm' => 700,
             'emp_lfp_ppm' => 820,
             'emp_lpp_ppm' => 80000,
-            'source' => 'Lasso — test',
+            'source' => 'OCAS — test',
             'verified_on' => '2026-07-25',
         ];
         $payrollFromConfiguration = $app->handle(new Request(
@@ -2450,7 +2450,7 @@ final class Tests
         $this->same(
             200,
             $payrollFromConfiguration->status,
-            'taux salariaux Lasso enregistrés depuis Configuration Vue'
+            'taux salariaux OCAS enregistrés depuis Configuration Vue'
         );
         $this->same(
             53000,
@@ -3216,21 +3216,21 @@ final class Tests
             $salaryScopeInjection->status,
             'API salaires refuse un scope injecté'
         );
-        $lassoNoCsrf = $app->handle(new Request(
+        $ocasNoCsrf = $app->handle(new Request(
             'POST',
-            '/api/v1/salaires/taux-lasso/previsualiser',
+            '/api/v1/salaires/taux-ocas/previsualiser',
             json: ['data' => ['year' => 2026]]
         ));
-        $this->same(403, $lassoNoCsrf->status, 'prévisualisation Lasso exige CSRF');
-        $lassoMissing = $app->handle(new Request(
+        $this->same(403, $ocasNoCsrf->status, 'prévisualisation OCAS exige CSRF');
+        $ocasMissing = $app->handle(new Request(
             'POST',
-            '/api/v1/salaires/taux-lasso/previsualiser',
+            '/api/v1/salaires/taux-ocas/previsualiser',
             server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
             json: ['data' => ['year' => 2026]]
         ));
         $this->false(
-            (bool) ($this->responseJson($lassoMissing)['data']['available'] ?? true),
-            'API n’invente aucun taux lorsque la base Lasso manque'
+            (bool) ($this->responseJson($ocasMissing)['data']['available'] ?? true),
+            'API n’invente aucun taux lorsque la base OCAS manque'
         );
         $this->false(
             str_contains($salaryScreen->body, 'Swissdec'),
@@ -5405,55 +5405,55 @@ final class Tests
             (bool) $configuration->rates($organisationId, $dossierId, 2027)['_fallback'],
             'repli annuel reprend le dernier millésime antérieur'
         );
-        $missingLasso = new LassoRateImportService('', $configuration, $audit);
+        $missingOCAS = new OcasRateImportService('', $configuration, $audit);
         $this->false(
-            (bool) $missingLasso->preview(2027)['available'],
-            'source Lasso absente signalée sans millésime inventé'
+            (bool) $missingOCAS->preview(2027)['available'],
+            'source OCAS absente signalée sans millésime inventé'
         );
-        $lassoPath = $this->tempDir() . '/lasso.sqlite';
-        $lassoPdo = new PDO('sqlite:' . $lassoPath);
-        $lassoPdo->exec(
+        $ocasPath = $this->tempDir() . '/ocas.sqlite';
+        $ocasPdo = new PDO('sqlite:' . $ocasPath);
+        $ocasPdo->exec(
             'CREATE TABLE taux_par_annee (
                 annee INTEGER NOT NULL, cle TEXT NOT NULL, valeur TEXT NOT NULL,
                 PRIMARY KEY (annee, cle)
             )'
         );
-        $lassoInsert = $lassoPdo->prepare(
+        $ocasInsert = $ocasPdo->prepare(
             'INSERT INTO taux_par_annee (annee, cle, valeur) VALUES (2027, ?, ?)'
         );
-        foreach (LassoRateImportService::KEY_MAP as $key => $field) {
+        foreach (OcasRateImportService::KEY_MAP as $key => $field) {
             $ppmValue = (int) ($rates[$field] ?? 0);
-            $lassoInsert->execute([
+            $ocasInsert->execute([
                 $key,
                 '0.' . str_pad((string) $ppmValue, 6, '0', STR_PAD_LEFT),
             ]);
         }
-        $lassoInsert->execute(['cle_future_inconnue', '0.001']);
-        $lasso = new LassoRateImportService($lassoPath, $configuration, $audit);
-        $lassoPreview = $lasso->preview(2027);
-        $this->same([], $lassoPreview['missing_keys'], 'mapping Lasso exhaustif');
+        $ocasInsert->execute(['cle_future_inconnue', '0.001']);
+        $ocas = new OcasRateImportService($ocasPath, $configuration, $audit);
+        $ocasPreview = $ocas->preview(2027);
+        $this->same([], $ocasPreview['missing_keys'], 'mapping OCAS exhaustif');
         $this->same(
             ['cle_future_inconnue'],
-            $lassoPreview['unknown_keys'],
-            'clé Lasso inconnue justifiée comme non applicable'
+            $ocasPreview['unknown_keys'],
+            'clé OCAS inconnue justifiée comme non applicable'
         );
-        $confirmedLasso = $lasso->confirm(
+        $confirmedOCAS = $ocas->confirm(
             $organisationId,
             $dossierId,
             2027,
-            (string) $lassoPreview['fingerprint'],
+            (string) $ocasPreview['fingerprint'],
             '2027-01-15'
         );
-        $this->false($confirmedLasso['idempotent'], 'confirmation Lasso auditée');
+        $this->false($confirmedOCAS['idempotent'], 'confirmation OCAS auditée');
         $this->true(
-            $lasso->confirm(
+            $ocas->confirm(
                 $organisationId,
                 $dossierId,
                 2027,
-                (string) $lassoPreview['fingerprint'],
+                (string) $ocasPreview['fingerprint'],
                 '2027-01-15'
             )['idempotent'],
-            'rejeu de confirmation Lasso idempotent'
+            'rejeu de confirmation OCAS idempotent'
         );
         $payrollId = $payrolls->createDraft(
             $organisationId,

@@ -5,7 +5,7 @@ Implémente `Tresorerie` sur l'API interne de `Compta`.
 ## Livrables
 
 - Comptes banque, poste, caisse et carte associés à un compte comptable.
-- Import PostFinance CSV repris des cas testés de Lasso.
+- Import PostFinance CSV repris des cas testés de l’OCAS.
 - Import ISO 20022 `camt.053` et `camt.054` selon les Swiss Payment Standards SIX.
 - Architecture de parseurs par type et namespace/version, avec XML source conservé.
 - Prévisualisation : compte, période, lignes, erreurs et doublons.

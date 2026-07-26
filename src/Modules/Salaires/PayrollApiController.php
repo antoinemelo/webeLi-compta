@@ -24,7 +24,7 @@ final class PayrollApiController
         private readonly PayrollService $payrolls,
         private readonly PayrollPaymentService $payments,
         private readonly PayrollCertificateService $certificates,
-        private readonly LassoRateImportService $lasso,
+        private readonly OcasRateImportService $ocas,
         private readonly PayrollInputValidator $validator,
     ) {
     }
@@ -194,18 +194,18 @@ final class PayrollApiController
         ]);
     }
 
-    public function previewLasso(Request $request): Response
+    public function previewOcas(Request $request): Response
     {
         $this->scope('salaires.manage');
         $data = $this->validator->yearAction($request);
-        return $this->execute($request, fn (): array => $this->lasso->preview($data['year']));
+        return $this->execute($request, fn (): array => $this->ocas->preview($data['year']));
     }
 
-    public function confirmLasso(Request $request): Response
+    public function confirmOcas(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('salaires.manage');
         $data = $this->validator->yearAction($request);
-        return $this->execute($request, fn (): array => $this->lasso->confirm(
+        return $this->execute($request, fn (): array => $this->ocas->confirm(
             $organisationId, $dossierId, $data['year'], $data['fingerprint'],
             $data['verified_on'], $userId
         ));

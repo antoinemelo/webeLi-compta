@@ -78,7 +78,7 @@ visibles sur chaque écran.
 - Factures clients et fournisseurs, notes de crédit, échéances et paiements partiels.
 - TVA suisse complète au niveau nécessaire à une tenue réelle et à son décompte :
   méthode effective et TDFN, codes/taux datés, impôt préalable et export eCH-0217.
-- Paie Lasso : employés, taux annuels, prestations, fiches, certificats et exports.
+- Paie OCAS : employés, taux annuels, prestations, fiches, certificats et exports.
 - Génération contrôlée des écritures de paie et de factures.
 - Axes analytiques facultatifs.
 - Modèles d'exercices, travail individuel ou en groupe depuis plusieurs postes,
@@ -92,7 +92,7 @@ visibles sur chaque écran.
 - Budgets et prévisions de trésorerie avancées.
 - Relances automatiques planifiées.
 - API publique, intégrations et application mobile.
-- Événements/SUISA repris de Lasso.
+- Événements/SUISA repris de l’OCAS.
 
 ## Explicitement hors périmètre initial
 

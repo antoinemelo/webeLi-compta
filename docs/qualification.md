@@ -23,7 +23,7 @@ altération de son checksum est refusée. Les migrations additives postérieures
 au gel de production devront compléter cette preuve.
 
 Les tests ne sont pas dupliqués. `quick` contient les contrôles purs de
-configuration et la parité de calcul Lasso ; `integration` contient SQLite,
+configuration et la parité de calcul OCAS ; `integration` contient SQLite,
 HTTP et tous les modules. `all` reste la valeur par défaut.
 
 ## Environnement d'exécution

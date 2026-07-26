@@ -23,7 +23,7 @@
       "suggested_rates": {
         "year": 2026,
         "avs_ppm": 53000,
-        "source": "Lasso — TAUX_DEFAUT / OCAS Genève 2026",
+        "source": "OCAS Genève 2026 — TAUX_DEFAUT",
         "verified_on": "2026-07-25"
       }
     },

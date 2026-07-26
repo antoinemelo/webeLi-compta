@@ -45,7 +45,7 @@ Sortie : architecture validée, aucune reprise massive encore engagée.
 
 ### Lot 6 — Salaires genevois
 
-- Portage des calculs et tests Lasso.
+- Portage des calculs et tests OCAS.
 - Fiches figées, certificats et exports, sans transmission Swissdec.
 - Comptabilisation et suivi des dettes/paiements.
 
@@ -85,7 +85,7 @@ Sortie : architecture validée, aucune reprise massive encore engagée.
 10. Produire un décompte TVA méthode effective avec plusieurs taux et impôt
     préalable, puis un export eCH-0217 validé.
 11. Produire un décompte TDFN sans déduire l'impôt préalable ordinaire.
-12. Recalculer les cas de référence Lasso avec résultats identiques au centime.
+12. Recalculer les cas de référence OCAS avec résultats identiques au centime.
 13. Modifier les taux 2027 sans changer une fiche 2026 validée.
 14. Comptabiliser une paie genevoise et solder séparément net et charges sociales.
 15. Empêcher un apprenant d'accéder à un dossier réel, même avec un ID deviné.

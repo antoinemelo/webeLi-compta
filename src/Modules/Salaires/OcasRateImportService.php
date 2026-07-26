@@ -7,7 +7,7 @@ use Compta\Core\Audit\AuditLogger;
 use PDO;
 use Throwable;
 
-final class LassoRateImportService
+final class OcasRateImportService
 {
     public const KEY_MAP = [
         'taux_avs' => 'avs_ppm',
@@ -39,14 +39,14 @@ final class LassoRateImportService
     public function preview(int $year): array
     {
         if ($year < 2000 || $year > 9999) {
-            throw new PayrollException('Année Lasso invalide.');
+            throw new PayrollException('Année de taux OCAS invalide.');
         }
         if ($this->databasePath === '' || !is_file($this->databasePath)) {
             return [
                 'available' => false,
                 'year' => $year,
                 'source' => $this->databasePath,
-                'message' => 'Base Lasso absente : aucun millésime n’est inventé.',
+                'message' => 'Source OCAS absente : aucun millésime n’est inventé.',
                 'rows' => [],
                 'rates' => [],
                 'unknown_keys' => [],
@@ -64,7 +64,9 @@ final class LassoRateImportService
                  WHERE type = 'table' AND name = 'taux_par_annee'"
             )->fetchColumn();
             if ($table === false) {
-                throw new PayrollException('La table Lasso taux_par_annee est absente.');
+                throw new PayrollException(
+                    'La table des taux annuels OCAS est absente.'
+                );
             }
             $stmt = $source->prepare(
                 'SELECT cle, valeur FROM taux_par_annee
@@ -75,7 +77,7 @@ final class LassoRateImportService
         } catch (PayrollException $exception) {
             throw $exception;
         } catch (Throwable) {
-            throw new PayrollException('La base Lasso ne peut pas être lue.');
+            throw new PayrollException('La source OCAS ne peut pas être lue.');
         }
         $rates = [];
         $rows = [];
@@ -116,7 +118,7 @@ final class LassoRateImportService
             'year' => $year,
             'source' => $this->databasePath,
             'message' => $sourceRows === []
-                ? 'Aucun taux Lasso pour ce millésime.'
+                ? 'Aucun taux OCAS pour ce millésime.'
                 : 'Prévisualisation sans écriture.',
             'rows' => $rows,
             'rates' => $rates,
@@ -141,11 +143,11 @@ final class LassoRateImportService
             || $preview['fingerprint'] === ''
             || !hash_equals((string) $preview['fingerprint'], $fingerprint)
         ) {
-            throw new PayrollException('Prévisualisation Lasso absente ou périmée.');
+            throw new PayrollException('Prévisualisation OCAS absente ou périmée.');
         }
         if ($preview['missing_keys'] !== []) {
             throw new PayrollException(
-                'Millésime Lasso incomplet : ' . implode(', ', $preview['missing_keys']) . '.'
+                'Millésime OCAS incomplet : ' . implode(', ', $preview['missing_keys']) . '.'
             );
         }
         try {
@@ -168,7 +170,7 @@ final class LassoRateImportService
         } catch (PayrollException) {
         }
         $data = $preview['rates'];
-        $data['source'] = 'Lasso taux_par_annee — ' . $this->databasePath;
+        $data['source'] = 'OCAS — taux annuels — ' . $this->databasePath;
         $data['source_annee'] = $year;
         $data['source_empreinte'] = $fingerprint;
         $data['importe_le'] = gmdate('Y-m-d H:i:s');
@@ -181,7 +183,7 @@ final class LassoRateImportService
             $actorId
         );
         $this->audit->log(
-            'salaires.taux_lasso_importes',
+            'salaires.taux_ocas_importes',
             $actorId,
             $organisationId,
             $dossierId,
@@ -199,12 +201,12 @@ final class LassoRateImportService
     private function fractionToPpm(string $value, string $key): int
     {
         if (preg_match('/^(0|1)(?:\.(\d{1,9}))?$/', $value, $match) !== 1) {
-            throw new PayrollException("Valeur Lasso invalide pour {$key}.");
+            throw new PayrollException("Valeur OCAS invalide pour {$key}.");
         }
         $whole = (int) $match[1];
         $decimals = $match[2] ?? '';
         if ($whole === 1 && trim($decimals, '0') !== '') {
-            throw new PayrollException("Valeur Lasso invalide pour {$key}.");
+            throw new PayrollException("Valeur OCAS invalide pour {$key}.");
         }
         $firstSix = str_pad(substr($decimals, 0, 6), 6, '0');
         $ppm = ($whole * 1_000_000) + (int) $firstSix;
@@ -212,7 +214,7 @@ final class LassoRateImportService
             $ppm++;
         }
         if ($ppm > 1_000_000) {
-            throw new PayrollException("Valeur Lasso invalide pour {$key}.");
+            throw new PayrollException("Valeur OCAS invalide pour {$key}.");
         }
         return $ppm;
     }

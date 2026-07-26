@@ -72,8 +72,8 @@ Les exemples versionnés sont :
 | POST | `/api/v1/salaires/fiches/valider` | validation et gel des snapshots |
 | POST | `/api/v1/salaires/fiches/comptabiliser` | écriture salariale dans le grand livre |
 | POST | `/api/v1/salaires/fiches/annuler` | correction par contre-passation |
-| POST | `/api/v1/salaires/taux-lasso/previsualiser` | lecture sans écriture de `taux_par_annee` |
-| POST | `/api/v1/salaires/taux-lasso/confirmer` | import contrôlé, audité et idempotent |
+| POST | `/api/v1/salaires/taux-ocas/previsualiser` | lecture sans écriture de `taux_par_annee` |
+| POST | `/api/v1/salaires/taux-ocas/confirmer` | import contrôlé, audité et idempotent |
 | POST | `/api/v1/salaires/certificats/preparer` | préparation d’un certificat interne |
 | POST | `/api/v1/salaires/certificats/controler` | contrôle opérateur avant export |
 | GET | `/api/v1/salaires/certificats/exporter` | export nominatif audité, non transmis |
@@ -176,7 +176,7 @@ Les référentiels gérés ajoutent les permissions `facturation.manage`,
 les services métier existants. Les valeurs salariales sont transmises en ppm
 entiers et les taux TVA en points de base ; Vue ne fait aucun calcul avec des
 flottants. Les valeurs proposées pour 2026 proviennent de `TAUX_DEFAUT` de
-Lasso et restent explicitement à vérifier auprès des organismes concernés.
+OCAS et restent explicitement à vérifier auprès des organismes concernés.
 
 La lecture comptable exige `exercise_id`, accepte `account_id`,
 `date_start`, `date_end` et `vat_statement_id`, puis renvoie le journal,

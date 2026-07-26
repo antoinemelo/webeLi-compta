@@ -23,7 +23,7 @@ Le mapping comptable n’est pas nécessaire au calcul d’un brouillon, mais il
 obligatoire avant sa validation et la création des dettes salariales.
 
 Aucun taux annuel de production n’est fourni par défaut. Configurez
-`LASSO_DB_PATH` vers une base SQLite Lasso contenant `taux_par_annee` pour
+`OCAS_DB_PATH` vers la source SQLite des taux OCAS pour
 prévisualiser puis confirmer un millésime. Une source absente ou incomplète est
 signalée sans créer de valeurs. Les valeurs légales, contractuelles et
 individuelles doivent être contrôlées avant chaque exercice.

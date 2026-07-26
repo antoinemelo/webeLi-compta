@@ -43,16 +43,16 @@ Les gains/pertes réalisés sont comptabilisés lors du règlement. Les écarts 
 réalisés passent par une opération explicite de clôture et de contre-passation.
 Aucun `float` n'est autorisé.
 
-## Reprise des taux salariaux Lasso
+## Reprise des taux salariaux OCAS
 
-La source est la table `taux_par_annee` de la base Lasso désignée par son
-`APP_DB_PATH`. Fournir une commande d'import en deux temps :
+La source est la table `taux_par_annee` de la source OCAS désignée par
+`OCAS_DB_PATH`. Fournir une commande d'import en deux temps :
 
 1. prévisualiser années, clés, valeurs, correspondances et anomalies sans
    écriture ;
 2. confirmer l'import dans les paramètres annuels COMPTA.
 
-Convertir les fractions Lasso en ppm entiers avec une règle d'arrondi testée.
+Convertir les fractions OCAS en ppm entiers avec une règle d'arrondi testée.
 Conserver année, clé source, valeur source, chemin/empreinte de la base, date
 d'import et opérateur. Ne jamais écraser un millésime COMPTA déjà utilisé par
 une fiche validée. Les snapshots de fiches existants restent intacts.

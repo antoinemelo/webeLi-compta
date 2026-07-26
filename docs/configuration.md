@@ -31,7 +31,7 @@ Sous `/app/configuration/referentiels`, les référentiels sont gérés dans Vue
 - codes TVA : taux légaux en lecture et création de codes datés via
   `VatConfigurationService` ;
 - charges sociales : millésimes en ppm via
-  `PayrollConfigurationService`, avec import Lasso prévisualisé et contrôlé ;
+  `PayrollConfigurationService`, avec import OCAS prévisualisé et contrôlé ;
 - comptes bancaires, postaux, caisse et cartes : création, édition et
   activation via `TreasuryAccountService`, toujours liés au grand livre ;
 - journaux : création et édition optimiste via `AccountingSetupService` ;
@@ -86,7 +86,7 @@ base en service. Un retour arrière s'effectue toujours par restauration d'une
 sauvegarde contrôlée, jamais en retirant manuellement des colonnes.
 
 Les taux de charges sociales restent ceux du module Salaires, issus de la
-correspondance Lasso documentée. Leur import et leur évolution annuelle
+correspondance OCAS documentée. Leur import et leur évolution annuelle
 demeurent versionnés ; les fiches validées conservent leurs snapshots.
 
 Le périmètre exact pouvant être retiré sans perte fonctionnelle est consigné

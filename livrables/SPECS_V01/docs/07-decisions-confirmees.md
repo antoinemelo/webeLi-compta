@@ -20,7 +20,7 @@ hypothèses de la première version.
 | PDF | TCPDF seulement si nécessaire ; impression HTML ailleurs |
 | Salaires | Genève uniquement |
 | Swissdec | Aucune transmission |
-| Impôt à la source | Taux individuel Lasso, limite clairement affichée |
+| Impôt à la source | Taux individuel OCAS, limite clairement affichée |
 | LPP | Taux paramétrique initial, architecture extensible |
 | Certificat salaire | XML/PDF, format officiel courant à valider |
 | E-mail | SMTP ; file simple de relance, aucun daemon obligatoire |

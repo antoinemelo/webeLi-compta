@@ -5,7 +5,7 @@ conception, puis `README.md`, les migrations, les services concernés et les
 tests. Inspecte aussi les conventions Vue du CMS voisin
 `/home/amelo/Documents/DEV/Ecol_WebeLi/web/mod/frontend/admin-vue`, sans copier
 ses fonctions métier. Pour les charges salariales, traite
-`/home/amelo/Documents/DEV/Ecol_WebeLi/web/lasso` comme source de reprise.
+la source OCAS configurée par `OCAS_DB_PATH` comme source de reprise.
 
 ## Objectif intangible
 

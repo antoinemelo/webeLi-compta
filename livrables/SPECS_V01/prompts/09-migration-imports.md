@@ -6,7 +6,7 @@ Construis des importeurs, sans écrire directement dans une base réelle.
 
 - `journal` : plan comptable, soldes initiaux, journal `::`, configuration des
   comptes de factures et éventuels fichiers de paiements.
-- `lasso` : employés, fiches, taux, factures, débiteurs, comptes, imports et axes.
+- `ocas` : employés, fiches, taux, factures, débiteurs, comptes, imports et axes.
 
 ## Exigences
 

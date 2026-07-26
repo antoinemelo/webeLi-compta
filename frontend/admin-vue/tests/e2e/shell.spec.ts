@@ -153,7 +153,7 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('button', { name: 'Charges sociales' }).click();
   await expect(page.getByRole('heading', { name: 'Taux annuels des charges sociales' })).toBeVisible();
   await expect(page.getByText(/Salaires → Annuels/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Charger les valeurs Lasso 2026' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Charger les valeurs OCAS 2026' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Journaux' }).click();
   await expect(page.getByRole('heading', { name: 'Nouveau journal' })).toBeVisible();
@@ -425,7 +425,7 @@ test('rapprochement, lettrage et paiements sortants utilisent le parcours Vue', 
   await expect(page.getByText('export pain.001 non transmis', { exact: false })).toBeVisible();
 });
 
-test('salaires horaires et mensuels utilisent le parcours Vue et l’import Lasso contrôlé', async ({
+test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS contrôlé', async ({
   page
 }) => {
   await loginAsAdministrator(page);
@@ -448,7 +448,7 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import Lass
   await expect(page.getByRole('heading', { name: 'Récapitulatifs et certificats' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Prévisualiser sans écrire' }).click();
-  await expect(page.getByText('Base Lasso absente : aucun millésime n’est inventé.')).toBeVisible();
+  await expect(page.getByText('Source OCAS absente : aucun millésime n’est inventé.')).toBeVisible();
 
   const legacy = await page.request.get('/e2e/salaires', { maxRedirects: 0 });
   expect(legacy.status()).toBe(303);

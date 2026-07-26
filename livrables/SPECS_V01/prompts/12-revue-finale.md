@@ -7,7 +7,7 @@ Lis les spécifications, inspecte le code et vérifie par preuves :
 1. invariants de partie double, immutabilité et contre-passation ;
 2. exactitude TVA effective/TDFN, décomptes et eCH-0217 ;
 3. exactitude des allocations et états de facture ;
-4. parité des calculs salaires genevois Lasso et absence de Swissdec ;
+4. parité des calculs salaires genevois OCAS et absence de Swissdec ;
 5. isolation organisations/dossiers et rôles, surtout apprenants/PII ;
 6. collaboration de groupe et conflits de concurrence sans perte ;
 7. migrations, sauvegarde/restauration et intégrité ;

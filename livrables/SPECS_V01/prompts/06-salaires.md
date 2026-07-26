@@ -1,12 +1,12 @@
 # Prompt 06 — Salaires genevois
 
-Porte le domaine salaires de Lasso en conservant ses résultats métier, mais en
+Porte le domaine salaires de l’OCAS en conservant ses résultats métier, mais en
 l'intégrant proprement au nouveau noyau et à la comptabilité. Le périmètre est
 strictement genevois au MVP et n'inclut aucune transmission Swissdec.
 
 ## Travail préparatoire
 
-Établis une table de correspondance entre fonctions/tables/tests Lasso et la cible.
+Établis une table de correspondance entre fonctions/tables/tests OCAS et la cible.
 Porte d'abord les 32 assertions de `tests/calc_test.php`, puis seulement le code.
 
 ## Livrables
@@ -23,7 +23,7 @@ Porte d'abord les 32 assertions de `tests/calc_test.php`, puis seulement le code
 
 ## Tests obligatoires
 
-- Parité exacte avec tous les cas Lasso.
+- Parité exacte avec tous les cas OCAS.
 - Changement de taux sans effet sur fiche validée.
 - Arrondis par composant et total cohérent.
 - Rejeu de comptabilisation sans doublon.

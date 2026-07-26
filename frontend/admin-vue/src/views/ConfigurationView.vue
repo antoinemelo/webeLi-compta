@@ -1343,7 +1343,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             </div>
             <p class="field-hint">
               Saisissez ici un millésime contrôlé manuellement ou utilisez
-              Salaires → Annuels pour prévisualiser la table Lasso sans écriture.
+              Salaires → Annuels pour prévisualiser les taux OCAS sans écriture.
             </p>
             <div class="configuration-grid">
               <label>Année
@@ -1393,7 +1393,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             <EmptyState
               v-if="!managedReferences.payroll.rates.length"
               title="Aucun taux salarial annuel"
-              description="Saisissez un millésime contrôlé ou importez-le depuis la table Lasso."
+              description="Saisissez un millésime contrôlé ou importez-le depuis la source OCAS."
             />
           </article>
         </template>

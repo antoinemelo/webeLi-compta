@@ -13,7 +13,7 @@ PostgreSQL. La cible est un monolithe modulaire :
 - base SQLite canonique reconstruisible en développement, puis migrations
   additives après le gel de production ;
 - modules métier alimentant tous le même grand livre.
-- taux et paramètres de charges salariales repris prioritairement de Lasso,
+- taux et paramètres de charges salariales repris prioritairement de l’OCAS,
   puis convertis au format entier et versionné de COMPTA.
 
 ## Contenu

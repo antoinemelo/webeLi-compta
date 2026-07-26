@@ -47,10 +47,10 @@ PostgreSQL et PHPUnit.
 - Exercices pédagogiques clonés et isolés, indices, tentatives, correction et
   conflits optimistes.
 
-## Source salariale Lasso confirmée
+## Source salariale OCAS confirmée
 
-Le projet Lasso sous `/home/amelo/Documents/DEV/Ecol_WebeLi/web/lasso` est la
-source de reprise des paramètres de charges salariales. Les éléments
+La source OCAS configurée par `OCAS_DB_PATH` constitue la source de reprise des
+paramètres de charges salariales. Les éléments
 déterminants sont :
 
 - `lib/calc.php` : clés `TAUX_DEFAUT`, sélection annuelle
@@ -60,7 +60,7 @@ déterminants sont :
 - `tests/calc_test.php` : résultats historiques à conserver.
 
 La copie auditée ne contient pas `data/database.sqlite`. L'import doit donc lire
-la base effectivement configurée par `APP_DB_PATH` lorsqu'elle est fournie ; il
+la base effectivement configurée par `OCAS_DB_PATH` lorsqu'elle est fournie ; il
 ne doit pas prétendre avoir repris des valeurs annuelles absentes. Les constantes
 de `TAUX_DEFAUT` servent de référence de compatibilité, pas de vérité légale
 permanente.

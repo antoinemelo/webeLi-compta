@@ -250,8 +250,8 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/salaires/paiements', $this->payroll->createPayment(...));
             $this->add($router, 'POST', '/api/v1/salaires/allocations', $this->payroll->allocate(...));
             $this->add($router, 'POST', '/api/v1/salaires/paiements/comptabiliser', $this->payroll->postPayment(...));
-            $this->add($router, 'POST', '/api/v1/salaires/taux-lasso/previsualiser', $this->payroll->previewLasso(...));
-            $this->add($router, 'POST', '/api/v1/salaires/taux-lasso/confirmer', $this->payroll->confirmLasso(...));
+            $this->add($router, 'POST', '/api/v1/salaires/taux-ocas/previsualiser', $this->payroll->previewOcas(...));
+            $this->add($router, 'POST', '/api/v1/salaires/taux-ocas/confirmer', $this->payroll->confirmOcas(...));
             $this->add($router, 'POST', '/api/v1/salaires/certificats/preparer', $this->payroll->prepareCertificate(...));
             $this->add($router, 'POST', '/api/v1/salaires/certificats/controler', $this->payroll->controlCertificate(...));
             $this->add($router, 'GET', '/api/v1/salaires/certificats/exporter', $this->payroll->exportCertificate(...));

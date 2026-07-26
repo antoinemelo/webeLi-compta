@@ -101,7 +101,7 @@ Le solde d'un document est toujours calculé :
 
 ## 6. Salaires
 
-Le périmètre fonctionnel de Lasso est conservé :
+Le périmètre fonctionnel de l’OCAS est conservé :
 
 - employeur, employés, canton, AVS, procédure, taux horaire ;
 - taux sociaux par année ;

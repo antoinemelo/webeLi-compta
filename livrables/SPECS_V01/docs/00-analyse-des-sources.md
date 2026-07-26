@@ -35,7 +35,7 @@ Reprendre le vocabulaire, les parcours et les calculs de soldes, mais les
 implémenter sur un modèle relationnel normalisé : `ecritures` +
 `lignes_ecriture`, documents, échéances et allocations.
 
-## 2. Projet `lasso`
+## 2. Projet `ocas`
 
 ### Forces à reprendre
 
@@ -53,7 +53,7 @@ implémenter sur un modèle relationnel normalisé : `ecritures` +
 
 ### Limites observées
 
-La comptabilité Lasso est principalement une comptabilité de caisse : une ligne
+La comptabilité OCAS est principalement une comptabilité de caisse : une ligne
 bancaire porte une catégorie du plan de comptes. Ce modèle ne suffit pas pour :
 
 - passer une écriture composée de plusieurs lignes ;
@@ -104,20 +104,20 @@ les habitudes qui facilitent réellement la maintenance :
 
 | Élément | Source | Décision |
 |---|---|---|
-| Calcul de salaire | Lasso | Reprendre et renforcer les tests |
-| Fiche figée / taux annuels | Lasso | Reprendre |
-| Employés et employeur | Lasso | Reprendre, ajouter droits/PII |
-| QR-facture / SCOR | Lasso | Reprendre après correction des dépendances |
+| Calcul de salaire | OCAS | Reprendre et renforcer les tests |
+| Fiche figée / taux annuels | OCAS | Reprendre |
+| Employés et employeur | OCAS | Reprendre, ajouter droits/PII |
+| QR-facture / SCOR | OCAS | Reprendre après correction des dépendances |
 | Journal en partie double | Journal | Reconcevoir en SQL |
 | Grand livre / balance / bilan / résultat | Journal | Reprendre les règles, ajouter clôture |
 | Liquidités | Journal | Reprendre avec rapprochement bancaire |
 | Débiteurs / créanciers | Les deux | Unifier dans contacts + documents + allocations |
-| Import bancaire / dédoublonnage | Lasso | Reprendre et rendre multi-format |
-| Axes analytiques | Lasso | Reprendre au niveau des lignes comptables |
+| Import bancaire / dédoublonnage | OCAS | Reprendre et rendre multi-format |
+| Axes analytiques | OCAS | Reprendre au niveau des lignes comptables |
 | Mandats / exercices | Journal | Reprendre comme dossiers isolés |
-| Sécurité web | Lasso + Webe.li | Reprendre et compléter RBAC/audit |
+| Sécurité web | OCAS + Webe.li | Reprendre et compléter RBAC/audit |
 | Migrations / qualification | Webe.li | Adapter en version légère |
-| Module événements | Lasso | Hors MVP, extension ultérieure |
+| Module événements | OCAS | Hors MVP, extension ultérieure |
 
 ## 5. Sources normatives retenues
 

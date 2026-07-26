@@ -44,7 +44,7 @@ const mapping = reactive<Record<string, number>>({
   dette_net_id: 0, dette_ocas_id: 0, dette_laa_id: 0, dette_lpp_id: 0,
   dette_impot_id: 0
 });
-const lassoVerifiedOn = ref(today);
+const ocasVerifiedOn = ref(today);
 
 const mappingFields: Array<[string, string]> = [
   ['charge_salaires_id', 'Charge salaires'], ['charge_ocas_id', 'Charge OCAS'],
@@ -186,12 +186,12 @@ async function saveEmployer(): Promise<void> {
 async function saveMapping(): Promise<void> {
   await mutate('/salaires/mapping', { ...mapping }, 'Mapping salarial enregistré.');
 }
-async function confirmLasso(): Promise<void> {
-  if (!store.lasso) return;
-  await mutate('/salaires/taux-lasso/confirmer', {
-    year: store.lasso.year, fingerprint: store.lasso.fingerprint,
-    verified_on: lassoVerifiedOn.value
-  }, 'Taux Lasso contrôlés et importés.');
+async function confirmOcas(): Promise<void> {
+  if (!store.ocas) return;
+  await mutate('/salaires/taux-ocas/confirmer', {
+    year: store.ocas.year, fingerprint: store.ocas.fingerprint,
+    verified_on: ocasVerifiedOn.value
+  }, 'Taux OCAS contrôlés et importés.');
 }
 async function certificate(action: 'preparer' | 'controler', employeeId: number): Promise<void> {
   await mutate(`/salaires/certificats/${action}`, {
@@ -338,7 +338,7 @@ onMounted(() => reload());
     <template v-else>
       <section class="metric-strip"><span><small>Brut annuel</small><strong>{{ money(Number(workspace.annual.employer.gross_cents || 0)) }}</strong></span><span><small>Retenues</small><strong>{{ money(Number(workspace.annual.employer.deductions_cents || 0)) }}</strong></span><span><small>Charges employeur</small><strong>{{ money(Number(workspace.annual.employer.employer_charges_cents || 0)) }}</strong></span><span><small>Coût total</small><strong>{{ money(Number(workspace.annual.employer.total_cost_cents || 0)) }}</strong></span></section>
       <section class="panel"><h2>Récapitulatifs et certificats</h2><div class="table-scroll"><table><thead><tr><th>Employé</th><th>Fiches</th><th>Brut</th><th>Net</th><th>Certificat</th></tr></thead><tbody><tr v-for="row in workspace.annual.employees" :key="n(row,'employe_id')"><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ n(row,'fiches') }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td class="button-row"><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii || n(row,'fiches') === 0" @click="certificate('preparer',n(row,'employe_id'))">Préparer</button><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii" @click="certificate('controler',n(row,'employe_id'))">Contrôler</button><a class="button small" :href="certificateUrl(n(row,'employe_id'))">Exporter</a></td></tr></tbody></table></div><p class="notice warning">{{ workspace.definitions.certificate }}</p></section>
-      <section class="panel"><h2>Import annuel Lasso</h2><div class="button-row"><button class="button" :disabled="store.saving" @click="store.previewLasso(year)">Prévisualiser sans écrire</button><label>Contrôlé le <input v-model="lassoVerifiedOn" type="date"></label><button v-if="store.lasso?.available" class="button primary" :disabled="store.lasso.missing_keys.length > 0" @click="confirmLasso">Confirmer l’import</button></div><p v-if="store.lasso" :class="['notice', store.lasso.available ? 'success' : 'warning']">{{ store.lasso.message }}</p><p v-if="store.lasso?.missing_keys.length">Clés manquantes : {{ store.lasso.missing_keys.join(', ') }}</p><div v-if="store.lasso?.rows.length" class="table-scroll"><table><thead><tr><th>Clé Lasso</th><th>Cible COMPTA</th><th>Valeur</th><th>Décision</th></tr></thead><tbody><tr v-for="row in store.lasso.rows" :key="s(row,'key')"><td>{{ s(row,'key') }}</td><td>{{ s(row,'target') || 'Non applicable' }}</td><td>{{ s(row,'value') }}</td><td>{{ s(row,'status') }} {{ s(row,'reason') }}</td></tr></tbody></table></div></section>
+      <section class="panel"><h2>Import annuel OCAS</h2><div class="button-row"><button class="button" :disabled="store.saving" @click="store.previewOcas(year)">Prévisualiser sans écrire</button><label>Contrôlé le <input v-model="ocasVerifiedOn" type="date"></label><button v-if="store.ocas?.available" class="button primary" :disabled="store.ocas.missing_keys.length > 0" @click="confirmOcas">Confirmer l’import</button></div><p v-if="store.ocas" :class="['notice', store.ocas.available ? 'success' : 'warning']">{{ store.ocas.message }}</p><p v-if="store.ocas?.missing_keys.length">Clés manquantes : {{ store.ocas.missing_keys.join(', ') }}</p><div v-if="store.ocas?.rows.length" class="table-scroll"><table><thead><tr><th>Clé OCAS</th><th>Cible COMPTA</th><th>Valeur</th><th>Décision</th></tr></thead><tbody><tr v-for="row in store.ocas.rows" :key="s(row,'key')"><td>{{ s(row,'key') }}</td><td>{{ s(row,'target') || 'Non applicable' }}</td><td>{{ s(row,'value') }}</td><td>{{ s(row,'status') }} {{ s(row,'reason') }}</td></tr></tbody></table></div></section>
       <section class="panel"><h2>Paramétrage employeur et comptes</h2><form class="form-grid three" @submit.prevent="saveEmployer"><label>Employeur<input v-model="employer.name" required></label><label>Adresse<input v-model="employer.address"></label><label>NPA<input v-model="employer.postal_code"></label><label>Localité<input v-model="employer.city"></label><label>E-mail<input v-model="employer.email"></label><label>Téléphone<input v-model="employer.phone"></label><label>Heures hebdomadaires<input v-model="employer.weekly_hours"></label><button class="button">Enregistrer l’employeur</button></form><form class="form-grid three" @submit.prevent="saveMapping"><label v-for="[key,label] in mappingFields" :key="key">{{ label }}<select v-model.number="mapping[key]"><option :value="0">Choisir…</option><option v-for="row in workspace.catalog.accounts" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'numero') }} — {{ s(row,'libelle') }}</option></select></label><button class="button primary">Enregistrer le mapping</button></form></section>
     </template>
   </template>

@@ -45,7 +45,7 @@ use Compta\Modules\Immobilisations\AssetInputValidator;
 use Compta\Modules\Immobilisations\AssetService;
 use Compta\Modules\Salaires\PayrollCertificateService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
-use Compta\Modules\Salaires\LassoRateImportService;
+use Compta\Modules\Salaires\OcasRateImportService;
 use Compta\Modules\Salaires\PayrollApiController;
 use Compta\Modules\Salaires\PayrollInputValidator;
 use Compta\Modules\Salaires\PayrollImportService;
@@ -243,8 +243,8 @@ $apiRoutes = new ApiRouteRegistry(
         $payrolls,
         $payrollPayments,
         $payrollCertificates,
-        new LassoRateImportService(
-            $config->string('lasso_database_path'),
+        new OcasRateImportService(
+            $config->string('ocas_database_path'),
             $payrollConfiguration,
             $audit
         ),

@@ -1141,7 +1141,7 @@ export type PayrollWorkspace = {
   definitions: Record<string, string>;
 };
 
-export type LassoRatePreview = {
+export type OcasRatePreview = {
   available: boolean;
   year: number;
   source: string;

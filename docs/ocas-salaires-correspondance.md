@@ -1,9 +1,9 @@
-# Correspondance Lasso → COMPTA — salaires genevois
+# Correspondance OCAS → COMPTA — salaires genevois
 
 Cette table précède le portage du moteur. Le périmètre cible est strictement
 genevois et ne contient aucune transmission Swissdec.
 
-| Source Lasso | Responsabilité | Cible COMPTA |
+| Source OCAS | Responsabilité | Cible COMPTA |
 |---|---|---|
 | `lib/calc.php::calculer_fiche()` | Brut, vacances, retenues, net et charges patronales | `Salaires\PayrollCalculator::calculate()` |
 | `lib/calc.php::seuil_heures()` | Seuil mensuel LAA de 8 h/semaine | `PayrollCalculator::monthlyHourThreshold()` |
@@ -27,7 +27,7 @@ genevois et ne contient aucune transmission Swissdec.
 
 ## Parité de tests
 
-Les 32 assertions de `lasso/tests/calc_test.php` sont reprises dans
+Les 32 assertions de `ocas/tests/calc_test.php` sont reprises dans
 `Tests::payrollCalculatorParityTests()` avec des centimes et taux entiers. Les
 cas couvrent le salaire de référence, les vacances, AVS/AC/A.mat/LAA/LPP,
 l’impôt source, les charges patronales, CPE/LFP, les seuils mensuels et le choix
@@ -35,7 +35,7 @@ LAA.
 
 ## Import contrôlé
 
-`LassoRateImportService` couvre exhaustivement les seize clés utilisées par
+`OcasRateImportService` couvre exhaustivement les seize clés utilisées par
 `lib/calc.php`. Il convertit les fractions décimales en ppm par arithmétique
 entière, rapporte toute clé inconnue comme non applicable et refuse un millésime
 incomplet. La prévisualisation ne modifie rien ; la confirmation compare une
@@ -45,7 +45,7 @@ remplacé.
 
 ## Limites explicites
 
-Le taux individuel unique d’impôt à la source repris de Lasso ne constitue pas
+Le taux individuel unique d’impôt à la source repris de l’OCAS ne constitue pas
 un barème fiscal officiel complet. Le taux LPP paramétrique initial ne remplace
 pas un plan de prévoyance ni ses règles d’âge, de seuil et de salaire coordonné.
 Les paramètres annuels doivent être validés par les organismes et spécialistes

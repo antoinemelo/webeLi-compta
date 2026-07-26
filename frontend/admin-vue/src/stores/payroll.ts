@@ -1,11 +1,11 @@
 import { defineStore } from 'pinia';
 import { api, errorMessage } from '@/api/client';
-import type { LassoRatePreview, PayrollWorkspace } from '@/api/contracts';
+import type { OcasRatePreview, PayrollWorkspace } from '@/api/contracts';
 
 export const usePayrollStore = defineStore('payroll', {
   state: () => ({
     workspace: null as PayrollWorkspace | null,
-    lasso: null as LassoRatePreview | null,
+    ocas: null as OcasRatePreview | null,
     loading: false,
     saving: false,
     error: '',
@@ -40,12 +40,12 @@ export const usePayrollStore = defineStore('payroll', {
         this.saving = false;
       }
     },
-    async previewLasso(year: number): Promise<void> {
+    async previewOcas(year: number): Promise<void> {
       this.saving = true;
       this.error = '';
       try {
-        this.lasso = (await api.post<LassoRatePreview>(
-          '/salaires/taux-lasso/previsualiser',
+        this.ocas = (await api.post<OcasRatePreview>(
+          '/salaires/taux-ocas/previsualiser',
           { year }
         )).data;
       } catch (error) {

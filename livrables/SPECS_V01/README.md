@@ -5,14 +5,14 @@ Révision : 2 — décisions métier confirmées le 25 juillet 2026
 Sources étudiées :
 
 - `/home/amelo/Documents/DEV/Ecol_WebeLi/web/journal`
-- `/home/amelo/Documents/DEV/Ecol_WebeLi/web/lasso`
+- source OCAS configurée par `OCAS_DB_PATH`
 - `/home/amelo/Documents/DEV/Ecol_WebeLi/web/mod` comme référence de structure et d'exploitation Webe.li
 
 ## Conclusion courte
 
 La cible recommandée est un **monolithe modulaire PHP 8.2+ / SQLite**, rendu côté
 serveur, sans SPA ni étape de compilation obligatoire. Elle reprend presque
-intégralement le domaine « salaires » de Lasso, mais remplace sa comptabilité de
+intégralement le domaine « salaires » de l’OCAS, mais remplace sa comptabilité de
 caisse par un vrai journal en partie double inspiré de `journal/Compta.py`.
 
 La source de vérité comptable est composée d'écritures équilibrées et immuables.
