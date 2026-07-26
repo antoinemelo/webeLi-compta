@@ -85,6 +85,124 @@ final class ContactService
         }, true);
     }
 
+    /**
+     * @param list<string> $roles
+     * @param array{ligne1:string,ligne2?:string,code_postal:string,localite:string,pays?:string} $address
+     */
+    public function update(
+        int $organisationId,
+        int $dossierId,
+        int $contactId,
+        int $expectedVersion,
+        array $data,
+        array $roles,
+        array $address,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $contactId,
+            $expectedVersion,
+            $data,
+            $roles,
+            $address,
+            $actorId
+        ): void {
+            $type = (string) ($data['type_personne'] ?? 'entreprise');
+            $company = trim((string) ($data['raison_sociale'] ?? ''));
+            $firstName = trim((string) ($data['prenom'] ?? ''));
+            $lastName = trim((string) ($data['nom'] ?? ''));
+            if (
+                !in_array($type, ['entreprise', 'personne'], true)
+                || ($type === 'entreprise' && $company === '')
+                || ($type === 'personne' && $firstName === '' && $lastName === '')
+            ) {
+                throw new BillingException('Identité du contact invalide.');
+            }
+            $this->assertRoles($roles);
+            foreach (['ligne1', 'code_postal', 'localite'] as $field) {
+                if (trim((string) ($address[$field] ?? '')) === '') {
+                    throw new BillingException('Adresse incomplète.');
+                }
+            }
+            $update = $this->pdo->prepare(
+                'UPDATE contacts
+                 SET type_personne = ?, raison_sociale = ?, prenom = ?, nom = ?,
+                     email = ?, telephone = ?, langue = ?,
+                     modifie_le = datetime(\'now\'), version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND version = ? AND actif = 1'
+            );
+            $update->execute([
+                $type,
+                $company,
+                $firstName,
+                $lastName,
+                trim((string) ($data['email'] ?? '')),
+                trim((string) ($data['telephone'] ?? '')),
+                (string) ($data['langue'] ?? 'fr'),
+                $contactId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($update->rowCount() !== 1) {
+                throw new BillingException(
+                    'Contact absent ou modifié par un autre utilisateur.'
+                );
+            }
+            $this->pdo->prepare(
+                'DELETE FROM contact_roles WHERE contact_id = ?'
+            )->execute([$contactId]);
+            $insertRole = $this->pdo->prepare(
+                'INSERT INTO contact_roles (contact_id, role) VALUES (?, ?)'
+            );
+            foreach (array_values(array_unique($roles)) as $role) {
+                $insertRole->execute([$contactId, $role]);
+            }
+            $addressId = $this->pdo->prepare(
+                "SELECT id FROM adresses_contacts
+                 WHERE contact_id = ? AND type = 'facturation' AND actif = 1
+                 ORDER BY id LIMIT 1"
+            );
+            $addressId->execute([$contactId]);
+            $currentAddressId = $addressId->fetchColumn();
+            if ($currentAddressId === false) {
+                $this->addAddress(
+                    $organisationId,
+                    $dossierId,
+                    $contactId,
+                    $address + ['type' => 'facturation']
+                );
+            } else {
+                $this->pdo->prepare(
+                    'UPDATE adresses_contacts
+                     SET ligne1 = ?, ligne2 = ?, code_postal = ?, localite = ?,
+                         pays = ?, modifie_le = datetime(\'now\'),
+                         version = version + 1
+                     WHERE id = ?'
+                )->execute([
+                    trim((string) $address['ligne1']),
+                    trim((string) ($address['ligne2'] ?? '')),
+                    trim((string) $address['code_postal']),
+                    trim((string) $address['localite']),
+                    strtoupper(trim((string) ($address['pays'] ?? 'CH'))),
+                    (int) $currentAddressId,
+                ]);
+            }
+            $this->audit->log(
+                'facturation.contact_modifie',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'contact',
+                (string) $contactId,
+                ['roles' => array_values(array_unique($roles))]
+            );
+        }, true);
+    }
+
     /** @param array{ligne1:string,ligne2?:string,code_postal:string,localite:string,pays?:string,type?:string} $data */
     public function addAddress(
         int $organisationId,

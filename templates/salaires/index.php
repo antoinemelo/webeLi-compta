@@ -13,24 +13,6 @@ $tabUrl = static fn (string $tab): string => $config->url('/salaires')
     . '?onglet=' . rawurlencode($tab);
 $today = date('Y-m-d');
 $year = (int) date('Y');
-$rateLabels = [
-    'avs_ppm' => 'AVS employé',
-    'ac_ppm' => 'AC employé',
-    'amat_ppm' => 'A.mat employé',
-    'laa_reduit_ppm' => 'LAA employé réduite',
-    'laa_plein_ppm' => 'LAA employé pleine',
-    'lpp_ppm' => 'LPP employé',
-    'emp_avs_ppm' => 'AVS employeur',
-    'emp_ac_ppm' => 'AC employeur',
-    'emp_amat_ppm' => 'A.mat employeur',
-    'emp_af_ppm' => 'AF employeur',
-    'emp_laa_reduit_ppm' => 'LAA employeur réduite',
-    'emp_laa_plein_ppm' => 'LAA employeur pleine',
-    'emp_frais_ppm' => 'Frais sociaux',
-    'emp_cpe_ppm' => 'CPE',
-    'emp_lfp_ppm' => 'LFP',
-    'emp_lpp_ppm' => 'LPP employeur',
-];
 $mappingLabels = [
     'charge_salaires_id' => 'Charge salaires',
     'charge_ocas_id' => 'Charge OCAS',
@@ -284,32 +266,14 @@ $mappingLabels = [
     </div></section>
 
     <section class="card border-0 shadow-sm mb-3"><div class="card-body">
-      <h2 class="h5">Taux annuels explicites</h2>
-      <form method="post" action="<?= Html::escape($actionUrl) ?>" class="row g-2 align-items-end">
-        <input type="hidden" name="_csrf" value="<?= Html::escape($csrf) ?>">
-        <input type="hidden" name="action" value="rates"><input type="hidden" name="onglet" value="parametres">
-        <div class="col-md-2"><label class="form-label" for="rate_year">Année</label>
-          <input class="form-control" id="rate_year" name="annee" type="number" value="<?= $year ?>" required></div>
-        <?php foreach ($rateLabels as $field => $label): ?>
-          <div class="col-md-2"><label class="form-label" for="rate_<?= Html::escape($field) ?>"><?= Html::escape($label) ?> %</label>
-            <input class="form-control" id="rate_<?= Html::escape($field) ?>"
-              name="<?= Html::escape($field) ?>" inputmode="decimal" required></div>
-        <?php endforeach; ?>
-        <div class="col-md-5"><label class="form-label" for="rate_source">Source vérifiée</label>
-          <input class="form-control" id="rate_source" name="source" required></div>
-        <div class="col-md-2"><label class="form-label" for="rate_checked">Vérifiée le</label>
-          <input class="form-control" id="rate_checked" name="verifie_le" type="date" required></div>
-        <div class="col-md-auto"><button class="btn btn-primary" type="submit">Enregistrer</button></div>
-      </form>
-      <?php if (($catalog['rates'] ?? []) !== []): ?>
-        <p class="small text-body-secondary mt-2 mb-0">
-          Années configurées :
-          <?= Html::escape(implode(', ', array_map(
-              static fn (array $rate): string => (string) $rate['annee'],
-              $catalog['rates']
-          ))) ?>
-        </p>
-      <?php endif; ?>
+      <h2 class="h5">Taux annuels des charges sociales</h2>
+      <p class="mb-2">
+        Ce référentiel est désormais géré dans l’interface Vue de Configuration.
+      </p>
+      <a class="btn btn-outline-primary"
+        href="<?= Html::escape($config->url('/app/configuration/referentiels') . '?section=payroll') ?>">
+        Ouvrir les taux dans Configuration
+      </a>
     </div></section>
 
     <section class="card border-0 shadow-sm mb-3"><div class="card-body">

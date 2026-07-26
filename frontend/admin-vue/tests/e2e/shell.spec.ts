@@ -125,6 +125,20 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Plan comptable' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Débiteurs et créanciers' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Débiteurs et créanciers' }).click();
+  await expect(page.getByRole('heading', { name: 'Nouveau débiteur ou créancier' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'TVA', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Nouveau code TVA' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Taux TVA suisses' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Charges sociales' }).click();
+  await expect(page.getByRole('heading', { name: 'Taux annuels des charges sociales' })).toBeVisible();
+  await page.getByRole('button', { name: 'Charger les valeurs Lasso 2026' }).click();
+  await expect(page.getByLabel('AVS employé (%)')).toHaveValue('5,3');
+  await page.getByRole('button', { name: 'Enregistrer les taux annuels' }).click();
+  await expect(page.getByText('Taux salariaux annuels enregistrés avec leur source.')).toBeVisible();
 });
 
 test('journal, extrait et plan comptable utilisent le parcours Vue unique', async ({ page }) => {

@@ -141,7 +141,20 @@ final class VatConfigurationService
             ($data['date_fin'] ?? null) ?: null,
             $actorId,
         ]);
-        return (int) $this->pdo->lastInsertId();
+        $id = (int) $this->pdo->lastInsertId();
+        $this->audit->log(
+            'tva.code_ajoute',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'code_tva',
+            (string) $id,
+            [
+                'code' => strtoupper(trim((string) $data['code'])),
+                'date_debut' => (string) $data['date_debut'],
+            ]
+        );
+        return $id;
     }
 
     /** @param array<string,mixed> $data */

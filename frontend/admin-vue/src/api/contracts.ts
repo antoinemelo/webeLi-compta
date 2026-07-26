@@ -165,6 +165,67 @@ export type ConfigurationPayload = {
   };
 };
 
+export type ManagedReferencesPayload = {
+  contacts: Array<{
+    id: number;
+    type: 'entreprise' | 'personne';
+    company: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string;
+    language: 'fr' | 'de' | 'it' | 'en';
+    roles: Array<'client' | 'fournisseur' | 'employe' | 'autre'>;
+    address_line1: string;
+    address_line2: string;
+    postal_code: string;
+    city: string;
+    country: string;
+    version: number;
+  }>;
+  vat: {
+    codes: Array<{
+      id: number;
+      code: string;
+      label: string;
+      treatment: string;
+      nature: string;
+      legal_rate_id: number | null;
+      legal_rate_label: string;
+      rate_bp: number | null;
+      deduction_right: boolean;
+      default_deduction_bp: number;
+      afc_box: string;
+      account_id: number | null;
+      account: string;
+      valid_from: string;
+      valid_until: string | null;
+      active: boolean;
+    }>;
+    legal_rates: Array<{
+      id: number;
+      category: string;
+      label: string;
+      rate_bp: number;
+      valid_from: string;
+      valid_until: string | null;
+      source_url: string;
+      verified_on: string;
+    }>;
+    accounts: Array<{ id: number; number: string; label: string }>;
+  };
+  payroll: {
+    fields: string[];
+    rates: Array<Record<string, string | number | null>>;
+    suggested_rates: Record<string, string | number>;
+  };
+  capabilities: {
+    contacts: boolean;
+    vat: boolean;
+    payroll: boolean;
+  };
+};
+
 export type AccountingWorkspace = {
   exercise: {
     id: number;

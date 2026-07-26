@@ -32,6 +32,7 @@ Les exemples versionnés sont :
 - `dashboard.success.json` ;
 - `configuration.success.json` ;
 - `accounting.success.json` ;
+- `managed-references.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -51,6 +52,10 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
 | POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
 | POST | `/api/v1/configuration/payment-defaults` | nouveau défaut client ou fournisseur |
+| GET | `/api/v1/configuration/references` | contacts, codes/taux TVA et taux salariaux du dossier |
+| POST | `/api/v1/configuration/references/contacts` | création ou édition optimiste d’un contact multi-rôles |
+| POST | `/api/v1/configuration/references/vat-codes` | nouveau code TVA daté |
+| POST | `/api/v1/configuration/references/payroll-rates` | taux sociaux annuels en ppm |
 | GET | `/api/v1/accounting` | exercice, journal, extrait et plan issus du moteur comptable |
 | POST | `/api/v1/accounting/entries` | création et éventuelle validation d’une écriture |
 | POST | `/api/v1/accounting/chart/types` | libellés des types de comptes |
@@ -85,6 +90,13 @@ La configuration exige `dossier.manage`. Toutes ses mutations sont limitées au
 scope de session : les identifiants d’organisation ou de dossier sont refusés
 dans la charge utile. Les versions optimistes protègent l’identité et les
 modules contre les écrasements concurrents.
+
+Les référentiels gérés ajoutent les permissions `facturation.manage`,
+`tva.setup` ou `salaires.manage` selon le domaine. Ils appellent directement
+les services métier existants. Les valeurs salariales sont transmises en ppm
+entiers et les taux TVA en points de base ; Vue ne fait aucun calcul avec des
+flottants. Les valeurs proposées pour 2026 proviennent de `TAUX_DEFAUT` de
+Lasso et restent explicitement à vérifier auprès des organismes concernés.
 
 La lecture comptable exige `exercise_id` et accepte `account_id` pour demander
 un extrait. Les mutations utilisent uniquement le scope de session et les

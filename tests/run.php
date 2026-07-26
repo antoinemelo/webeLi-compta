@@ -29,6 +29,7 @@ use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Compta\ReportingService;
 use Compta\Modules\Configuration\Application\ConfigurationService;
+use Compta\Modules\Configuration\Application\ManagedReferencesService;
 use Compta\Modules\Configuration\Application\ModuleAccessService;
 use Compta\Modules\Configuration\Application\PaymentTermsService;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
@@ -1443,6 +1444,12 @@ final class Tests
             $httpAudit,
             $httpModuleAccess
         );
+        $httpContacts = new ContactService($pdo, $httpAudit);
+        $httpPayrollConfiguration = new PayrollConfigurationService(
+            $pdo,
+            $httpAudit
+        );
+        $httpVatConfiguration = new VatConfigurationService($pdo, $httpAudit);
         $apiRoutes = new ApiRouteRegistry(
             new ShellApiController(
                 $config,
@@ -1467,7 +1474,13 @@ final class Tests
                 $httpAuth,
                 $httpAccess,
                 $httpConfiguration,
-                new ConfigurationInputValidator()
+                new ConfigurationInputValidator(),
+                new ManagedReferencesService(
+                    $pdo,
+                    $httpContacts,
+                    $httpVatConfiguration,
+                    $httpPayrollConfiguration
+                )
             ),
             new AccountingApiController(
                 $session,
@@ -1495,12 +1508,12 @@ final class Tests
             $httpAccess,
             $httpAudit,
             new ReportingService($pdo),
-            new ContactService($pdo, $httpAudit),
+            $httpContacts,
             new BillingService($pdo, $httpAudit, $httpEntries),
             new PaymentService($pdo, $httpAudit, $httpEntries),
             new InvoicePdfService($pdo, $httpAudit),
             new AttachmentService($pdo, $httpAudit),
-            new PayrollConfigurationService($pdo, $httpAudit),
+            $httpPayrollConfiguration,
             $httpPayrolls,
             new PayrollPaymentService($pdo, $httpAudit, $httpEntries),
             new PayrollCertificateService($pdo, $httpAudit),
@@ -1684,6 +1697,207 @@ final class Tests
             200,
             $apiConfiguration->status,
             'configuration centralisée exposée en API'
+        );
+        $managedReferences = $app->handle(new Request(
+            'GET',
+            '/api/v1/configuration/references'
+        ));
+        $managedReferencesJson = $this->responseJson($managedReferences);
+        $this->same(
+            200,
+            $managedReferences->status,
+            'référentiels gérés exposés dans Configuration'
+        );
+        $this->same(
+            53000,
+            $managedReferencesJson['data']['payroll']['suggested_rates']['avs_ppm'] ?? 0,
+            'taux AVS Lasso proposé en ppm entier'
+        );
+        $this->same(
+            4,
+            count($managedReferencesJson['data']['vat']['legal_rates'] ?? []),
+            'taux TVA légaux exposés sans copie côté Vue'
+        );
+        $contactFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/contacts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'type' => 'entreprise',
+                'company' => 'Contact Vue SA',
+                'first_name' => '',
+                'last_name' => '',
+                'email' => 'contact-vue@example.test',
+                'phone' => '+41 22 000 00 00',
+                'language' => 'fr',
+                'roles' => ['client', 'fournisseur'],
+                'address_line1' => 'Rue de Vue 1',
+                'address_line2' => '',
+                'postal_code' => '1200',
+                'city' => 'Genève',
+                'country' => 'CH',
+            ]]
+        ));
+        $this->same(
+            200,
+            $contactFromConfiguration->status,
+            'contact multi-rôles créé depuis Configuration Vue'
+        );
+        $this->same(
+            2,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM contact_roles r
+                 JOIN contacts c ON c.id = r.contact_id
+                 WHERE c.raison_sociale = 'Contact Vue SA'"
+            )->fetchColumn(),
+            'rôles du contact persistés par le service de Facturation'
+        );
+        $createdContactId = (int) (
+            $this->responseJson($contactFromConfiguration)['data']['id'] ?? 0
+        );
+        $createdContactVersion = (int) $pdo->query(
+            "SELECT version FROM contacts WHERE id = {$createdContactId}"
+        )->fetchColumn();
+        $updatedContact = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/contacts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $createdContactId,
+                'version' => $createdContactVersion,
+                'type' => 'entreprise',
+                'company' => 'Contact Vue modifié SA',
+                'first_name' => '',
+                'last_name' => '',
+                'email' => 'contact-vue@example.test',
+                'phone' => '+41 22 000 00 01',
+                'language' => 'fr',
+                'roles' => ['client'],
+                'address_line1' => 'Rue de Vue 2',
+                'address_line2' => '',
+                'postal_code' => '1201',
+                'city' => 'Genève',
+                'country' => 'CH',
+            ]]
+        ));
+        $this->same(
+            200,
+            $updatedContact->status,
+            'contact édité depuis Configuration Vue'
+        );
+        $this->same(
+            'Contact Vue modifié SA|2',
+            (string) $pdo->query(
+                "SELECT raison_sociale || '|' || version
+                 FROM contacts WHERE id = {$createdContactId}"
+            )->fetchColumn(),
+            'édition optimiste du contact persistée'
+        );
+        $normalVatRateId = (int) $pdo->query(
+            "SELECT id FROM tva_taux_legaux WHERE categorie = 'normal'"
+        )->fetchColumn();
+        $vatAccountId = (int) $pdo->query(
+            "SELECT id FROM comptes
+             WHERE dossier_id = {$ids['dossier_a']} AND numero = '2200'"
+        )->fetchColumn();
+        $vatFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/vat-codes',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'code' => 'VUE81',
+                'label' => 'Ventes Vue 8,1 %',
+                'treatment' => 'normal',
+                'nature' => 'collectee',
+                'legal_rate_id' => $normalVatRateId,
+                'deduction_right' => false,
+                'default_deduction_bp' => 0,
+                'afc_box' => '200',
+                'account_id' => $vatAccountId,
+                'valid_from' => '2026-01-01',
+                'valid_until' => '',
+            ]]
+        ));
+        $this->same(
+            200,
+            $vatFromConfiguration->status,
+            'code TVA daté créé depuis Configuration Vue'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE action = 'tva.code_ajoute'"
+            )->fetchColumn(),
+            'création du code TVA auditée'
+        );
+        $payrollPayload = [
+            'year' => 2026,
+            'avs_ppm' => 53000,
+            'ac_ppm' => 11000,
+            'amat_ppm' => 290,
+            'laa_reduit_ppm' => 5300,
+            'laa_plein_ppm' => 9600,
+            'lpp_ppm' => 70000,
+            'emp_avs_ppm' => 53000,
+            'emp_ac_ppm' => 11000,
+            'emp_amat_ppm' => 290,
+            'emp_af_ppm' => 22200,
+            'emp_laa_reduit_ppm' => 5300,
+            'emp_laa_plein_ppm' => 9600,
+            'emp_frais_ppm' => 0,
+            'emp_cpe_ppm' => 700,
+            'emp_lfp_ppm' => 820,
+            'emp_lpp_ppm' => 80000,
+            'source' => 'Lasso — test',
+            'verified_on' => '2026-07-25',
+        ];
+        $payrollFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/payroll-rates',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $payrollPayload]
+        ));
+        $this->same(
+            200,
+            $payrollFromConfiguration->status,
+            'taux salariaux Lasso enregistrés depuis Configuration Vue'
+        );
+        $this->same(
+            53000,
+            (int) $pdo->query(
+                "SELECT avs_ppm FROM taux_salaires_annuels
+                 WHERE dossier_id = {$ids['dossier_a']} AND annee = 2026"
+            )->fetchColumn(),
+            'taux salarial conservé sans flottant'
+        );
+        $injectedReferenceScope = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/payroll-rates',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $payrollPayload + ['dossier_id' => $ids['dossier_b']]]
+        ));
+        $this->same(
+            422,
+            $injectedReferenceScope->status,
+            'référentiel refuse un scope injecté'
+        );
+        $legacyContacts = $app->handle(new Request(
+            'GET',
+            '/facturation',
+            query: ['onglet' => 'contacts']
+        ));
+        $this->same(
+            303,
+            $legacyContacts->status,
+            'ancien onglet Contacts redirigé vers Configuration Vue'
+        );
+        $this->same(
+            '/edu/app/configuration/referentiels?section=contacts',
+            $legacyContacts->headers['Location'] ?? '',
+            'redirection Contacts compatible avec le sous-répertoire'
         );
         $learningModule = array_values(array_filter(
             $apiConfigurationJson['data']['modules'] ?? [],
@@ -1926,6 +2140,7 @@ final class Tests
             'dashboard.success.json',
             'configuration.success.json',
             'accounting.success.json',
+            'managed-references.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(

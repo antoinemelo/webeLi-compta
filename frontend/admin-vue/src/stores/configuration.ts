@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia';
 import { api, errorMessage } from '@/api/client';
-import type { ConfigurationPayload } from '@/api/contracts';
+import type { ConfigurationPayload, ManagedReferencesPayload } from '@/api/contracts';
 
 export const useConfigurationStore = defineStore('configuration', {
   state: () => ({
     configuration: null as ConfigurationPayload | null,
+    managedReferences: null as ManagedReferencesPayload | null,
     loading: false,
     saving: false,
     error: ''
@@ -12,7 +13,30 @@ export const useConfigurationStore = defineStore('configuration', {
   actions: {
     clear(): void {
       this.configuration = null;
+      this.managedReferences = null;
       this.error = '';
+    },
+    async loadManagedReferences(): Promise<void> {
+      this.loading = true;
+      this.error = '';
+      try {
+        this.managedReferences = (
+          await api.get<ManagedReferencesPayload>('/configuration/references')
+        ).data;
+      } catch (error) {
+        this.error = errorMessage(error);
+      } finally {
+        this.loading = false;
+      }
+    },
+    async createContact(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/contacts', data);
+    },
+    async createVatCode(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/vat-codes', data);
+    },
+    async savePayrollRates(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/payroll-rates', data);
     },
     async load(): Promise<void> {
       this.loading = true;
@@ -51,6 +75,19 @@ export const useConfigurationStore = defineStore('configuration', {
       try {
         await api.post<unknown>(path, data);
         await this.load();
+      } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    },
+    async mutateReference(path: string, data: Record<string, unknown>): Promise<void> {
+      this.saving = true;
+      this.error = '';
+      try {
+        await api.post<unknown>(path, data);
+        await Promise.all([this.load(), this.loadManagedReferences()]);
       } catch (error) {
         this.error = errorMessage(error);
         throw error;

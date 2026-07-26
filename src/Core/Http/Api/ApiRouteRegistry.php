@@ -65,6 +65,30 @@ final class ApiRouteRegistry
                 '/api/v1/configuration/payment-defaults',
                 $this->configuration->updatePaymentDefault(...)
             );
+            $this->add(
+                $router,
+                'GET',
+                '/api/v1/configuration/references',
+                $this->configuration->references(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/contacts',
+                $this->configuration->createContact(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/vat-codes',
+                $this->configuration->createVatCode(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/payroll-rates',
+                $this->configuration->savePayrollRates(...)
+            );
         }
         if ($this->accounting !== null) {
             $this->add(

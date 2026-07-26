@@ -23,6 +23,20 @@ dossier sélectionné.
 Les cartes de référentiels sont des vues et des liens vers ces sources. Elles
 ne créent pas de second registre.
 
+Sous `/app/configuration/referentiels`, trois référentiels sont entièrement
+gérés dans Vue :
+
+- débiteurs et créanciers : création et édition optimiste de contacts
+  multi-rôles via `ContactService` ;
+- codes TVA : taux légaux en lecture et création de codes datés via
+  `VatConfigurationService` ;
+- charges sociales : millésimes en ppm via
+  `PayrollConfigurationService`, avec reprise proposée des valeurs Lasso 2026.
+
+L’ancien onglet Contacts redirige vers Configuration et l’ancien formulaire de
+taux salariaux ne permet plus une seconde écriture. Les instantanés des factures
+et fiches validées restent inchangés.
+
 ## Modules
 
 Les modules Apprentissage, Liquidités, Facturation, Comptabilité et Salaires

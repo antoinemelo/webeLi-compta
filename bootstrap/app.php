@@ -21,6 +21,7 @@ use Compta\Modules\Compta\AccountingWorkspaceService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\ReportingService;
 use Compta\Modules\Configuration\Application\ConfigurationService;
+use Compta\Modules\Configuration\Application\ManagedReferencesService;
 use Compta\Modules\Configuration\Application\ModuleAccessService;
 use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Configuration\Http\ConfigurationInputValidator;
@@ -42,6 +43,7 @@ use Compta\Modules\Shell\Application\ShellReadService;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Shell\Http\ShellInputValidator;
 use Compta\Modules\Shell\Http\ShellPageController;
+use Compta\Modules\Tva\VatConfigurationService;
 
 require __DIR__ . '/autoload.php';
 
@@ -68,6 +70,9 @@ $auth = new AuthService(
 $access = new AccessControl($pdo);
 $reports = new ReportingService($pdo);
 $chart = new ChartOfAccountsService($pdo, $audit);
+$contacts = new ContactService($pdo, $audit);
+$payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
+$vatConfiguration = new VatConfigurationService($pdo, $audit);
 $moduleAccess = new ModuleAccessService($pdo);
 $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
 $apiRoutes = new ApiRouteRegistry(
@@ -94,7 +99,13 @@ $apiRoutes = new ApiRouteRegistry(
         $auth,
         $access,
         $configuration,
-        new ConfigurationInputValidator()
+        new ConfigurationInputValidator(),
+        new ManagedReferencesService(
+            $pdo,
+            $contacts,
+            $vatConfiguration,
+            $payrollConfiguration
+        )
     ),
     new AccountingApiController(
         $session,
@@ -123,12 +134,12 @@ return [
         $access,
         $audit,
         $reports,
-        new ContactService($pdo, $audit),
+        $contacts,
         new BillingService($pdo, $audit, $entries),
         new PaymentService($pdo, $audit, $entries),
         new InvoicePdfService($pdo, $audit),
         new AttachmentService($pdo, $audit),
-        new PayrollConfigurationService($pdo, $audit),
+        $payrollConfiguration,
         $payrolls,
         new PayrollPaymentService($pdo, $audit, $entries),
         new PayrollCertificateService($pdo, $audit),

@@ -12,6 +12,11 @@ use Compta\Core\Http\Response;
 use Compta\Core\Security\SessionStore;
 use Compta\Modules\Configuration\Application\ConfigurationException;
 use Compta\Modules\Configuration\Application\ConfigurationService;
+use Compta\Modules\Configuration\Application\ManagedReferencesService;
+use Compta\Modules\Facturation\BillingException;
+use Compta\Modules\Salaires\PayrollException;
+use Compta\Modules\Tva\VatException;
+use PDOException;
 
 final class ConfigurationApiController
 {
@@ -21,6 +26,7 @@ final class ConfigurationApiController
         private readonly AccessControl $access,
         private readonly ConfigurationService $configuration,
         private readonly ConfigurationInputValidator $validator,
+        private readonly ManagedReferencesService $managedReferences,
     ) {
     }
 
@@ -121,8 +127,96 @@ final class ConfigurationApiController
         });
     }
 
+    public function references(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope();
+        $result = $this->managedReferences->read($organisationId, $dossierId);
+        $result['capabilities'] = [
+            'contacts' => $this->hasPermission(
+                $userId,
+                $organisationId,
+                $dossierId,
+                'facturation.manage'
+            ),
+            'vat' => $this->hasPermission(
+                $userId,
+                $organisationId,
+                $dossierId,
+                'tva.setup'
+            ),
+            'payroll' => $this->hasPermission(
+                $userId,
+                $organisationId,
+                $dossierId,
+                'salaires.manage'
+            ),
+        ];
+        return ApiResponse::success($request, $result);
+    }
+
+    public function createContact(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'facturation.manage'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->createContact(
+                $organisationId,
+                $dossierId,
+                $this->validator->contact($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function createVatCode(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->createVatCode(
+                $organisationId,
+                $dossierId,
+                $this->validator->vatCode($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
+    public function savePayrollRates(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'salaires.manage'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->savePayrollRates(
+                $organisationId,
+                $dossierId,
+                $this->validator->payrollRates($request),
+                $userId
+            );
+            return ['id' => $id];
+        });
+    }
+
     /** @return array{int,int,int} */
-    private function scope(): array
+    private function scope(?string $permission = null): array
     {
         $userId = $this->auth->userId();
         if ($userId === null) {
@@ -147,7 +241,32 @@ final class ConfigurationApiController
         ) {
             throw ApiException::forbidden('Configuration du dossier refusée.');
         }
+        if (
+            $permission !== null
+            && !$this->hasPermission(
+                $userId,
+                $organisationId,
+                $dossierId,
+                $permission
+            )
+        ) {
+            throw ApiException::forbidden('Permission métier insuffisante.');
+        }
         return [$userId, $organisationId, $dossierId];
+    }
+
+    private function hasPermission(
+        int $userId,
+        int $organisationId,
+        int $dossierId,
+        string $permission,
+    ): bool {
+        return $this->access->hasDossierPermission(
+            $userId,
+            $organisationId,
+            $dossierId,
+            $permission
+        );
     }
 
     /** @param callable():array<string,mixed> $callback */
@@ -161,6 +280,24 @@ final class ConfigurationApiController
                 throw ApiException::conflict('CONFIGURATION_CONFLICT', $message);
             }
             throw ApiException::validation(['configuration' => [$message]]);
+        }
+    }
+
+    /** @param callable():array<string,mixed> $callback */
+    private function referenceMutation(Request $request, callable $callback): Response
+    {
+        try {
+            return ApiResponse::success($request, $callback());
+        } catch (BillingException|PayrollException|VatException $exception) {
+            throw ApiException::validation([
+                'reference' => [$exception->getMessage()],
+            ]);
+        } catch (PDOException) {
+            throw ApiException::validation([
+                'reference' => [
+                    'Cette valeur existe déjà ou référence un élément invalide.',
+                ],
+            ]);
         }
     }
 }

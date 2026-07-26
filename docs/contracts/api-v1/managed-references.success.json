@@ -1,0 +1,41 @@
+{
+  "data": {
+    "contacts": [],
+    "vat": {
+      "codes": [],
+      "legal_rates": [
+        {
+          "id": 1,
+          "category": "normal",
+          "label": "Taux normal",
+          "rate_bp": 810,
+          "valid_from": "2024-01-01",
+          "valid_until": null,
+          "source_url": "https://www.estv.admin.ch/fr/taux-de-la-tva-suisse",
+          "verified_on": "2026-07-25"
+        }
+      ],
+      "accounts": []
+    },
+    "payroll": {
+      "rates": [],
+      "fields": ["avs_ppm"],
+      "suggested_rates": {
+        "year": 2026,
+        "avs_ppm": 53000,
+        "source": "Lasso — TAUX_DEFAUT / OCAS Genève 2026",
+        "verified_on": "2026-07-25"
+      }
+    },
+    "capabilities": {
+      "contacts": true,
+      "vat": true,
+      "payroll": true
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "4b5d2fa95e374f2896b7eb9c4d8afb62"
+  },
+  "errors": []
+}

@@ -434,7 +434,7 @@ final class ConfigurationService
                           FROM comptes_tresorerie t
                           WHERE t.organisation_id = ? AND t.dossier_id = ?
                           ORDER BY t.actif DESC, t.libelle',
-                'path' => '/liquidites',
+                'path' => '/app/liquidites',
             ],
             'vat_codes' => [
                 'sql' => 'SELECT v.id, v.code AS label, v.traitement AS type,
@@ -444,7 +444,7 @@ final class ConfigurationService
                           LEFT JOIN tva_taux_legaux l ON l.id = v.taux_legal_id
                           WHERE v.organisation_id = ? AND v.dossier_id = ?
                           ORDER BY v.actif DESC, v.code, v.date_debut DESC',
-                'path' => '/facturation',
+                'path' => '',
             ],
             'payroll_rates' => [
                 'sql' => 'SELECT t.id, CAST(t.annee AS TEXT) AS label,
@@ -452,7 +452,7 @@ final class ConfigurationService
                           FROM taux_salaires_annuels t
                           WHERE t.organisation_id = ? AND t.dossier_id = ?
                           ORDER BY t.annee DESC',
-                'path' => '/salaires',
+                'path' => '',
             ],
             'journals' => [
                 'sql' => 'SELECT j.id, j.code AS label, j.type,
@@ -460,7 +460,7 @@ final class ConfigurationService
                           FROM journaux j
                           WHERE j.organisation_id = ? AND j.dossier_id = ?
                           ORDER BY j.actif DESC, j.code',
-                'path' => '/compta',
+                'path' => '/app/compta',
             ],
             'exercises' => [
                 'sql' => 'SELECT e.id, e.libelle AS label, e.statut AS type,
@@ -469,7 +469,7 @@ final class ConfigurationService
                           FROM exercices e
                           WHERE e.dossier_id = ?
                           ORDER BY e.date_debut DESC',
-                'path' => '/',
+                'path' => '/app/',
                 'dossier_only' => true,
             ],
             'periods' => [
@@ -479,7 +479,7 @@ final class ConfigurationService
                           FROM periodes p
                           WHERE p.organisation_id = ? AND p.dossier_id = ?
                           ORDER BY p.date_debut DESC',
-                'path' => '/compta',
+                'path' => '/app/compta',
             ],
             'users' => [
                 'sql' => 'SELECT DISTINCT u.id, u.email AS label,
@@ -530,7 +530,7 @@ final class ConfigurationService
         $result['contacts'] = [
             'count' => (int) $contacts->fetchColumn(),
             'items' => [],
-            'legacy_path' => '/facturation',
+            'legacy_path' => '',
         ];
         $result['chart_of_accounts'] = [
             'count' => (int) $this->scalar(

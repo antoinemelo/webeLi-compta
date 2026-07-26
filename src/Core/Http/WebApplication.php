@@ -769,9 +769,6 @@ final class WebApplication
                 'employer' => $this->savePayrollEmployer(
                     $request, $organisationId, $dossierId, $userId
                 ),
-                'rates' => $this->savePayrollRates(
-                    $request, $organisationId, $dossierId, $userId
-                ),
                 'employee' => $this->createPayrollEmployee(
                     $request, $organisationId, $dossierId, $userId
                 ),
@@ -843,30 +840,6 @@ final class WebApplication
             $userId
         );
         return 'Employeur du dossier enregistré.';
-    }
-
-    private function savePayrollRates(
-        Request $request,
-        int $organisationId,
-        int $dossierId,
-        int $userId,
-    ): string {
-        $rates = [];
-        foreach (PayrollConfigurationService::RATE_FIELDS as $field) {
-            $rates[$field] = $this->percentToPpm(
-                (string) ($request->post[$field] ?? '')
-            );
-        }
-        $rates['source'] = (string) ($request->post['source'] ?? '');
-        $rates['verifie_le'] = (string) ($request->post['verifie_le'] ?? '');
-        $this->payrollConfiguration?->saveRates(
-            $organisationId,
-            $dossierId,
-            (int) ($request->post['annee'] ?? 0),
-            $rates,
-            $userId
-        );
-        return 'Taux annuels explicites enregistrés.';
     }
 
     private function createPayrollEmployee(
@@ -1225,6 +1198,12 @@ final class WebApplication
         if ($context instanceof Response) {
             return $context;
         }
+        if (($request->query['onglet'] ?? '') === 'contacts') {
+            return Response::redirect(
+                $this->config->url('/app/configuration/referentiels')
+                . '?section=contacts'
+            );
+        }
         [$userId, $organisationId, $dossierId] = $context;
         $activeTab = in_array(
             (string) ($request->query['onglet'] ?? ''),
@@ -1275,7 +1254,7 @@ final class WebApplication
     {
         $action = (string) ($request->post['action'] ?? '');
         $permission = match ($action) {
-            'contact', 'draft', 'credit', 'profile' => 'facturation.manage',
+            'draft', 'credit', 'profile' => 'facturation.manage',
             'issue', 'pdf' => 'facturation.issue',
             'post' => 'facturation.post',
             'payment', 'allocate' => 'facturation.pay',
@@ -1293,12 +1272,6 @@ final class WebApplication
         $tab = (string) ($request->post['onglet'] ?? 'documents');
         try {
             $message = match ($action) {
-                'contact' => $this->createBillingContact(
-                    $request,
-                    $organisationId,
-                    $dossierId,
-                    $userId
-                ),
                 'profile' => $this->saveBillingProfile(
                     $request,
                     $organisationId,
@@ -1353,43 +1326,6 @@ final class WebApplication
         } catch (BillingException|AccountingException|PDOException $e) {
             return $this->billingRedirect($tab, $e->getMessage(), true);
         }
-    }
-
-    private function createBillingContact(
-        Request $request,
-        int $organisationId,
-        int $dossierId,
-        int $userId,
-    ): string {
-        $roles = [];
-        foreach (['client', 'fournisseur', 'employe', 'autre'] as $role) {
-            if (($request->post['role_' . $role] ?? '') === '1') {
-                $roles[] = $role;
-            }
-        }
-        $this->contacts?->create(
-            $organisationId,
-            $dossierId,
-            [
-                'type_personne' => $request->post['type_personne'] ?? 'entreprise',
-                'raison_sociale' => $request->post['raison_sociale'] ?? '',
-                'prenom' => $request->post['prenom'] ?? '',
-                'nom' => $request->post['nom'] ?? '',
-                'email' => $request->post['email'] ?? '',
-                'telephone' => $request->post['telephone'] ?? '',
-                'langue' => $request->post['langue'] ?? 'fr',
-            ],
-            $roles,
-            [
-                'ligne1' => (string) ($request->post['ligne1'] ?? ''),
-                'ligne2' => (string) ($request->post['ligne2'] ?? ''),
-                'code_postal' => (string) ($request->post['code_postal'] ?? ''),
-                'localite' => (string) ($request->post['localite'] ?? ''),
-                'pays' => (string) ($request->post['pays'] ?? 'CH'),
-            ],
-            $userId
-        );
-        return 'Contact créé.';
     }
 
     private function saveBillingProfile(
