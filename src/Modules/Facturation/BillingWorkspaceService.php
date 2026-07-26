@@ -602,6 +602,10 @@ final class BillingWorkspaceService
                 'id' => (int) $row['id'],
                 'code' => (string) $row['code'],
                 'label' => (string) $row['libelle'],
+                'nature' => (string) $row['nature'],
+                'valid_from' => (string) $row['date_debut'],
+                'valid_until' => $row['date_fin'] === null
+                    ? null : (string) $row['date_fin'],
             ], $catalog['vat_codes']),
             'exercises' => array_map(static fn (array $row): array => [
                 'id' => (int) $row['id'],

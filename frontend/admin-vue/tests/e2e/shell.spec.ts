@@ -240,6 +240,10 @@ test('facturation client, contact 360 et aging utilisent le parcours Vue unique'
   const revenueValue = await revenue.locator('option').filter({ hasText: '3400' })
     .getAttribute('value');
   await revenue.selectOption(String(revenueValue));
+  await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
+  expect(await page.getByLabel('Code TVA').evaluate((element) =>
+    (element as HTMLSelectElement).matches(':invalid')
+  )).toBe(true);
   await page.getByLabel('Code TVA').selectOption({ label: 'VE81 · Ventes 8,1 %' });
   await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
   const invoice = page.getByRole('row').filter({ hasText: 'Client E2E SA' });

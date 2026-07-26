@@ -919,7 +919,14 @@ export type BillingPayload = {
   }>;
   catalog: {
     accounts: Array<{ id: number; number: string; label: string }>;
-    vat_codes: Array<{ id: number; code: string; label: string }>;
+    vat_codes: Array<{
+      id: number;
+      code: string;
+      label: string;
+      nature: 'collectee' | 'prealable' | 'acquisition' | 'non_taxable' | 'correction';
+      valid_from: string;
+      valid_until: string | null;
+    }>;
     exercises: Array<{ id: number; label: string }>;
     journals: Array<{ id: number; code: string; label: string }>;
   };

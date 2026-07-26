@@ -86,10 +86,13 @@ final class RecurringBillingService
                AND actif = 1 AND imputable = 1'
         );
         $vatCode = $this->pdo->prepare(
-            'SELECT 1 FROM tva_codes
+            'SELECT nature FROM tva_codes
              WHERE id = ? AND organisation_id = ? AND dossier_id = ?
                AND actif = 1'
         );
+        $allowedNatures = $type === 'facture_fournisseur'
+            ? ['prealable', 'acquisition', 'non_taxable', 'correction']
+            : ['collectee', 'non_taxable', 'correction'];
         foreach ($lines as $line) {
             if (
                 trim((string) ($line['libelle'] ?? '')) === ''
@@ -109,12 +112,14 @@ final class RecurringBillingService
                 $organisationId,
                 $dossierId,
             ]);
+            $vatNature = $vatCode->fetchColumn();
             if (
                 $lineAccount->fetchColumn() === false
-                || $vatCode->fetchColumn() === false
+                || $vatNature === false
+                || !in_array((string) $vatNature, $allowedNatures, true)
             ) {
                 throw new BillingException(
-                    'Compte ou code TVA de récurrence hors du dossier.'
+                    'Compte ou code TVA de récurrence absent, hors du dossier ou incompatible.'
                 );
             }
         }

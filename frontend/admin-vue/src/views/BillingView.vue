@@ -19,7 +19,7 @@ type DraftLine = {
   amount: string;
   input_mode: 'net' | 'brut';
   account_id: number;
-  vat_code_id: number;
+  vat_code_id: number | '';
 };
 
 const route = useRoute();
@@ -101,6 +101,12 @@ const documentContacts = computed(() =>
     contact.roles.includes(direction.value === 'sales' ? 'client' : 'fournisseur')
   )
 );
+const documentVatCodes = computed(() =>
+  availableVatCodes(documentType.value, documentDraft.document_date)
+);
+const recurrenceVatCodes = computed(() =>
+  availableVatCodes(recurrenceDraft.type, recurrenceDraft.next_date)
+);
 const documentRows = computed(() =>
   (workspace.value?.documents ?? []).map((item) => ({
     ...item,
@@ -174,8 +180,22 @@ function newLine(): DraftLine {
     amount: '',
     input_mode: 'net',
     account_id: 0,
-    vat_code_id: 0
+    vat_code_id: ''
   };
+}
+
+function availableVatCodes(
+  type: 'facture_client' | 'facture_fournisseur',
+  date: string
+) {
+  const allowed = type === 'facture_fournisseur'
+    ? ['prealable', 'acquisition', 'non_taxable', 'correction']
+    : ['collectee', 'non_taxable', 'correction'];
+  return (workspace.value?.catalog.vat_codes ?? []).filter((code) =>
+    allowed.includes(code.nature)
+      && code.valid_from <= date
+      && (code.valid_until === null || code.valid_until >= date)
+  );
 }
 
 function cents(value: string): number {
@@ -225,9 +245,16 @@ function apiLines(lines: DraftLine[], date: string): Array<Record<string, unknow
     unit_price_cents: cents(line.amount),
     input_mode: line.input_mode,
     account_id: Number(line.account_id),
-    vat_code_id: Number(line.vat_code_id),
+    vat_code_id: requiredPositiveId(line.vat_code_id, 'Sélectionnez un code TVA.'),
     service_date: date
   }));
+}
+
+function requiredPositiveId(value: number | '', message: string): number {
+  if (!Number.isInteger(value) || Number(value) < 1) {
+    throw new Error(message);
+  }
+  return Number(value);
 }
 
 async function attachmentSelected(event: Event): Promise<void> {
@@ -254,6 +281,11 @@ async function applyFilters(): Promise<void> {
 
 async function saveDocument(): Promise<void> {
   try {
+    if (documentVatCodes.value.length === 0) {
+      throw new Error(
+        'Aucun code TVA applicable. Configurez les codes TVA dans Configuration > Référentiels.'
+      );
+    }
     await store.mutate('/facturation/documents', {
       type: documentType.value,
       contact_id: Number(documentDraft.contact_id),
@@ -267,8 +299,11 @@ async function saveDocument(): Promise<void> {
     showDocumentForm.value = false;
     documentAttachment.value = null;
     notifications.push('Document enregistré comme brouillon, sans numéro.', 'success');
-  } catch {
-    notifications.push(store.error, 'warning');
+  } catch (error) {
+    notifications.push(
+      store.error || (error instanceof Error ? error.message : 'Impossible de poursuivre.'),
+      'warning'
+    );
   }
 }
 
@@ -379,6 +414,11 @@ async function clearContact(): Promise<void> {
 
 async function saveRecurrence(): Promise<void> {
   try {
+    if (recurrenceVatCodes.value.length === 0) {
+      throw new Error(
+        'Aucun code TVA applicable. Configurez les codes TVA dans Configuration > Référentiels.'
+      );
+    }
     await store.mutate('/facturation/recurrences', {
       type: recurrenceDraft.type,
       contact_id: Number(recurrenceDraft.contact_id),
@@ -394,8 +434,11 @@ async function saveRecurrence(): Promise<void> {
     });
     showRecurrenceForm.value = false;
     notifications.push('Récurrence enregistrée.', 'success');
-  } catch {
-    notifications.push(store.error, 'warning');
+  } catch (error) {
+    notifications.push(
+      store.error || (error instanceof Error ? error.message : 'Impossible de poursuivre.'),
+      'warning'
+    );
   }
 }
 
@@ -526,8 +569,14 @@ async function allocatePayment(): Promise<void> {
           v-if="workspace.capabilities.manage"
           class="button primary"
           type="button"
+          :disabled="documentVatCodes.length === 0"
           @click="showDocumentForm = !showDocumentForm"
         >Nouveau document</button>
+      </div>
+
+      <div v-if="documentVatCodes.length === 0" class="notice warning" role="alert">
+        Aucun code TVA actif et compatible ne couvre la date du document.
+        <RouterLink to="/configuration/referentiels">Configurer les codes TVA</RouterLink>.
       </div>
 
       <form v-if="showDocumentForm" class="editor-card" @submit.prevent="saveDocument">
@@ -571,8 +620,8 @@ async function allocatePayment(): Promise<void> {
             <option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option>
           </select>
           <select v-model.number="line.vat_code_id" aria-label="Code TVA" required>
-            <option :value="0" disabled>TVA</option>
-            <option v-for="vat in workspace.catalog.vat_codes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option>
+            <option value="" disabled>Sélectionner un code TVA</option>
+            <option v-for="vat in documentVatCodes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option>
           </select>
           <select v-model="line.input_mode" aria-label="Mode de saisie"><option value="net">Net</option><option value="brut">Brut</option></select>
           <button v-if="documentDraft.lines.length > 1" class="button ghost" type="button" @click="documentDraft.lines.splice(index, 1)">Retirer</button>
@@ -635,7 +684,7 @@ async function allocatePayment(): Promise<void> {
           <input v-model="line.label" aria-label="Libellé récurrent" placeholder="Libellé" required>
           <input v-model="line.amount" aria-label="Montant récurrent" inputmode="decimal" placeholder="Montant" required>
           <select v-model.number="line.account_id" aria-label="Compte récurrent" required><option :value="0" disabled>Compte</option><option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option></select>
-          <select v-model.number="line.vat_code_id" aria-label="TVA récurrente" required><option :value="0" disabled>TVA</option><option v-for="vat in workspace.catalog.vat_codes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option></select>
+          <select v-model.number="line.vat_code_id" aria-label="TVA récurrente" required><option value="" disabled>Sélectionner un code TVA</option><option v-for="vat in recurrenceVatCodes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option></select>
           <select v-model="line.input_mode" aria-label="Mode récurrent"><option value="net">Net</option><option value="brut">Brut</option></select>
         </fieldset>
         <div class="button-row"><button class="button ghost" type="button" @click="recurrenceDraft.lines.push(newLine())">Ajouter une ligne</button><button class="button primary" :disabled="store.saving">Enregistrer</button></div>

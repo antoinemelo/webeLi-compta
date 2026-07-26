@@ -688,7 +688,7 @@ final class BillingService
         );
         $accounts->execute([$organisationId, $dossierId]);
         $vatCodes = $this->pdo->prepare(
-            'SELECT id, code, libelle FROM tva_codes
+            'SELECT id, code, libelle, nature, date_debut, date_fin FROM tva_codes
              WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
              ORDER BY code'
         );
@@ -886,19 +886,43 @@ final class BillingService
                 $lines
             ),
         ], static fn (mixed $id): bool => is_int($id) && $id > 0)));
-        if ($accountIds === []) {
-            return;
+        if ($accountIds !== []) {
+            $placeholders = implode(',', array_fill(0, count($accountIds), '?'));
+            $accounts = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM comptes
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND actif = 1 AND imputable = 1
+                   AND id IN ({$placeholders})"
+            );
+            $accounts->execute([$organisationId, $dossierId, ...$accountIds]);
+            if ((int) $accounts->fetchColumn() !== count($accountIds)) {
+                throw new BillingException('Compte de document absent ou hors du dossier.');
+            }
         }
-        $placeholders = implode(',', array_fill(0, count($accountIds), '?'));
-        $accounts = $this->pdo->prepare(
-            "SELECT COUNT(*) FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ?
-               AND actif = 1 AND imputable = 1
-               AND id IN ({$placeholders})"
+        $allowedNatures = str_contains($type, 'fournisseur')
+            ? ['prealable', 'acquisition', 'non_taxable', 'correction']
+            : ['collectee', 'non_taxable', 'correction'];
+        $vatCode = $this->pdo->prepare(
+            "SELECT nature FROM tva_codes
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND date_debut <= ?
+               AND COALESCE(date_fin, '9999-12-31') >= ?"
         );
-        $accounts->execute([$organisationId, $dossierId, ...$accountIds]);
-        if ((int) $accounts->fetchColumn() !== count($accountIds)) {
-            throw new BillingException('Compte de document absent ou hors du dossier.');
+        foreach ($lines as $line) {
+            $date = (string) ($line['date_prestation'] ?? '');
+            $vatCode->execute([
+                (int) ($line['code_tva_id'] ?? 0),
+                $organisationId,
+                $dossierId,
+                $date,
+                $date,
+            ]);
+            $nature = $vatCode->fetchColumn();
+            if ($nature === false || !in_array((string) $nature, $allowedNatures, true)) {
+                throw new BillingException(
+                    'Code TVA absent, expiré ou incompatible avec le sens du document.'
+                );
+            }
         }
     }
 

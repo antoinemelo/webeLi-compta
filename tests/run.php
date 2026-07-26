@@ -70,6 +70,7 @@ use Compta\Modules\Tresorerie\Http\TreasuryApiController;
 use Compta\Modules\Tresorerie\Http\TreasuryInputValidator;
 use Compta\Modules\Tva\Ech0217ExportService;
 use Compta\Modules\Tva\Ech0217Validator;
+use Compta\Modules\Tva\DefaultVatCodeInstaller;
 use Compta\Modules\Tva\VatCalculator;
 use Compta\Modules\Tva\VatConfigurationService;
 use Compta\Modules\Tva\VatLineService;
@@ -469,6 +470,29 @@ final class Tests
         $statuses = array_column($checksumRunner->plan(), 'status');
         $this->true(in_array('mismatch', $statuses, true), 'checksum modifié détecté');
         $this->throws(fn () => $checksumRunner->apply(), 'migration modifiée bloquée');
+
+        $ids = $this->seedScopes($pdo);
+        (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))->installForDossier(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'personne_morale'
+        );
+        $vatCodes = new DefaultVatCodeInstaller($pdo, new AuditLogger($pdo));
+        $this->same(
+            10,
+            $vatCodes->install($ids['organisation_a'], $ids['dossier_a']),
+            'référentiel TVA suisse installé'
+        );
+        $this->same(
+            0,
+            $vatCodes->install($ids['organisation_a'], $ids['dossier_a']),
+            'installation des codes TVA idempotente'
+        );
+        $this->same(
+            10,
+            (int) $pdo->query('SELECT COUNT(*) FROM tva_codes')->fetchColumn(),
+            'codes TVA complets et sans doublon'
+        );
     }
 
     private function payrollCalculatorParityTests(): void
@@ -5186,6 +5210,19 @@ final class Tests
             'code_tva_id' => $vatCode,
             'date_prestation' => '2026-03-15',
         ];
+        $this->throws(
+            fn () => $billing->createDraft(
+                $organisationId,
+                $dossierId,
+                'facture_client',
+                $customer,
+                '2026-03-15',
+                '2026-04-15',
+                [$line('Mauvais sens TVA', 10000, $revenue, $purchase)],
+                $receivable
+            ),
+            'code TVA d’achat refusé sur une vente'
+        );
         $draft = function (
             int $amount,
             string $label = 'Prestation'

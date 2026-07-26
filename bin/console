@@ -22,6 +22,7 @@ use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\RecurringBillingService;
 use Compta\Modules\Tva\Ech0217ExportService;
 use Compta\Modules\Tva\Ech0217Validator;
+use Compta\Modules\Tva\DefaultVatCodeInstaller;
 use Compta\Modules\Tva\VatStatementService;
 
 require dirname(__DIR__) . '/bootstrap/autoload.php';
@@ -71,6 +72,7 @@ try {
         'tresorerie:etat' => treasuryState($pdo, $options),
         'depenses:recurrences-generer' => generateRecurringExpenses($pdo, $options),
         'facturation:recurrences-generer' => generateRecurringInvoices($pdo, $options),
+        'tva:codes-install' => installDefaultVatCodes($pdo, $options),
         'tva:periode-create' => createVatPeriod($pdo, $options),
         'tva:decompte-prepare' => prepareVatStatement($pdo, $options),
         'tva:decompte-control' => controlVatStatement($pdo, $options),
@@ -108,6 +110,7 @@ Compta — commandes du socle
   tresorerie:etat --organisation=1 --dossier=1 --tresorerie=1 [--date=2026-12-31]
   depenses:recurrences-generer --organisation=1 --dossier=1 [--jusqu-au=2026-12-31]
   facturation:recurrences-generer --organisation=1 --dossier=1 [--jusqu-au=2026-12-31]
+  tva:codes-install --organisation=1 --dossier=1
   tva:periode-create --organisation=1 --dossier=1 --debut=2026-01-01 --fin=2026-03-31
   tva:decompte-prepare --organisation=1 --dossier=1 --periode=1 [--rectifie=1]
   tva:decompte-control --organisation=1 --dossier=1 --decompte=1
@@ -314,6 +317,19 @@ function createAccountingJournal(PDO $pdo, array $options): int
         is_string($options['type'] ?? null) ? $options['type'] : 'general'
     );
     echo "Journal créé : {$id}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function installDefaultVatCodes(PDO $pdo, array $options): int
+{
+    $count = (new DefaultVatCodeInstaller($pdo, new AuditLogger($pdo)))->install(
+        optionInt($options, 'organisation'),
+        optionInt($options, 'dossier')
+    );
+    echo $count === 0
+        ? "Codes TVA déjà présents : aucune modification.\n"
+        : "Codes TVA suisses installés : {$count}.\n";
     return 0;
 }
 
