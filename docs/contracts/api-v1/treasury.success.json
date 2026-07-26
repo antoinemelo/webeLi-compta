@@ -1,0 +1,63 @@
+{
+  "data": {
+    "treasury_accounts": [],
+    "imports": [],
+    "bank_lines": [],
+    "accounting_lines": [],
+    "reconciliations": [],
+    "suggestions": [],
+    "payments": [],
+    "allocations": [],
+    "open_documents": [],
+    "payable_debts": [],
+    "outgoing_batches": [
+      {
+        "id": 12,
+        "treasury_account_id": 4,
+        "message_id": "COMPTA-20260726-000012",
+        "execution_date": "2026-07-27",
+        "currency": "CHF",
+        "order_count": 2,
+        "total_cents": 21620,
+        "status": "exporte",
+        "pain_version": "pain.001.001.09.ch.03",
+        "hash": "e32963a598cccb9cda32db3595a266168c7b59a4990feca86fd740ba61f252b3",
+        "created_at": "2026-07-26 10:00:00",
+        "exported_at": "2026-07-26 10:02:00",
+        "confirmed_at": null,
+        "bank_line_id": null,
+        "reconciliation_id": null,
+        "fee_cents": 0,
+        "version": 2,
+        "orders": []
+      }
+    ],
+    "catalog": {
+      "exercises": [],
+      "journals": [],
+      "accounts": [],
+      "contacts": [],
+      "treasury_accounts": []
+    },
+    "definitions": {
+      "banking": "Une ligne bancaire importée reste distincte du grand livre.",
+      "matching": "Le lettrage répartit un paiement sur des documents ouverts.",
+      "pain001": "Un fichier exporté est préparé pour téléchargement, jamais déclaré transmis."
+    },
+    "capabilities": {
+      "import": true,
+      "reconcile": true,
+      "suggest": true,
+      "accept_suggestion": true,
+      "match": true,
+      "prepare_payments": true,
+      "export_payments": true,
+      "confirm_payments": true
+    }
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-treasury-0001"
+  },
+  "errors": []
+}

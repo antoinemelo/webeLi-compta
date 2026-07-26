@@ -216,3 +216,52 @@ test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page
   await row.getByRole('button', { name: 'Comptabiliser' }).click();
   await expect(row).toContainText('Comptabilisé');
 });
+
+test('rapprochement, lettrage et paiements sortants utilisent le parcours Vue', async ({ page }) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Comptabilité principale'
+  });
+  await page.getByRole('link', { name: 'Liquidités', exact: true }).click();
+  await page.getByRole('link', { name: 'Rapprochement', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Rapprochement bancaire' })).toBeVisible();
+  const bankSelect = page.getByLabel('Compte bancaire');
+  const bankValue = await bankSelect.locator('option').filter({
+    hasText: 'Banque principale'
+  }).getAttribute('value');
+  await bankSelect.selectOption(String(bankValue));
+  await page.getByLabel('Relevé CAMT ou PostFinance').setInputFiles({
+    name: 'postfinance-e2e.csv',
+    mimeType: 'text/csv',
+    buffer: Buffer.from(
+      [
+        'Date de début:;="01.07.2026"',
+        'Date de fin:;="31.07.2026"',
+        'Genre:;="Compte commercial"',
+        'Compte:;="CH9300762011623852957"',
+        'Monnaie:;="CHF"',
+        '',
+        'Date;Texte de notification;Crédit en CHF;Débit en CHF;Valeur;Solde en CHF',
+        '',
+        '26.07.2026;"FRAIS BANCAIRES";;-5;26.07.2026;495',
+        'Disclaimer:'
+      ].join('\n')
+    )
+  });
+  await page.getByRole('button', { name: 'Prévisualiser' }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Prévisualisation sans comptabilisation'
+  })).toBeVisible();
+  await expect(page.getByText('postfinance_csv', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Confirmer l’import' }).click();
+  await expect(page.getByText('Relevé confirmé, source et empreinte conservées.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Confirmer le rapprochement' })).toBeDisabled();
+
+  await page.getByRole('link', { name: 'Lettrage', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Lettrage des paiements' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Nouveau paiement' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Paiements', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Paiements sortants' })).toBeVisible();
+  await expect(page.getByText('export pain.001 non transmis', { exact: false })).toBeVisible();
+});

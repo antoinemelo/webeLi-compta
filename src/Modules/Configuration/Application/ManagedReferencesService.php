@@ -38,6 +38,8 @@ final class ManagedReferencesService
                     'last_name' => (string) $row['nom'],
                     'email' => (string) $row['email'],
                     'phone' => (string) $row['telephone'],
+                    'payment_iban' => (string) $row['iban_paiement'],
+                    'payment_bic' => (string) $row['bic_paiement'],
                     'language' => (string) $row['langue'],
                     'roles' => array_values(array_filter(
                         explode(',', (string) $row['roles'])
@@ -118,6 +120,8 @@ final class ManagedReferencesService
                     'nom' => $data['last_name'],
                     'email' => $data['email'],
                     'telephone' => $data['phone'],
+                    'iban_paiement' => $data['payment_iban'],
+                    'bic_paiement' => $data['payment_bic'],
                     'langue' => $data['language'],
                 ],
                 $data['roles'],
@@ -142,6 +146,8 @@ final class ManagedReferencesService
                 'nom' => $data['last_name'],
                 'email' => $data['email'],
                 'telephone' => $data['phone'],
+                'iban_paiement' => $data['payment_iban'],
+                'bic_paiement' => $data['payment_bic'],
                 'langue' => $data['language'],
             ],
             $data['roles'],

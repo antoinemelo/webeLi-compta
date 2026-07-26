@@ -12,6 +12,7 @@ use Compta\Modules\Configuration\Http\ConfigurationApiController;
 use Compta\Modules\Dashboard\Http\DashboardApiController;
 use Compta\Modules\Shell\Http\ShellApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
+use Compta\Modules\Tresorerie\Http\TreasuryApiController;
 use Throwable;
 
 final class ApiRouteRegistry
@@ -23,6 +24,7 @@ final class ApiRouteRegistry
         private readonly ?ConfigurationApiController $configuration = null,
         private readonly ?AccountingApiController $accounting = null,
         private readonly ?ExpenseApiController $expenses = null,
+        private readonly ?TreasuryApiController $treasury = null,
     ) {
     }
 
@@ -216,6 +218,21 @@ final class ApiRouteRegistry
                 '/api/v1/liquidites/recurrences/generer',
                 $this->expenses->generateRecurrences(...)
             );
+        }
+        if ($this->treasury !== null) {
+            $this->add($router, 'GET', '/api/v1/liquidites/banque', $this->treasury->show(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/banque/imports/previsualiser', $this->treasury->previewImport(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/banque/imports/confirmer', $this->treasury->confirmImport(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/banque/rapprochements', $this->treasury->reconcile(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/banque/rapprochements/annuler', $this->treasury->cancelReconciliation(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/banque/suggestions', $this->treasury->proposeSuggestion(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/banque/suggestions/accepter', $this->treasury->acceptSuggestion(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/lettrage/paiements', $this->treasury->createPayment(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/lettrage/allocations', $this->treasury->allocate(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/lettrage/allocations/annuler', $this->treasury->unallocate(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/paiements/lots', $this->treasury->prepareBatch(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/paiements/lots/exporter', $this->treasury->exportBatch(...));
+            $this->add($router, 'POST', '/api/v1/liquidites/paiements/lots/confirmer', $this->treasury->confirmBatch(...));
         }
     }
 

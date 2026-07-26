@@ -33,35 +33,75 @@ final class PaymentService
         string $reference = '',
         ?int $treasuryAccountId = null,
         ?int $actorId = null,
+        ?int $bankLineId = null,
+        string $currency = 'CHF',
     ): int {
+        $currency = strtoupper(trim($currency));
         if (
             !in_array($direction, ['encaissement', 'decaissement'], true)
             || !$this->validDate($date)
             || $amountCents <= 0
+            || !in_array($currency, ['CHF', 'EUR'], true)
         ) {
             throw new BillingException('Paiement invalide.');
         }
-        $stmt = $this->pdo->prepare(
-            'INSERT INTO paiements
-             (organisation_id, dossier_id, contact_id, sens, date_paiement,
-              montant_centimes, reference, compte_tresorerie_id, cree_par)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        );
-        $stmt->execute([
-            $organisationId, $dossierId, $contactId, $direction, $date,
-            $amountCents, trim($reference), $treasuryAccountId, $actorId,
-        ]);
-        $id = (int) $this->pdo->lastInsertId();
-        $this->audit->log(
-            'facturation.paiement_saisi',
-            $actorId,
+        return $this->transaction(function () use (
             $organisationId,
             $dossierId,
-            'paiement',
-            (string) $id,
-            ['sens' => $direction, 'montant_centimes' => $amountCents]
-        );
-        return $id;
+            $contactId,
+            $direction,
+            $date,
+            $amountCents,
+            $reference,
+            $treasuryAccountId,
+            $actorId,
+            $bankLineId,
+            $currency
+        ): int {
+            $this->assertPaymentScope(
+                $organisationId,
+                $dossierId,
+                $contactId,
+                $treasuryAccountId
+            );
+            if ($bankLineId !== null) {
+                $this->assertBankLineCapacity(
+                    $organisationId,
+                    $dossierId,
+                    $bankLineId,
+                    $direction,
+                    $amountCents
+                );
+            }
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO paiements
+                 (organisation_id, dossier_id, contact_id, sens, date_paiement,
+                  montant_centimes, monnaie, reference, compte_tresorerie_id,
+                  ligne_bancaire_id, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([
+                $organisationId, $dossierId, $contactId, $direction, $date,
+                $amountCents, $currency, trim($reference), $treasuryAccountId,
+                $bankLineId, $actorId,
+            ]);
+            $id = (int) $this->pdo->lastInsertId();
+            $this->audit->log(
+                'facturation.paiement_saisi',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'paiement',
+                (string) $id,
+                [
+                    'sens' => $direction,
+                    'montant_centimes' => $amountCents,
+                    'monnaie' => $currency,
+                    'ligne_bancaire_id' => $bankLineId,
+                ]
+            );
+            return $id;
+        }, $bankLineId !== null);
     }
 
     public function allocatePayment(
@@ -89,6 +129,7 @@ final class PaymentService
                 $payment['statut'] !== 'valide'
                 || $document['type'] !== $expectedType
                 || (int) $document['contact_id'] !== (int) $payment['contact_id']
+                || (string) $document['monnaie'] !== (string) $payment['monnaie']
             ) {
                 throw new BillingException('Paiement et facture incompatibles.');
             }
@@ -269,6 +310,115 @@ final class PaymentService
         return $rows;
     }
 
+    /** @return list<array<string,mixed>> */
+    public function allocations(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT a.*, d.numero AS document_numero, d.type AS document_type,
+                    d.date_echeance, p.reference AS paiement_reference,
+                    p.date_paiement, p.sens,
+                    COALESCE(NULLIF(c.raison_sociale, ''),
+                             trim(c.prenom || ' ' || c.nom)) AS contact
+             FROM allocations a
+             JOIN documents_financiers d ON d.id = a.document_id
+             JOIN contacts c ON c.id = d.contact_id
+             LEFT JOIN paiements p ON p.id = a.paiement_id
+             WHERE a.organisation_id = ? AND a.dossier_id = ?
+             ORDER BY a.cree_le DESC, a.id DESC"
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return $stmt->fetchAll();
+    }
+
+    public function unallocate(
+        int $organisationId,
+        int $dossierId,
+        int $allocationId,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $allocationId,
+            $actorId
+        ): void {
+            $stmt = $this->pdo->prepare(
+                "SELECT a.*, COALESCE(p.date_paiement, d.date_document) AS date_source
+                 FROM allocations a
+                 JOIN documents_financiers d ON d.id = a.document_id
+                 LEFT JOIN paiements p ON p.id = a.paiement_id
+                 WHERE a.id = ? AND a.organisation_id = ? AND a.dossier_id = ?"
+            );
+            $stmt->execute([$allocationId, $organisationId, $dossierId]);
+            $allocation = $stmt->fetch();
+            if ($allocation === false) {
+                throw new BillingException('Allocation absente du dossier.');
+            }
+            if ($allocation['statut'] === 'annule') {
+                return;
+            }
+            $open = $this->pdo->prepare(
+                "SELECT 1 FROM periodes
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND ? BETWEEN date_debut AND date_fin
+                   AND statut = 'ouverte'
+                 LIMIT 1"
+            );
+            $open->execute([
+                $organisationId,
+                $dossierId,
+                (string) $allocation['date_source'],
+            ]);
+            if ($open->fetchColumn() === false) {
+                throw new BillingException(
+                    'Une période close interdit le délettrage.'
+                );
+            }
+            $used = $this->pdo->prepare(
+                "SELECT COUNT(*)
+                 FROM tva_encaissements te
+                 JOIN tva_decompte_sources ds ON ds.encaissement_id = te.id
+                 WHERE te.dossier_id = ? AND te.source_type = 'allocation'
+                   AND te.source_id = ?"
+            );
+            $used->execute([$dossierId, (string) $allocationId]);
+            if ((int) $used->fetchColumn() > 0) {
+                throw new BillingException(
+                    'Cette allocation figure déjà dans un décompte TVA.'
+                );
+            }
+            $this->pdo->prepare(
+                "UPDATE allocations
+                 SET statut = 'annule', annule_le = datetime('now'), annule_par = ?
+                 WHERE id = ? AND statut = 'valide'"
+            )->execute([$actorId, $allocationId]);
+            $this->pdo->prepare(
+                "INSERT INTO tva_encaissements
+                 (organisation_id, dossier_id, tva_ligne_id, date_paiement,
+                  montant_brut_centimes, source_type, source_id, cree_par)
+                 SELECT organisation_id, dossier_id, tva_ligne_id, ?,
+                        -montant_brut_centimes, 'allocation_annulation', ?, ?
+                 FROM tva_encaissements
+                 WHERE dossier_id = ? AND source_type = 'allocation'
+                   AND source_id = ?"
+            )->execute([
+                (string) $allocation['date_source'],
+                (string) $allocationId,
+                $actorId,
+                $dossierId,
+                (string) $allocationId,
+            ]);
+            $this->audit->log(
+                'facturation.allocation_annulee',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'allocation',
+                (string) $allocationId
+            );
+        }, true);
+    }
+
     /** @return array<string,mixed> */
     private function payment(int $organisationId, int $dossierId, int $id): array
     {
@@ -326,6 +476,68 @@ final class PaymentService
             || (int) $target->fetchColumn() + $amountCents > $documentTotal
         ) {
             throw new BillingException('Surallocation refusée, même pour un centime.');
+        }
+    }
+
+    private function assertBankLineCapacity(
+        int $organisationId,
+        int $dossierId,
+        int $bankLineId,
+        string $direction,
+        int $amountCents,
+    ): void {
+        $stmt = $this->pdo->prepare(
+            "SELECT l.montant_centimes,
+                    COALESCE((
+                        SELECT SUM(p.montant_centimes)
+                        FROM paiements p
+                        WHERE p.ligne_bancaire_id = l.id AND p.statut = 'valide'
+                    ), 0) AS utilise_centimes
+             FROM lignes_bancaires l
+             WHERE l.id = ? AND l.organisation_id = ? AND l.dossier_id = ?"
+        );
+        $stmt->execute([$bankLineId, $organisationId, $dossierId]);
+        $line = $stmt->fetch();
+        if ($line === false) {
+            throw new BillingException('Ligne bancaire absente du dossier.');
+        }
+        $signed = (int) $line['montant_centimes'];
+        if (
+            ($direction === 'encaissement' && $signed <= 0)
+            || ($direction === 'decaissement' && $signed >= 0)
+            || (int) $line['utilise_centimes'] + $amountCents > abs($signed)
+        ) {
+            throw new BillingException(
+                'Le paiement ne concorde pas avec la ligne bancaire.'
+            );
+        }
+    }
+
+    private function assertPaymentScope(
+        int $organisationId,
+        int $dossierId,
+        int $contactId,
+        ?int $treasuryAccountId,
+    ): void {
+        $contact = $this->pdo->prepare(
+            'SELECT 1 FROM contacts
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ? AND actif = 1'
+        );
+        $contact->execute([$contactId, $organisationId, $dossierId]);
+        if ($contact->fetchColumn() === false) {
+            throw new BillingException('Contact absent du dossier.');
+        }
+        if ($treasuryAccountId === null) {
+            return;
+        }
+        $account = $this->pdo->prepare(
+            'SELECT 1 FROM comptes
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND imputable = 1'
+        );
+        $account->execute([$treasuryAccountId, $organisationId, $dossierId]);
+        if ($account->fetchColumn() === false) {
+            throw new BillingException('Compte de trésorerie absent du dossier.');
         }
     }
 

@@ -10,12 +10,14 @@ import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { subNavigation } from '@/router/navigation';
 import { useContextStore } from '@/stores/context';
 import { useExpensesStore } from '@/stores/expenses';
+import { useTreasuryStore } from '@/stores/treasury';
 import { useNotificationStore } from '@/stores/notifications';
 import type { ExpenseItem } from '@/api/contracts';
 
 const route = useRoute();
 const context = useContextStore();
 const store = useExpensesStore();
+const treasury = useTreasuryStore();
 const notifications = useNotificationStore();
 const activeTab = computed(() => String(route.params.tab || 'use'));
 const workspace = computed(() => store.workspace);
@@ -24,8 +26,53 @@ const selectedId = ref(0);
 const showExpenseForm = ref(false);
 const showRecurrenceForm = ref(false);
 const attachment = ref<{ name: string; content_base64: string } | null>(null);
+const statement = ref<{ name: string; content_base64: string } | null>(null);
+const importPreview = ref<Record<string, unknown> | null>(null);
+const importAccountId = ref(0);
+const selectedBankLines = ref<number[]>([]);
+const selectedAccountingLines = ref<number[]>([]);
+const reconciliationAccountId = ref(0);
+const suggestionDraft = reactive({
+  bank_line_id: 0,
+  counterpart_account_id: 0,
+  label: '',
+  confidence: 80,
+  reason: ''
+});
+const paymentDraft = reactive({
+  contact_id: 0,
+  direction: 'encaissement' as 'encaissement' | 'decaissement',
+  date: today,
+  amount: '',
+  reference: '',
+  treasury_account_id: 0,
+  bank_line_id: 0
+});
+const allocationDraft = reactive({ payment_id: 0, document_id: 0, amount: '' });
+const selectedDebtIds = ref<number[]>([]);
+const batchDraft = reactive({
+  treasury_account_id: 0,
+  execution_date: today
+});
+const confirmationDraft = reactive({
+  bank_line_id: 0,
+  fee_account_id: 0
+});
 const selected = computed<ExpenseItem | null>(
   () => workspace.value?.expenses.find((item) => item.id === selectedId.value) ?? null
+);
+const selectedBankTotal = computed(() => (
+  treasury.workspace?.bank_lines
+    .filter((item) => selectedBankLines.value.includes(item.id))
+    .reduce((total, item) => total + item.amount_cents, 0) ?? 0
+));
+const selectedAccountingTotal = computed(() => (
+  treasury.workspace?.accounting_lines
+    .filter((item) => selectedAccountingLines.value.includes(item.id))
+    .reduce((total, item) => total + item.amount_cents, 0) ?? 0
+));
+const selectedReconciliationDifference = computed(
+  () => selectedBankTotal.value - selectedAccountingTotal.value
 );
 
 type DraftLine = {
@@ -78,12 +125,13 @@ watch(
   () => {
     selectedId.value = 0;
     store.clear();
+    treasury.clear();
     void load();
   }
 );
 
 async function load(): Promise<void> {
-  if (context.context?.selection) await store.load();
+  if (context.context?.selection) await Promise.all([store.load(), treasury.load()]);
 }
 
 function newLine(): DraftLine {
@@ -112,6 +160,12 @@ function statusLabel(status: string): string {
     approuve: 'Approuvé',
     comptabilise: 'Comptabilisé',
     annule: 'Annulé',
+    prepare: 'Préparé',
+    exporte: 'Exporté',
+    confirme: 'Confirmé par relevé',
+    proposee: 'Proposée',
+    acceptee: 'Acceptée',
+    refusee: 'Refusée',
     actif: 'Actif',
     pause: 'En pause',
     termine: 'Terminé'
@@ -146,6 +200,243 @@ async function fileSelected(event: Event): Promise<void> {
     name: file.name,
     content_base64: dataUrl.slice(dataUrl.indexOf(',') + 1)
   };
+}
+
+async function statementSelected(event: Event): Promise<void> {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) {
+    statement.value = null;
+    return;
+  }
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+  statement.value = {
+    name: file.name,
+    content_base64: dataUrl.slice(dataUrl.indexOf(',') + 1)
+  };
+}
+
+async function previewStatement(): Promise<void> {
+  if (!statement.value) return;
+  try {
+    importPreview.value = await treasury.mutate<Record<string, unknown>>(
+      '/liquidites/banque/imports/previsualiser',
+      {
+        treasury_account_id: Number(importAccountId.value),
+        filename: statement.value.name,
+        content_base64: statement.value.content_base64
+      },
+      false
+    );
+    notifications.push('Relevé prévisualisé sans écriture comptable.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function confirmStatement(): Promise<void> {
+  const importId = Number(importPreview.value?.import_id || 0);
+  if (!importId) return;
+  try {
+    await treasury.mutate('/liquidites/banque/imports/confirmer', { import_id: importId });
+    importPreview.value = null;
+    statement.value = null;
+    notifications.push('Relevé confirmé, source et empreinte conservées.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function createReconciliation(): Promise<void> {
+  try {
+    await treasury.mutate('/liquidites/banque/rapprochements', {
+      treasury_account_id: Number(reconciliationAccountId.value),
+      bank_line_ids: [...selectedBankLines.value],
+      accounting_line_ids: [...selectedAccountingLines.value],
+      tolerance_cents: 0,
+      label: 'Rapprochement manuel'
+    });
+    selectedBankLines.value = [];
+    selectedAccountingLines.value = [];
+    notifications.push('Rapprochement confirmé au centime.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function cancelReconciliation(item: { id: number; version: number }): Promise<void> {
+  if (!window.confirm('Annuler ce rapprochement et libérer ses lignes ?')) return;
+  try {
+    await treasury.mutate('/liquidites/banque/rapprochements/annuler', {
+      reconciliation_id: item.id,
+      version: item.version
+    });
+    notifications.push('Rapprochement annulé et audité.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function proposeSuggestion(): Promise<void> {
+  try {
+    await treasury.mutate('/liquidites/banque/suggestions', {
+      bank_line_id: Number(suggestionDraft.bank_line_id),
+      counterpart_account_id: Number(suggestionDraft.counterpart_account_id),
+      label: suggestionDraft.label,
+      confidence: Number(suggestionDraft.confidence),
+      reason: suggestionDraft.reason
+    });
+    Object.assign(suggestionDraft, {
+      bank_line_id: 0,
+      counterpart_account_id: 0,
+      label: '',
+      confidence: 80,
+      reason: ''
+    });
+    notifications.push('Suggestion enregistrée sans écriture comptable.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function acceptSuggestion(id: number): Promise<void> {
+  const exercise = treasury.workspace?.catalog.exercises.find(
+    (entry) => entry.statut === 'ouvert'
+  );
+  const journal = treasury.workspace?.catalog.journals.find(
+    (entry) => ['banque', 'general'].includes(entry.type)
+  );
+  if (!exercise || !journal) {
+    notifications.push('Configurez un exercice ouvert et un journal de banque.', 'warning');
+    return;
+  }
+  try {
+    await treasury.mutate('/liquidites/banque/suggestions/accepter', {
+      suggestion_id: id,
+      exercise_id: exercise.id,
+      journal_id: journal.id
+    });
+    notifications.push('Suggestion acceptée et comptabilisée explicitement.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function createPayment(): Promise<void> {
+  const treasuryAccount = treasury.workspace?.treasury_accounts.find(
+    (item) => item.id === Number(paymentDraft.treasury_account_id)
+  );
+  if (!treasuryAccount) return;
+  try {
+    await treasury.mutate('/liquidites/lettrage/paiements', {
+      contact_id: Number(paymentDraft.contact_id),
+      direction: paymentDraft.direction,
+      date: paymentDraft.date,
+      amount_cents: cents(paymentDraft.amount),
+      reference: paymentDraft.reference,
+      ledger_account_id: treasuryAccount.ledger_account_id,
+      bank_line_id: paymentDraft.bank_line_id || null,
+      currency: treasuryAccount.currency
+    });
+    notifications.push('Paiement créé indépendamment des factures.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function allocatePayment(): Promise<void> {
+  try {
+    await treasury.mutate('/liquidites/lettrage/allocations', {
+      payment_id: Number(allocationDraft.payment_id),
+      document_id: Number(allocationDraft.document_id),
+      amount_cents: cents(allocationDraft.amount)
+    });
+    notifications.push('Paiement lettré.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function unallocate(id: number): Promise<void> {
+  if (!window.confirm('Délettrer cette allocation ?')) return;
+  try {
+    await treasury.mutate('/liquidites/lettrage/allocations/annuler', {
+      allocation_id: id
+    });
+    notifications.push('Allocation annulée.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function prepareBatch(): Promise<void> {
+  const debts = treasury.workspace?.payable_debts.filter(
+    (item) => selectedDebtIds.value.includes(item.id)
+  ) ?? [];
+  try {
+    await treasury.mutate('/liquidites/paiements/lots', {
+      treasury_account_id: Number(batchDraft.treasury_account_id),
+      execution_date: batchDraft.execution_date,
+      idempotency_key: crypto.randomUUID(),
+      orders: debts.map((item) => ({
+        document_id: item.id,
+        amount_cents: item.open_cents
+      }))
+    });
+    selectedDebtIds.value = [];
+    notifications.push('Lot préparé. Aucun document n’est encore marqué payé.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function exportBatch(item: { id: number; version: number }): Promise<void> {
+  try {
+    const result = await treasury.mutate<{
+      filename: string; hash: string; content_base64: string; transmitted: boolean;
+    }>('/liquidites/paiements/lots/exporter', {
+      batch_id: item.id,
+      version: item.version
+    });
+    const bytes = Uint8Array.from(atob(result.content_base64), (character) => character.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/xml' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = result.filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    await treasury.load();
+    notifications.push('pain.001 généré et téléchargé — non transmis.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function confirmBatch(item: { id: number }): Promise<void> {
+  const exercise = treasury.workspace?.catalog.exercises.find((entry) => entry.statut === 'ouvert');
+  const journal = treasury.workspace?.catalog.journals.find(
+    (entry) => ['banque', 'general'].includes(entry.type)
+  );
+  if (!exercise || !journal) {
+    notifications.push('Configurez un exercice ouvert et un journal de banque.', 'warning');
+    return;
+  }
+  try {
+    await treasury.mutate('/liquidites/paiements/lots/confirmer', {
+      batch_id: item.id,
+      bank_line_id: Number(confirmationDraft.bank_line_id),
+      exercise_id: exercise.id,
+      journal_id: journal.id,
+      fee_account_id: confirmationDraft.fee_account_id || null
+    });
+    notifications.push('Lot confirmé par relevé, comptabilisé, lettré et rapproché.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
 }
 
 async function saveExpense(): Promise<void> {
@@ -266,6 +557,7 @@ async function toggleRecurrence(item: {
 
     <CompactTabs :items="subNavigation.liquidity" label="Navigation des liquidités" />
     <ErrorSummary v-if="store.error" title="Impossible de charger les dépenses" :message="store.error" />
+    <ErrorSummary v-if="treasury.error" title="Impossible de charger les opérations de trésorerie" :message="treasury.error" />
     <SkeletonBlock v-if="store.loading && !workspace" :lines="7" />
 
     <template v-else-if="workspace && activeTab === 'use'">
@@ -447,11 +739,290 @@ async function toggleRecurrence(item: {
       </section>
     </template>
 
-    <EmptyState
-      v-else-if="workspace"
-      title="Ce parcours arrive au lot 07"
-      description="Le rapprochement bancaire, le lettrage et l’émission de paiements restent séparés des dépenses."
-    />
+    <template v-else-if="workspace && treasury.workspace && activeTab === 'rapprochement'">
+      <div class="toolbar">
+        <div>
+          <h2>Rapprochement bancaire</h2>
+          <p>Le relevé, ses empreintes et le grand livre restent des sources distinctes.</p>
+        </div>
+      </div>
+
+      <form v-if="treasury.workspace.capabilities.import" class="editor-card" @submit.prevent="previewStatement">
+        <h3>Importer un relevé</h3>
+        <div class="form-grid">
+          <FormField id="statement-account" label="Compte bancaire">
+            <template #default="{ describedBy }">
+              <select id="statement-account" v-model.number="importAccountId" :aria-describedby="describedBy" required>
+                <option :value="0" disabled>Sélectionner</option>
+                <option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }} · {{ item.iban || 'IBAN absent' }}</option>
+              </select>
+            </template>
+          </FormField>
+          <FormField id="statement-file" label="Relevé CAMT ou PostFinance">
+            <template #default="{ describedBy }">
+              <input id="statement-file" type="file" accept=".xml,.csv" :aria-describedby="describedBy" required @change="statementSelected">
+            </template>
+          </FormField>
+        </div>
+        <div class="button-row"><button class="button primary" :disabled="treasury.saving">Prévisualiser</button></div>
+      </form>
+
+      <article v-if="importPreview" class="detail-card">
+        <h3>Prévisualisation sans comptabilisation</h3>
+        <dl class="detail-grid">
+          <div><dt>Format</dt><dd>{{ importPreview.format }}</dd></div>
+          <div><dt>Mouvements</dt><dd>{{ Array.isArray(importPreview.transactions) ? importPreview.transactions.length : 0 }}</dd></div>
+          <div><dt>Doublons</dt><dd>{{ importPreview.duplicate_count }}</dd></div>
+          <div><dt>Devise</dt><dd>{{ importPreview.currency }}</dd></div>
+        </dl>
+        <button class="button primary" type="button" @click="confirmStatement">Confirmer l’import</button>
+      </article>
+
+      <form
+        v-if="treasury.workspace.capabilities.suggest"
+        class="editor-card"
+        @submit.prevent="proposeSuggestion"
+      >
+        <h3>Proposer une comptabilisation</h3>
+        <p>La proposition ne crée aucune écriture avant son acceptation explicite.</p>
+        <div class="form-grid">
+          <FormField id="suggestion-bank-line" label="Ligne bancaire">
+            <template #default="{ describedBy }">
+              <select id="suggestion-bank-line" v-model.number="suggestionDraft.bank_line_id" :aria-describedby="describedBy" required>
+                <option :value="0" disabled>Sélectionner</option>
+                <option v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id)" :key="line.id" :value="line.id">{{ line.booking_date }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
+              </select>
+            </template>
+          </FormField>
+          <FormField id="suggestion-account" label="Compte de contrepartie">
+            <template #default="{ describedBy }">
+              <select id="suggestion-account" v-model.number="suggestionDraft.counterpart_account_id" :aria-describedby="describedBy" required>
+                <option :value="0" disabled>Sélectionner</option>
+                <option v-for="account in treasury.workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.numero }} · {{ account.libelle }}</option>
+              </select>
+            </template>
+          </FormField>
+          <FormField id="suggestion-label" label="Libellé">
+            <template #default="{ describedBy }"><input id="suggestion-label" v-model="suggestionDraft.label" :aria-describedby="describedBy" required></template>
+          </FormField>
+          <FormField id="suggestion-confidence" label="Confiance (%)">
+            <template #default="{ describedBy }"><input id="suggestion-confidence" v-model.number="suggestionDraft.confidence" type="number" min="0" max="100" :aria-describedby="describedBy" required></template>
+          </FormField>
+          <FormField id="suggestion-reason" label="Justification">
+            <template #default="{ describedBy }"><input id="suggestion-reason" v-model="suggestionDraft.reason" :aria-describedby="describedBy"></template>
+          </FormField>
+        </div>
+        <button class="button secondary" :disabled="treasury.saving">Enregistrer la suggestion</button>
+      </form>
+
+      <DataTable
+        v-if="treasury.workspace.suggestions.length"
+        caption="Suggestions de comptabilisation"
+        :columns="[
+          { key: 'label', label: 'Libellé' },
+          { key: 'reason', label: 'Justification' },
+          { key: 'confidence', label: 'Confiance' },
+          { key: 'status', label: 'Statut' },
+          { key: 'actions', label: 'Actions' }
+        ]"
+        :rows="treasury.workspace.suggestions"
+      >
+        <template #cell-confidence="{ row }">{{ row.confidence }} %</template>
+        <template #cell-status="{ row }">{{ statusLabel(String(row.status)) }}</template>
+        <template #cell-actions="{ row }">
+          <button
+            v-if="row.status === 'proposee' && treasury.workspace?.capabilities.accept_suggestion"
+            type="button"
+            @click="acceptSuggestion(Number(row.id))"
+          >Accepter et comptabiliser</button>
+        </template>
+      </DataTable>
+
+      <section class="editor-card">
+        <div class="toolbar">
+          <div><h3>Associer banque et comptabilité</h3><p>Sélections 1–1, 1–N ou N–1 ; écart exigé à zéro.</p></div>
+          <select v-model.number="reconciliationAccountId" aria-label="Compte à rapprocher">
+            <option :value="0" disabled>Compte bancaire</option>
+            <option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }}</option>
+          </select>
+        </div>
+        <div class="reconciliation-grid">
+          <div>
+            <h4>Lignes bancaires non rapprochées</h4>
+            <label
+              v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id && (!reconciliationAccountId || item.treasury_account_id === reconciliationAccountId))"
+              :key="line.id"
+              class="selection-row"
+            >
+              <input v-model="selectedBankLines" type="checkbox" :value="line.id">
+              <span>{{ line.booking_date }} · {{ line.label || line.counterparty }}</span>
+              <strong>{{ money(line.amount_cents, line.currency) }}</strong>
+            </label>
+          </div>
+          <div>
+            <h4>Lignes comptables non rapprochées</h4>
+            <label
+              v-for="line in treasury.workspace.accounting_lines.filter((item) => !item.reconciliation_id && (!reconciliationAccountId || item.treasury_account_id === reconciliationAccountId))"
+              :key="line.id"
+              class="selection-row"
+            >
+              <input v-model="selectedAccountingLines" type="checkbox" :value="line.id">
+              <span>{{ line.accounting_date }} · {{ line.entry_number }} · {{ line.label }}</span>
+              <strong>{{ money(line.amount_cents) }}</strong>
+            </label>
+          </div>
+        </div>
+        <dl class="reconciliation-totals">
+          <div><dt>Total banque</dt><dd>{{ money(selectedBankTotal) }}</dd></div>
+          <div><dt>Total comptabilité</dt><dd>{{ money(selectedAccountingTotal) }}</dd></div>
+          <div>
+            <dt>Écart</dt>
+            <dd :class="{ 'difference-error': selectedReconciliationDifference !== 0 }">
+              {{ money(selectedReconciliationDifference) }}
+            </dd>
+          </div>
+        </dl>
+        <div class="button-row">
+          <button
+            v-if="treasury.workspace.capabilities.reconcile"
+            class="button primary"
+            type="button"
+            :disabled="!reconciliationAccountId || !selectedBankLines.length || !selectedAccountingLines.length || selectedReconciliationDifference !== 0"
+            @click="createReconciliation"
+          >Confirmer le rapprochement</button>
+        </div>
+      </section>
+
+      <DataTable
+        v-if="treasury.workspace.reconciliations.length"
+        caption="Historique des rapprochements"
+        :columns="[
+          { key: 'created_at', label: 'Créé le' },
+          { key: 'label', label: 'Libellé' },
+          { key: 'bank_line_count', label: 'Banque' },
+          { key: 'accounting_line_count', label: 'Comptabilité' },
+          { key: 'difference_cents', label: 'Écart' },
+          { key: 'status', label: 'Statut' },
+          { key: 'actions', label: 'Actions' }
+        ]"
+        :rows="treasury.workspace.reconciliations"
+      >
+        <template #cell-difference_cents="{ row }">{{ money(Number(row.difference_cents)) }}</template>
+        <template #cell-status="{ row }">{{ statusLabel(String(row.status)) }}</template>
+        <template #cell-actions="{ row }">
+          <button
+            v-if="row.status === 'confirme' && treasury.workspace?.capabilities.reconcile"
+            type="button"
+            @click="cancelReconciliation(row as { id: number; version: number })"
+          >Annuler</button>
+        </template>
+      </DataTable>
+    </template>
+
+    <template v-else-if="workspace && treasury.workspace && activeTab === 'lettrage'">
+      <div class="toolbar">
+        <div><h2>Lettrage des paiements</h2><p>Un paiement reste indépendant et peut couvrir plusieurs documents.</p></div>
+      </div>
+      <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="createPayment">
+        <h3>Nouveau paiement</h3>
+        <div class="form-grid">
+          <FormField id="matching-contact" label="Contact"><template #default="{ describedBy }"><select id="matching-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.catalog.contacts" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
+          <FormField id="matching-direction" label="Sens"><template #default="{ describedBy }"><select id="matching-direction" v-model="paymentDraft.direction" :aria-describedby="describedBy"><option value="encaissement">Encaissement</option><option value="decaissement">Décaissement</option></select></template></FormField>
+          <FormField id="matching-date" label="Date"><template #default="{ describedBy }"><input id="matching-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
+          <FormField id="matching-amount" label="Montant"><template #default="{ describedBy }"><input id="matching-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
+          <FormField id="matching-reference" label="Référence"><template #default="{ describedBy }"><input id="matching-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy"></template></FormField>
+          <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><select id="matching-account" v-model.number="paymentDraft.treasury_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
+          <FormField id="matching-bank-line" label="Ligne bancaire facultative" hint="Le montant cumulé et le sens sont contrôlés côté serveur.">
+            <template #default="{ describedBy }">
+              <select id="matching-bank-line" v-model.number="paymentDraft.bank_line_id" :aria-describedby="describedBy">
+                <option :value="0">Paiement sans ligne bancaire</option>
+                <option
+                  v-for="line in treasury.workspace.bank_lines.filter((item) => paymentDraft.direction === 'encaissement' ? item.amount_cents > 0 : item.amount_cents < 0)"
+                  :key="line.id"
+                  :value="line.id"
+                >{{ line.booking_date }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
+              </select>
+            </template>
+          </FormField>
+        </div>
+        <button class="button primary" :disabled="treasury.saving">Créer le paiement</button>
+      </form>
+
+      <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
+        <h3>Allouer à un document ouvert</h3>
+        <div class="form-grid">
+          <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.payments.filter((entry) => entry.non_alloue_centimes > 0)" :key="item.id" :value="item.id">{{ item.date_paiement }} · {{ item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes) }}</option></select></template></FormField>
+          <FormField id="allocation-document" label="Facture ou dette"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.open_documents" :key="item.id" :value="item.id">{{ item.number }} · {{ item.contact }} · {{ money(item.open_cents, item.currency) }}</option></select></template></FormField>
+          <FormField id="allocation-amount" label="Montant alloué"><template #default="{ describedBy }"><input id="allocation-amount" v-model="allocationDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
+        </div>
+        <button class="button primary" :disabled="treasury.saving">Lettrer</button>
+      </form>
+
+      <DataTable
+        v-if="treasury.workspace.allocations.length"
+        caption="Allocations et délettrages"
+        :columns="[
+          { key: 'document_numero', label: 'Document' },
+          { key: 'contact', label: 'Contact' },
+          { key: 'paiement_reference', label: 'Paiement' },
+          { key: 'montant_centimes', label: 'Montant' },
+          { key: 'statut', label: 'Statut' },
+          { key: 'actions', label: 'Actions' }
+        ]"
+        :rows="treasury.workspace.allocations"
+      >
+        <template #cell-montant_centimes="{ row }">{{ money(Number(row.montant_centimes)) }}</template>
+        <template #cell-actions="{ row }"><button v-if="row.statut === 'valide' && treasury.workspace?.capabilities.match" type="button" @click="unallocate(Number(row.id))">Délettrer</button></template>
+      </DataTable>
+    </template>
+
+    <template v-else-if="workspace && treasury.workspace && activeTab === 'paiements'">
+      <div class="toolbar">
+        <div><h2>Paiements sortants</h2><p>Préparation, export pain.001 non transmis, puis confirmation par relevé.</p></div>
+      </div>
+      <form v-if="treasury.workspace.capabilities.prepare_payments" class="editor-card" @submit.prevent="prepareBatch">
+        <h3>Dettes approuvées et comptabilisées</h3>
+        <div class="form-grid">
+          <FormField id="batch-account" label="Compte débiteur"><template #default="{ describedBy }"><select id="batch-account" v-model.number="batchDraft.treasury_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }} · {{ item.iban || 'IBAN absent' }}</option></select></template></FormField>
+          <FormField id="batch-date" label="Date d’exécution"><template #default="{ describedBy }"><input id="batch-date" v-model="batchDraft.execution_date" type="date" :aria-describedby="describedBy" required></template></FormField>
+        </div>
+        <label v-for="debt in treasury.workspace.payable_debts" :key="debt.id" class="selection-row">
+          <input v-model="selectedDebtIds" type="checkbox" :value="debt.id" :disabled="!debt.iban">
+          <span>{{ debt.number }} · {{ debt.supplier }} · échéance {{ debt.due_date }}<small v-if="!debt.iban">IBAN fournisseur manquant dans Configuration</small></span>
+          <strong>{{ money(debt.open_cents, debt.currency) }}</strong>
+        </label>
+        <button class="button primary" :disabled="!selectedDebtIds.length || treasury.saving">Préparer le lot</button>
+      </form>
+
+      <section v-if="treasury.workspace.outgoing_batches.length" class="batch-list">
+        <article v-for="batch in treasury.workspace.outgoing_batches" :key="batch.id" class="detail-card">
+          <div class="toolbar">
+            <div>
+              <p class="eyebrow">{{ batch.pain_version }}</p>
+              <h3>{{ batch.message_id }}</h3>
+              <p>{{ batch.order_count }} ordre(s) · {{ money(batch.total_cents, batch.currency) }} · {{ statusLabel(batch.status) }}</p>
+              <small v-if="batch.hash">SHA-256 {{ batch.hash }}</small>
+            </div>
+            <div class="button-row">
+              <button v-if="batch.status === 'prepare' && treasury.workspace?.capabilities.export_payments" type="button" @click="exportBatch(batch)">Générer et télécharger</button>
+            </div>
+          </div>
+          <ul><li v-for="order in batch.orders" :key="order.id">{{ order.beneficiary }} · {{ order.reference }} · {{ money(order.amount_cents, order.currency) }}</li></ul>
+          <div v-if="batch.status === 'exporte' && treasury.workspace.capabilities.confirm_payments" class="confirmation-row">
+            <select v-model.number="confirmationDraft.bank_line_id" aria-label="Ligne bancaire de confirmation" required>
+              <option :value="0" disabled>Ligne bancaire débitée</option>
+              <option v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id && item.amount_cents < 0 && item.treasury_account_id === batch.treasury_account_id)" :key="line.id" :value="line.id">{{ line.booking_date }} · {{ line.label }} · {{ money(line.amount_cents, line.currency) }}</option>
+            </select>
+            <select v-model.number="confirmationDraft.fee_account_id" aria-label="Compte de frais bancaires">
+              <option :value="0">Sans frais séparés</option>
+              <option v-for="account in treasury.workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.numero }} · {{ account.libelle }}</option>
+            </select>
+            <button type="button" :disabled="!confirmationDraft.bank_line_id" @click="confirmBatch(batch)">Confirmer par le relevé</button>
+          </div>
+        </article>
+      </section>
+      <EmptyState v-else title="Aucun lot de paiements" description="Sélectionnez une ou plusieurs dettes comptabilisées." />
+    </template>
   </section>
 </template>
 
@@ -471,8 +1042,19 @@ async function toggleRecurrence(item: {
 .detail-grid dt { color: var(--muted); font-size: .8rem; }
 .detail-grid dd { margin: .2rem 0 0; font-weight: 750; }
 .recurrence-section { display: grid; gap: 1rem; }
+.reconciliation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.reconciliation-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0; }
+.reconciliation-totals div { padding: .75rem; background: var(--surface-soft, #f7f7fb); border-radius: .5rem; }
+.reconciliation-totals dt { color: var(--muted); font-size: .8rem; }
+.reconciliation-totals dd { margin: .2rem 0 0; font-weight: 800; }
+.difference-error { color: var(--danger, #9f1239); }
+.selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: .75rem; padding: .7rem; border-bottom: 1px solid var(--border); }
+.selection-row small { display: block; color: var(--danger, #9f1239); margin-top: .2rem; }
+.batch-list { display: grid; gap: 1rem; }
+.confirmation-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: .6rem; align-items: center; }
+.confirmation-row select { min-height: 2.7rem; }
 @media (max-width: 850px) {
-  .form-grid, .detail-grid { grid-template-columns: 1fr; }
+  .form-grid, .detail-grid, .reconciliation-grid, .reconciliation-totals, .confirmation-row { grid-template-columns: 1fr; }
   .line-editor { grid-template-columns: 1fr; }
 }
 </style>

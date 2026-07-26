@@ -159,6 +159,8 @@ export type ManagedReferencesPayload = {
     last_name: string;
     email: string;
     phone: string;
+    payment_iban: string;
+    payment_bic: string;
     language: 'fr' | 'de' | 'it' | 'en';
     roles: Array<'client' | 'fournisseur' | 'employe' | 'autre'>;
     address_line1: string;
@@ -329,6 +331,93 @@ export type ExpensesPayload = {
     exercises: Array<{ id: number; label: string }>;
     journals: Array<{ id: number; code: string; label: string }>;
   };
+};
+
+export type TreasuryWorkspace = {
+  treasury_accounts: Array<{
+    id: number; label: string; type: string; iban: string; bic: string;
+    currency: string; ledger_account_id: number; ledger_number: string;
+  }>;
+  imports: Array<{
+    id: number; treasury_account_id: number; format: string; filename: string;
+    source_hash: string; date_start: string; date_end: string; status: string;
+    total_count: number; imported_count: number; duplicate_count: number;
+    created_at: string; confirmed_at: string | null;
+  }>;
+  bank_lines: Array<{
+    id: number; treasury_account_id: number; import_id: number;
+    booking_date: string; value_date: string; label: string; counterparty: string;
+    communication: string; reference: string; amount_cents: number;
+    fee_cents: number; currency: string; reconciliation_id: number | null;
+  }>;
+  accounting_lines: Array<{
+    id: number; treasury_account_id: number; entry_id: number;
+    entry_number: string; accounting_date: string; label: string;
+    amount_cents: number; reconciliation_id: number | null;
+  }>;
+  reconciliations: Array<{
+    id: number; treasury_account_id: number; label: string;
+    bank_total_cents: number; accounting_total_cents: number;
+    difference_cents: number; tolerance_cents: number;
+    status: 'confirme' | 'annule'; created_at: string;
+    cancelled_at: string | null; version: number;
+    bank_line_count: number; accounting_line_count: number;
+  }>;
+  suggestions: Array<{
+    id: number; bank_line_id: number; counterpart_account_id: number;
+    label: string; confidence: number; reason: string;
+    status: 'proposee' | 'acceptee' | 'refusee'; entry_id: number | null;
+  }>;
+  payments: Array<Record<string, unknown> & {
+    id: number; contact_id: number; sens: 'encaissement' | 'decaissement';
+    date_paiement: string; montant_centimes: number; reference: string;
+    alloue_centimes: number; non_alloue_centimes: number; statut: string;
+  }>;
+  allocations: Array<Record<string, unknown> & {
+    id: number; paiement_id: number | null; document_id: number;
+    montant_centimes: number; statut: 'valide' | 'annule';
+    document_numero: string; contact: string; date_source?: string;
+  }>;
+  open_documents: Array<{
+    id: number; number: string; type: 'facture_client' | 'facture_fournisseur';
+    workflow: string; contact_id: number; due_date: string; currency: string;
+    gross_cents: number; allocated_cents: number; open_cents: number; contact: string;
+  }>;
+  payable_debts: Array<{
+    id: number; number: string; external_number: string; contact_id: number;
+    due_date: string; currency: string; open_cents: number; supplier: string;
+    iban: string; bic: string;
+  }>;
+  outgoing_batches: Array<{
+    id: number; treasury_account_id: number; message_id: string;
+    execution_date: string; currency: string; order_count: number;
+    total_cents: number; status: 'prepare' | 'exporte' | 'confirme';
+    pain_version: string; hash: string; created_at: string;
+    exported_at: string | null; confirmed_at: string | null;
+    bank_line_id: number | null; reconciliation_id: number | null;
+    fee_cents: number; version: number;
+    orders: Array<{
+      id: number; document_id: number; contact_id: number; beneficiary: string;
+      iban: string; bic: string; reference: string; amount_cents: number;
+      currency: string; status: string; payment_id: number | null;
+    }>;
+  }>;
+  catalog: {
+    exercises: Array<{ id: number; libelle: string; date_debut: string; date_fin: string; statut: string }>;
+    journals: Array<{ id: number; code: string; libelle: string; type: string }>;
+    accounts: Array<{ id: number; numero: string; libelle: string; sens_normal: string }>;
+    contacts: Array<{ id: number; label: string; roles: string }>;
+    treasury_accounts: Array<{
+      id: number; label: string; type: string; iban: string; bic: string;
+      currency: string; ledger_account_id: number; ledger_number: string;
+    }>;
+  };
+  capabilities: {
+    import: boolean; reconcile: boolean; suggest: boolean;
+    accept_suggestion: boolean; match: boolean;
+    prepare_payments: boolean; export_payments: boolean; confirm_payments: boolean;
+  };
+  definitions: { banking: string; matching: string; pain001: string };
 };
 
 export type AccountingWorkspace = {

@@ -110,6 +110,13 @@ suggestions de comptabilisation à accepter explicitement, l’état comparatif
 banque/comptabilité et les virements internes. Les lignes et soldes bancaires
 confirmés sont immuables.
 
+Les trois onglets Vue dédiés couvrent aussi le rapprochement réversible, le
+lettrage N–N et les paiements sortants. Un lot pain.001 est préparé puis
+téléchargé sans être déclaré transmis ; les dettes ne sont soldées qu’après
+confirmation du débit par un relevé bancaire. Les coordonnées IBAN/BIC des
+créanciers sont gérées dans le référentiel unique des contacts. Voir
+[le guide banque, lettrage et paiements](docs/banque-lettrage-paiements.md).
+
 L’écran Vue `/app/liquidites` gère aussi les dépenses ponctuelles et
 récurrentes. Une dépense reste un document fournisseur unique : brouillon avec
 justificatif, soumission, approbation, comptabilisation explicite, puis

@@ -52,13 +52,16 @@ final class ContactService
             $stmt = $this->pdo->prepare(
                 'INSERT INTO contacts
                  (organisation_id, dossier_id, type_personne, raison_sociale,
-                  prenom, nom, email, telephone, langue, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                  prenom, nom, email, telephone, iban_paiement, bic_paiement,
+                  langue, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $type, $company, $firstName, $lastName,
                 trim((string) ($data['email'] ?? '')),
                 trim((string) ($data['telephone'] ?? '')),
+                strtoupper(str_replace(' ', '', trim((string) ($data['iban_paiement'] ?? '')))),
+                strtoupper(str_replace(' ', '', trim((string) ($data['bic_paiement'] ?? '')))),
                 (string) ($data['langue'] ?? 'fr'),
                 $actorId,
             ]);
@@ -129,7 +132,8 @@ final class ContactService
             $update = $this->pdo->prepare(
                 'UPDATE contacts
                  SET type_personne = ?, raison_sociale = ?, prenom = ?, nom = ?,
-                     email = ?, telephone = ?, langue = ?,
+                     email = ?, telephone = ?, iban_paiement = ?, bic_paiement = ?,
+                     langue = ?,
                      modifie_le = datetime(\'now\'), version = version + 1
                  WHERE id = ? AND organisation_id = ? AND dossier_id = ?
                    AND version = ? AND actif = 1'
@@ -141,6 +145,8 @@ final class ContactService
                 $lastName,
                 trim((string) ($data['email'] ?? '')),
                 trim((string) ($data['telephone'] ?? '')),
+                strtoupper(str_replace(' ', '', trim((string) ($data['iban_paiement'] ?? '')))),
+                strtoupper(str_replace(' ', '', trim((string) ($data['bic_paiement'] ?? '')))),
                 (string) ($data['langue'] ?? 'fr'),
                 $contactId,
                 $organisationId,
@@ -275,6 +281,8 @@ final class ContactService
                     'nom' => $contact['nom'],
                     'email' => $contact['email'],
                     'telephone' => $contact['telephone'],
+                    'iban_paiement' => $contact['iban_paiement'],
+                    'bic_paiement' => $contact['bic_paiement'],
                     'langue' => $contact['langue'],
                     'adresse' => [
                         'ligne1' => $contact['ligne1'] ?? '',

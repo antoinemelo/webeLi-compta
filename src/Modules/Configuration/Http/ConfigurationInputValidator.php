@@ -7,6 +7,8 @@ use Compta\Core\Http\Api\ApiException;
 use Compta\Core\Http\Request;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Salaires\PayrollConfigurationService;
+use Compta\Modules\Tresorerie\BankCoordinates;
+use Compta\Modules\Tresorerie\TreasuryException;
 use DateTimeImmutable;
 
 final class ConfigurationInputValidator
@@ -111,7 +113,7 @@ final class ConfigurationInputValidator
         $data = $this->only($request, [
             'id', 'version', 'type', 'company', 'first_name', 'last_name', 'email', 'phone',
             'language', 'roles', 'address_line1', 'address_line2',
-            'postal_code', 'city', 'country',
+            'postal_code', 'city', 'country', 'payment_iban', 'payment_bic',
         ]);
         $errors = [];
         foreach (['id', 'version'] as $field) {
@@ -180,6 +182,24 @@ final class ConfigurationInputValidator
         if (preg_match('/^[A-Z]{2}$/', $country) !== 1) {
             $errors['country'][] = 'Code pays ISO à deux lettres requis.';
         }
+        $paymentIban = BankCoordinates::normalizeIban(
+            (string) ($data['payment_iban'] ?? '')
+        );
+        $paymentBic = BankCoordinates::normalizeBic(
+            (string) ($data['payment_bic'] ?? '')
+        );
+        try {
+            if ($paymentIban !== '') {
+                BankCoordinates::assertIban($paymentIban);
+            }
+        } catch (TreasuryException) {
+            $errors['payment_iban'][] = 'IBAN de paiement invalide.';
+        }
+        try {
+            BankCoordinates::assertBic($paymentBic);
+        } catch (TreasuryException) {
+            $errors['payment_bic'][] = 'BIC de paiement invalide.';
+        }
         $this->fail($errors);
         return [
             'id' => (int) $data['id'],
@@ -197,6 +217,8 @@ final class ConfigurationInputValidator
             'postal_code' => trim((string) $data['postal_code']),
             'city' => trim((string) $data['city']),
             'country' => $country,
+            'payment_iban' => $paymentIban,
+            'payment_bic' => $paymentBic,
         ];
     }
 
@@ -380,16 +402,18 @@ final class ConfigurationInputValidator
         ) {
             $errors['type'][] = 'Type de trésorerie invalide.';
         }
-        $iban = strtoupper((string) preg_replace(
-            '/\s+/',
-            '',
-            trim((string) ($data['iban'] ?? ''))
-        ));
-        if ($iban !== '' && preg_match('/^[A-Z]{2}[0-9A-Z]{13,32}$/', $iban) !== 1) {
+        $iban = BankCoordinates::normalizeIban((string) ($data['iban'] ?? ''));
+        $bic = BankCoordinates::normalizeBic((string) ($data['bic'] ?? ''));
+        try {
+            if ($iban !== '') {
+                BankCoordinates::assertIban($iban);
+            }
+        } catch (TreasuryException) {
             $errors['iban'][] = 'IBAN invalide.';
         }
-        $bic = strtoupper(trim((string) ($data['bic'] ?? '')));
-        if ($bic !== '' && preg_match('/^[A-Z0-9]{8}([A-Z0-9]{3})?$/', $bic) !== 1) {
+        try {
+            BankCoordinates::assertBic($bic);
+        } catch (TreasuryException) {
             $errors['bic'][] = 'BIC invalide.';
         }
         $currency = strtoupper(trim((string) ($data['currency'] ?? '')));

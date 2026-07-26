@@ -34,6 +34,7 @@ Les exemples versionnés sont :
 - `accounting.success.json` ;
 - `managed-references.success.json` ;
 - `expenses.success.json` ;
+- `treasury.success.json` ;
 - `error.validation.json`.
 
 ## Routes
@@ -78,6 +79,19 @@ Les exemples versionnés sont :
 | POST | `/api/v1/liquidites/recurrences` | création d’un modèle récurrent |
 | POST | `/api/v1/liquidites/recurrences/pause` | suspension ou reprise optimiste |
 | POST | `/api/v1/liquidites/recurrences/generer` | génération idempotente des échéances |
+| GET | `/api/v1/liquidites/banque` | espace banque, lettrage et paiements sortants |
+| POST | `/api/v1/liquidites/banque/imports/previsualiser` | analyse sans comptabilisation d’un CAMT ou PostFinance |
+| POST | `/api/v1/liquidites/banque/imports/confirmer` | import audité avec source et empreinte archivées |
+| POST | `/api/v1/liquidites/banque/rapprochements` | rapprochement explicite 1–1, 1–N ou N–1 |
+| POST | `/api/v1/liquidites/banque/rapprochements/annuler` | annulation auditée et libération des lignes |
+| POST | `/api/v1/liquidites/banque/suggestions` | proposition d’écriture sans validation silencieuse |
+| POST | `/api/v1/liquidites/banque/suggestions/accepter` | acceptation explicite d’une suggestion |
+| POST | `/api/v1/liquidites/lettrage/paiements` | création d’un paiement indépendant des factures |
+| POST | `/api/v1/liquidites/lettrage/allocations` | allocation partielle ou multiple d’un paiement |
+| POST | `/api/v1/liquidites/lettrage/allocations/annuler` | délettrage tant que la période reste ouverte |
+| POST | `/api/v1/liquidites/paiements/lots` | préparation idempotente d’un lot sortant |
+| POST | `/api/v1/liquidites/paiements/lots/exporter` | génération et téléchargement pain.001, sans transmission |
+| POST | `/api/v1/liquidites/paiements/lots/confirmer` | confirmation, comptabilisation et lettrage depuis le relevé |
 
 Les mutations exigent `X-CSRF-Token`. Un client peut envoyer
 `X-Contract-Version: compta-api-v1`; une autre version est refusée avec
@@ -124,6 +138,13 @@ TVA, comptes, pièces jointes, paiements et allocations que Facturation. Elles
 ajoutent un workflow explicite `brouillon → à approuver → approuvé →
 comptabilisé`. La création et la génération récurrente ne comptabilisent
 jamais. `depenses.approve` et `depenses.post` sont deux permissions distinctes.
+
+Le rapprochement bancaire ne fusionne jamais la banque et le grand livre :
+chaque source reste historisée et l’association est réversible avant clôture.
+Le lettrage est N–N et refuse les surallocations. La préparation, l’export et
+la confirmation des paiements sortants utilisent trois permissions distinctes.
+Un export pain.001 reste toujours qualifié de « non transmis » ; la dette
+n’est soldée qu’après présence du débit dans un relevé bancaire confirmé.
 
 ## Erreurs
 

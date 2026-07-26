@@ -209,6 +209,8 @@ CREATE TABLE contacts (
     nom TEXT NOT NULL DEFAULT '',
     email TEXT NOT NULL DEFAULT '',
     telephone TEXT NOT NULL DEFAULT '',
+    iban_paiement TEXT NOT NULL DEFAULT '',
+    bic_paiement TEXT NOT NULL DEFAULT '',
     langue TEXT NOT NULL DEFAULT 'fr' CHECK (langue IN ('fr', 'de', 'it', 'en')),
     actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
@@ -831,6 +833,61 @@ CREATE TABLE paiements (
     annule_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL
 );
 
+CREATE TABLE lots_paiements_sortants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    compte_tresorerie_id INTEGER NOT NULL
+        REFERENCES comptes_tresorerie(id) ON DELETE RESTRICT,
+    message_id TEXT NOT NULL,
+    date_execution TEXT NOT NULL,
+    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (monnaie IN ('CHF', 'EUR')),
+    nombre_ordres INTEGER NOT NULL CHECK (nombre_ordres > 0),
+    total_centimes INTEGER NOT NULL CHECK (total_centimes > 0),
+    statut TEXT NOT NULL DEFAULT 'prepare'
+        CHECK (statut IN ('prepare', 'exporte', 'confirme')),
+    version_pain TEXT NOT NULL DEFAULT 'pain.001.001.09.ch.03',
+    contenu_pain001 BLOB,
+    empreinte_sha256 TEXT NOT NULL DEFAULT '',
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    exporte_le TEXT,
+    exporte_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    confirme_le TEXT,
+    confirme_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    ligne_bancaire_id INTEGER REFERENCES lignes_bancaires(id) ON DELETE RESTRICT,
+    rapprochement_id INTEGER REFERENCES rapprochements_bancaires(id) ON DELETE RESTRICT,
+    frais_centimes INTEGER NOT NULL DEFAULT 0 CHECK (frais_centimes >= 0),
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE (dossier_id, message_id),
+    CHECK (
+        (statut = 'prepare' AND contenu_pain001 IS NULL AND empreinte_sha256 = '')
+        OR (statut IN ('exporte', 'confirme')
+            AND contenu_pain001 IS NOT NULL AND length(empreinte_sha256) = 64)
+    )
+);
+
+CREATE TABLE ordres_paiement_sortants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lot_id INTEGER NOT NULL REFERENCES lots_paiements_sortants(id) ON DELETE RESTRICT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    document_id INTEGER NOT NULL REFERENCES documents_financiers(id) ON DELETE RESTRICT,
+    contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
+    beneficiaire_snapshot TEXT NOT NULL,
+    adresse_snapshot_json TEXT NOT NULL CHECK (json_valid(adresse_snapshot_json)),
+    iban_snapshot TEXT NOT NULL,
+    bic_snapshot TEXT NOT NULL DEFAULT '',
+    reference TEXT NOT NULL,
+    montant_centimes INTEGER NOT NULL CHECK (montant_centimes > 0),
+    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (monnaie IN ('CHF', 'EUR')),
+    statut TEXT NOT NULL DEFAULT 'prepare'
+        CHECK (statut IN ('prepare', 'exporte', 'confirme')),
+    paiement_id INTEGER REFERENCES paiements(id) ON DELETE RESTRICT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (lot_id, document_id)
+);
+
 CREATE TABLE paiements_salaires (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
@@ -934,8 +991,8 @@ CREATE TABLE rapprochement_lignes_bancaires (
     ligne_bancaire_id INTEGER NOT NULL
         REFERENCES lignes_bancaires(id) ON DELETE RESTRICT,
     montant_centimes INTEGER NOT NULL,
-    PRIMARY KEY (rapprochement_id, ligne_bancaire_id),
-    UNIQUE (ligne_bancaire_id)
+    actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    PRIMARY KEY (rapprochement_id, ligne_bancaire_id)
 );
 
 CREATE TABLE rapprochement_lignes_comptables (
@@ -944,8 +1001,8 @@ CREATE TABLE rapprochement_lignes_comptables (
     ligne_ecriture_id INTEGER NOT NULL
         REFERENCES lignes_ecriture(id) ON DELETE RESTRICT,
     montant_centimes INTEGER NOT NULL,
-    PRIMARY KEY (rapprochement_id, ligne_ecriture_id),
-    UNIQUE (ligne_ecriture_id)
+    actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    PRIMARY KEY (rapprochement_id, ligne_ecriture_id)
 );
 
 CREATE TABLE rapprochements_bancaires (
@@ -959,9 +1016,12 @@ CREATE TABLE rapprochements_bancaires (
     total_comptable_centimes INTEGER NOT NULL,
     difference_centimes INTEGER NOT NULL,
     tolerance_centimes INTEGER NOT NULL DEFAULT 0 CHECK (tolerance_centimes >= 0),
-    statut TEXT NOT NULL DEFAULT 'confirme' CHECK (statut = 'confirme'),
+    statut TEXT NOT NULL DEFAULT 'confirme' CHECK (statut IN ('confirme', 'annule')),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    annule_le TEXT,
+    annule_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
     CHECK (difference_centimes = total_banque_centimes - total_comptable_centimes),
     CHECK (
         difference_centimes BETWEEN -tolerance_centimes AND tolerance_centimes
@@ -1639,6 +1699,18 @@ CREATE UNIQUE INDEX uq_membre_groupe_actif
 CREATE UNIQUE INDEX uq_organisations_numero_ide
     ON organisations(numero_ide)
     WHERE numero_ide <> '';
+
+CREATE UNIQUE INDEX uq_rapprochement_ligne_banque_active
+    ON rapprochement_lignes_bancaires(ligne_bancaire_id)
+    WHERE actif = 1;
+
+CREATE UNIQUE INDEX uq_rapprochement_ligne_comptable_active
+    ON rapprochement_lignes_comptables(ligne_ecriture_id)
+    WHERE actif = 1;
+
+CREATE UNIQUE INDEX uq_ordre_paiement_document_actif
+    ON ordres_paiement_sortants(document_id)
+    WHERE statut IN ('prepare', 'exporte');
 
 CREATE UNIQUE INDEX uq_rubriques_code
     ON rubriques_comptables(dossier_id, code)
@@ -2777,6 +2849,9 @@ INSERT INTO "permissions" ("id", "code", "libelle") VALUES (43, 'depenses.view',
 INSERT INTO "permissions" ("id", "code", "libelle") VALUES (44, 'depenses.manage', 'Gérer les brouillons et récurrences de dépenses');
 INSERT INTO "permissions" ("id", "code", "libelle") VALUES (45, 'depenses.approve', 'Approuver les dépenses');
 INSERT INTO "permissions" ("id", "code", "libelle") VALUES (46, 'depenses.post', 'Comptabiliser et contre-passer les dépenses');
+INSERT INTO "permissions" ("id", "code", "libelle") VALUES (47, 'paiements.prepare', 'Préparer des lots de paiements sortants');
+INSERT INTO "permissions" ("id", "code", "libelle") VALUES (48, 'paiements.export', 'Générer et télécharger les fichiers pain.001');
+INSERT INTO "permissions" ("id", "code", "libelle") VALUES (49, 'paiements.confirm', 'Confirmer les paiements depuis un relevé bancaire');
 
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 1);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 2);
@@ -2922,6 +2997,15 @@ INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 43);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 44);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 45);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 46);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 47);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 48);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (1, 49);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (2, 47);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (2, 48);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (2, 49);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 47);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 48);
+INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (4, 49);
 INSERT INTO "role_permissions" ("role_id", "permission_id") VALUES (6, 43);
 
 INSERT INTO "tva_taux_legaux" ("id", "categorie", "libelle", "taux_bp", "date_debut", "date_fin", "source_url", "verifie_le", "cree_le") VALUES (1, 'normal', 'Taux normal', 810, '2024-01-01', NULL, 'https://www.estv.admin.ch/fr/taux-de-la-tva-suisse', '2026-07-25', '2026-07-25 00:00:00');

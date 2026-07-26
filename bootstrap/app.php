@@ -46,9 +46,17 @@ use Compta\Modules\Shell\Http\ShellInputValidator;
 use Compta\Modules\Shell\Http\ShellPageController;
 use Compta\Modules\Tva\VatConfigurationService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
+use Compta\Modules\Tresorerie\BankImportService;
+use Compta\Modules\Tresorerie\OutgoingPaymentService;
+use Compta\Modules\Tresorerie\Pain001Generator;
+use Compta\Modules\Tresorerie\ReconciliationService;
+use Compta\Modules\Tresorerie\SuggestionService;
+use Compta\Modules\Tresorerie\TreasuryWorkspaceService;
 use Compta\Modules\Tresorerie\ExpenseService;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseInputValidator;
+use Compta\Modules\Tresorerie\Http\TreasuryApiController;
+use Compta\Modules\Tresorerie\Http\TreasuryInputValidator;
 
 require __DIR__ . '/autoload.php';
 
@@ -76,6 +84,8 @@ $access = new AccessControl($pdo);
 $reports = new ReportingService($pdo);
 $chart = new ChartOfAccountsService($pdo, $audit);
 $contacts = new ContactService($pdo, $audit);
+$payments = new PaymentService($pdo, $audit, $entries);
+$reconciliations = new ReconciliationService($pdo, $audit);
 $payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
 $vatConfiguration = new VatConfigurationService($pdo, $audit);
 $treasuryAccounts = new TreasuryAccountService($pdo, $audit);
@@ -131,6 +141,25 @@ $apiRoutes = new ApiRouteRegistry(
         new ExpenseService($pdo, $audit, $entries),
         new AttachmentService($pdo, $audit),
         new ExpenseInputValidator()
+    ),
+    new TreasuryApiController(
+        $session,
+        $auth,
+        $access,
+        new TreasuryWorkspaceService($pdo, $payments, $entries),
+        new BankImportService($pdo, $audit),
+        $reconciliations,
+        new SuggestionService($pdo, $audit, $entries),
+        $payments,
+        new OutgoingPaymentService(
+            $pdo,
+            $audit,
+            $entries,
+            $payments,
+            $reconciliations,
+            new Pain001Generator()
+        ),
+        new TreasuryInputValidator()
     )
 );
 $shellPage = new ShellPageController(
@@ -154,7 +183,7 @@ return [
         $reports,
         $contacts,
         new BillingService($pdo, $audit, $entries),
-        new PaymentService($pdo, $audit, $entries),
+        $payments,
         new InvoicePdfService($pdo, $audit),
         new AttachmentService($pdo, $audit),
         $payrollConfiguration,

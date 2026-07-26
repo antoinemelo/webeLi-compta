@@ -58,6 +58,8 @@ const identity = reactive({
   canton: '',
   country: 'CH',
   phone: '',
+  payment_iban: '',
+  payment_bic: '',
   email: '',
   website: '',
   base_currency: 'CHF'
@@ -84,6 +86,8 @@ const contactDraft = reactive({
   last_name: '',
   email: '',
   phone: '',
+  payment_iban: '',
+  payment_bic: '',
   language: 'fr',
   roles: ['client'] as string[],
   address_line1: '',
@@ -400,6 +404,8 @@ async function createContact(): Promise<void> {
     last_name: '',
     email: '',
     phone: '',
+    payment_iban: '',
+    payment_bic: '',
     language: 'fr',
     roles: ['client'],
     address_line1: '',
@@ -423,6 +429,8 @@ function editContact(
     last_name: contact.last_name,
     email: contact.email,
     phone: contact.phone,
+    payment_iban: contact.payment_iban,
+    payment_bic: contact.payment_bic,
     language: contact.language,
     roles: [...contact.roles],
     address_line1: contact.address_line1,
@@ -1140,6 +1148,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               </label>
               <label>Téléphone
                 <input v-model="contactDraft.phone" type="tel">
+              </label>
+              <label>IBAN de paiement
+                <input v-model="contactDraft.payment_iban" autocomplete="off" placeholder="CH…">
+              </label>
+              <label>BIC
+                <input v-model="contactDraft.payment_bic" autocomplete="off" placeholder="AAAA CH BB">
               </label>
               <label>Langue
                 <select v-model="contactDraft.language">

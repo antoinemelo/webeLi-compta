@@ -46,16 +46,22 @@ use Compta\Modules\Facturation\PaymentService;
 use Compta\Modules\Facturation\ScorReference;
 use Compta\Modules\Facturation\SwissQrService;
 use Compta\Modules\Tresorerie\BankImportService;
+use Compta\Modules\Tresorerie\BankCoordinates;
 use Compta\Modules\Tresorerie\InternalTransferService;
 use Compta\Modules\Tresorerie\Parsing\Camt053Parser;
 use Compta\Modules\Tresorerie\Parsing\Camt054Parser;
 use Compta\Modules\Tresorerie\ReconciliationService;
 use Compta\Modules\Tresorerie\SuggestionService;
+use Compta\Modules\Tresorerie\OutgoingPaymentService;
+use Compta\Modules\Tresorerie\Pain001Generator;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
+use Compta\Modules\Tresorerie\TreasuryWorkspaceService;
 use Compta\Modules\Tresorerie\ExpenseService;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseInputValidator;
+use Compta\Modules\Tresorerie\Http\TreasuryApiController;
+use Compta\Modules\Tresorerie\Http\TreasuryInputValidator;
 use Compta\Modules\Tva\Ech0217ExportService;
 use Compta\Modules\Tva\Ech0217Validator;
 use Compta\Modules\Tva\VatCalculator;
@@ -125,6 +131,10 @@ final class Tests
             'trésorerie, CAMT et rapprochements' => [
                 'integration',
                 fn () => $this->treasuryTests(),
+            ],
+            'lettrage et paiements sortants pain.001' => [
+                'integration',
+                fn () => $this->treasuryPaymentTests(),
             ],
             'TVA suisse effective, TDFN et eCH-0217' => [
                 'integration',
@@ -1521,6 +1531,29 @@ final class Tests
                 new ExpenseService($pdo, $httpAudit, $httpEntries),
                 new AttachmentService($pdo, $httpAudit),
                 new ExpenseInputValidator()
+            ),
+            new TreasuryApiController(
+                $session,
+                $httpAuth,
+                $httpAccess,
+                new TreasuryWorkspaceService(
+                    $pdo,
+                    new PaymentService($pdo, $httpAudit, $httpEntries),
+                    $httpEntries
+                ),
+                new BankImportService($pdo, $httpAudit),
+                new ReconciliationService($pdo, $httpAudit),
+                new SuggestionService($pdo, $httpAudit, $httpEntries),
+                new PaymentService($pdo, $httpAudit, $httpEntries),
+                new OutgoingPaymentService(
+                    $pdo,
+                    $httpAudit,
+                    $httpEntries,
+                    new PaymentService($pdo, $httpAudit, $httpEntries),
+                    new ReconciliationService($pdo, $httpAudit),
+                    new Pain001Generator()
+                ),
+                new TreasuryInputValidator()
             )
         );
         $shellPage = new ShellPageController(
@@ -1729,6 +1762,42 @@ final class Tests
             ($apiExpensesJson['data']['capabilities']['approve'] ?? false)
             && ($apiExpensesJson['data']['capabilities']['post'] ?? false),
             'capacités approbateur et comptabilisateur exposées séparément'
+        );
+        $apiTreasury = $app->handle(new Request(
+            'GET',
+            '/api/v1/liquidites/banque'
+        ));
+        $apiTreasuryJson = $this->responseJson($apiTreasury);
+        $this->same(
+            200,
+            $apiTreasury->status,
+            'banque, lettrage et paiements sortants exposés en API'
+        );
+        $this->same(
+            [
+                'treasury_accounts',
+                'imports',
+                'bank_lines',
+                'accounting_lines',
+                'reconciliations',
+                'suggestions',
+                'payments',
+                'allocations',
+                'open_documents',
+                'payable_debts',
+                'outgoing_batches',
+                'catalog',
+                'definitions',
+                'capabilities',
+            ],
+            array_keys($apiTreasuryJson['data'] ?? []),
+            'contrat banque et lettrage complet et stable'
+        );
+        $this->true(
+            ($apiTreasuryJson['data']['capabilities']['prepare_payments'] ?? false)
+            && ($apiTreasuryJson['data']['capabilities']['export_payments'] ?? false)
+            && ($apiTreasuryJson['data']['capabilities']['confirm_payments'] ?? false),
+            'séparation des capacités de paiements sortants exposée en API'
         );
         $apiConfiguration = $app->handle(new Request(
             'GET',
@@ -2410,6 +2479,7 @@ final class Tests
             'configuration.success.json',
             'accounting.success.json',
             'managed-references.success.json',
+            'treasury.success.json',
             'error.validation.json',
         ] as $example) {
             $payload = json_decode(
@@ -5662,6 +5732,445 @@ CSV;
             'état banque/comptabilité/écart calculé'
         );
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après trésorerie');
+    }
+
+    private function treasuryPaymentTests(): void
+    {
+        [$pdo, $runner] = $this->database();
+        $runner->apply();
+        $ids = $this->seedScopes($pdo);
+        $organisationId = $ids['organisation_a'];
+        $dossierId = $ids['dossier_a'];
+        $audit = new AuditLogger($pdo);
+        $scope = new ScopeManager($pdo, $audit);
+        $exercise = $scope->createExercise(
+            $dossierId,
+            'Exercice 2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $setup = new AccountingSetupService($pdo, $audit);
+        $period = $setup->createPeriod(
+            $organisationId,
+            $dossierId,
+            $exercise,
+            '2026',
+            '2026-01-01',
+            '2026-12-31'
+        );
+        $journal = $setup->createJournal(
+            $organisationId,
+            $dossierId,
+            'BQ',
+            'Banque',
+            'banque'
+        );
+        (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))
+            ->installForDossier($organisationId, $dossierId, 'personne_morale');
+        $bankAccount = $this->accountId($pdo, $dossierId, '1020');
+        $payable = $this->accountId($pdo, $dossierId, '2000');
+        $expenseAccount = $this->accountId($pdo, $dossierId, '6500');
+        $inputVat = $this->accountId($pdo, $dossierId, '1170');
+        $treasuryId = (new TreasuryAccountService($pdo, $audit))->create([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'compte_comptable_id' => $bankAccount,
+            'libelle' => 'Banque paiements',
+            'type' => 'banque',
+            'iban' => 'CH9300762011623852957',
+            'bic' => 'POFICHBEXXX',
+            'monnaie' => 'CHF',
+        ]);
+        $vat = new VatConfigurationService($pdo, $audit);
+        $vat->addRegime([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'statut' => 'assujetti',
+            'numero_tva' => 'CHE-123.456.789 TVA',
+            'methode' => 'effective',
+            'mode_decompte' => 'convenues',
+            'periodicite' => 'trimestrielle',
+            'date_debut' => '2026-01-01',
+            'compte_impot_prealable_materiel_id' => $inputVat,
+            'compte_impot_prealable_investissements_id' =>
+                $this->accountId($pdo, $dossierId, '1171'),
+            'compte_tva_due_id' => $this->accountId($pdo, $dossierId, '2200'),
+            'compte_decompte_tva_id' => $this->accountId($pdo, $dossierId, '2201'),
+            'compte_corrections_id' => $expenseAccount,
+        ]);
+        $rate = (int) $pdo->query(
+            "SELECT id FROM tva_taux_legaux
+             WHERE categorie = 'normal' AND date_debut = '2024-01-01'"
+        )->fetchColumn();
+        $purchaseVat = $vat->addCode([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'code' => 'AM81-PAY',
+            'libelle' => 'Achats 8,1 %',
+            'traitement' => 'normal',
+            'nature' => 'prealable',
+            'taux_legal_id' => $rate,
+            'droit_deduction' => true,
+            'deduction_defaut_bp' => 10000,
+            'compte_tva_id' => $inputVat,
+            'date_debut' => '2024-01-01',
+        ]);
+        $supplier = (new ContactService($pdo, $audit))->create(
+            $organisationId,
+            $dossierId,
+            [
+                'type_personne' => 'entreprise',
+                'raison_sociale' => 'Fournisseur Paiements SA',
+                'iban_paiement' => 'CH5604835012345678009',
+                'bic_paiement' => 'POFICHBEXXX',
+            ],
+            ['fournisseur'],
+            [
+                'ligne1' => 'Rue des Paiements 7',
+                'code_postal' => '1200',
+                'localite' => 'Genève',
+                'pays' => 'CH',
+            ]
+        );
+        $foreignSupplier = (new ContactService($pdo, $audit))->create(
+            $ids['organisation_b'],
+            $ids['dossier_b'],
+            [
+                'type_personne' => 'entreprise',
+                'raison_sociale' => 'Fournisseur hors dossier SA',
+            ],
+            ['fournisseur']
+        );
+        $proof = (new AttachmentService($pdo, $audit))->store(
+            $organisationId,
+            $dossierId,
+            'dette.pdf',
+            "%PDF-1.4\n%%EOF"
+        );
+        $entries = new EntryService($pdo, $audit);
+        $expenses = new ExpenseService($pdo, $audit, $entries);
+        $line = [
+            'libelle' => 'Services',
+            'quantite_milli' => 1000,
+            'prix_unitaire_centimes' => 10000,
+            'mode_saisie' => 'net',
+            'compte_id' => $expenseAccount,
+            'code_tva_id' => $purchaseVat,
+            'date_prestation' => '2026-03-01',
+        ];
+        $createExpense = function (string $external) use (
+            $expenses,
+            $organisationId,
+            $dossierId,
+            $supplier,
+            $payable,
+            $line,
+            $proof,
+            $exercise,
+            $journal
+        ): int {
+            $id = $expenses->createDraft(
+                $organisationId,
+                $dossierId,
+                $supplier,
+                '2026-03-01',
+                '2026-03-31',
+                $external,
+                $payable,
+                [$line],
+                $proof
+            );
+            $expenses->submit($organisationId, $dossierId, $id, 2);
+            $expenses->approve($organisationId, $dossierId, $id, 3);
+            $expenses->post(
+                $organisationId,
+                $dossierId,
+                $id,
+                $exercise,
+                $journal
+            );
+            return $id;
+        };
+        $expenseId = $createExpense('PAY-001');
+        $secondExpenseId = $createExpense('PAY-002');
+        $pdo->prepare(
+            'INSERT INTO imports_bancaires
+             (organisation_id, dossier_id, compte_tresorerie_id, format,
+              nom_fichier, empreinte_source, contenu_source, nb_total, statut,
+              nb_importees)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, 1)'
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $treasuryId,
+            'camt053',
+            'releve.xml',
+            hash('sha256', '<camt>source</camt>'),
+            '<camt>source</camt>',
+            'confirme',
+        ]);
+        $importId = (int) $pdo->lastInsertId();
+        $pdo->prepare(
+            'INSERT INTO lignes_bancaires
+             (organisation_id, dossier_id, compte_tresorerie_id, import_id,
+              empreinte, date_comptabilisation, libelle, montant_centimes,
+              frais_centimes, monnaie)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $treasuryId,
+            $importId,
+            hash('sha256', 'lot-payment-line'),
+            '2026-03-20',
+            'LOT FOURNISSEUR',
+            -11835,
+            25,
+            'CHF',
+        ]);
+        $bankLineId = (int) $pdo->lastInsertId();
+        $payments = new PaymentService($pdo, $audit, $entries);
+        $this->throws(
+            fn () => $payments->create(
+                $organisationId,
+                $dossierId,
+                $foreignSupplier,
+                'decaissement',
+                '2026-03-20',
+                100,
+                'HORS-SCOPE',
+                $bankAccount
+            ),
+            'paiement inter-dossiers refusé avant toute allocation'
+        );
+        $reconciliations = new ReconciliationService($pdo, $audit);
+        $outgoing = new OutgoingPaymentService(
+            $pdo,
+            $audit,
+            $entries,
+            $payments,
+            $reconciliations,
+            new Pain001Generator()
+        );
+        $batchId = $outgoing->prepare(
+            $organisationId,
+            $dossierId,
+            $treasuryId,
+            '2026-03-20',
+            [
+                ['document_id' => $expenseId, 'amount_cents' => 10810],
+                ['document_id' => $secondExpenseId, 'amount_cents' => 1000],
+            ],
+            'lot-paiement-001'
+        );
+        $this->same(
+            $batchId,
+            $outgoing->prepare(
+                $organisationId,
+                $dossierId,
+                $treasuryId,
+                '2026-03-20',
+                [
+                    ['document_id' => $expenseId, 'amount_cents' => 10810],
+                    ['document_id' => $secondExpenseId, 'amount_cents' => 1000],
+                ],
+                'lot-paiement-001'
+            ),
+            'préparation pain.001 idempotente'
+        );
+        $this->throws(
+            fn () => $outgoing->prepare(
+                $organisationId,
+                $dossierId,
+                $treasuryId,
+                '2026-03-21',
+                [['document_id' => $expenseId, 'amount_cents' => 10810]],
+                'lot-paiement-001'
+            ),
+            'clé idempotente réutilisée avec un autre lot refusée'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query('SELECT COUNT(*) FROM paiements')->fetchColumn(),
+            'lot préparé sans marquer la dette payée'
+        );
+        $export = $outgoing->export(
+            $organisationId,
+            $dossierId,
+            $batchId,
+            1
+        );
+        $this->true(
+            str_contains($export['content'], 'pain.001.001.09')
+            && str_contains($export['content'], '<NbOfTxs>2</NbOfTxs>'),
+            'pain.001 SPS 2026 généré avec le profil ISO courant'
+        );
+        $this->same(
+            2,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM ordres_paiement_sortants
+                 WHERE lot_id = {$batchId}"
+            )->fetchColumn(),
+            'paiement groupé conservé comme deux ordres distincts'
+        );
+        $this->same(
+            hash('sha256', $export['content']),
+            $export['hash'],
+            'archive pain.001 conservée avec empreinte'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query('SELECT COUNT(*) FROM paiements')->fetchColumn(),
+            'export pain.001 toujours non transmis et non payé'
+        );
+        $reconciliationId = $outgoing->confirmFromStatement(
+            $organisationId,
+            $dossierId,
+            $batchId,
+            $bankLineId,
+            $exercise,
+            $journal,
+            $expenseAccount
+        );
+        $this->same(
+            'confirme',
+            (string) $pdo->query(
+                "SELECT statut FROM lots_paiements_sortants WHERE id = {$batchId}"
+            )->fetchColumn(),
+            'lot confirmé uniquement par le relevé'
+        );
+        $this->same(
+            10810,
+            (int) $pdo->query(
+                "SELECT SUM(montant_centimes) FROM allocations
+                 WHERE document_id = {$expenseId} AND statut = 'valide'"
+            )->fetchColumn(),
+            'dette fournisseur lettrée au centime'
+        );
+        $this->same(
+            25,
+            (int) $pdo->query(
+                "SELECT frais_centimes FROM lots_paiements_sortants WHERE id = {$batchId}"
+            )->fetchColumn(),
+            'frais bancaires comptabilisés séparément'
+        );
+        $this->same(
+            9810,
+            (int) $pdo->query(
+                "SELECT abs(total_brut_centimes) - COALESCE((
+                    SELECT SUM(montant_centimes) FROM allocations
+                    WHERE document_id = {$secondExpenseId} AND statut = 'valide'
+                 ), 0)
+                 FROM documents_financiers WHERE id = {$secondExpenseId}"
+            )->fetchColumn(),
+            'facture fournisseur partiellement réglée conserve son solde'
+        );
+        $this->throws(
+            fn () => BankCoordinates::assertIban('CH00 0000 0000 0000 0000 0'),
+            'IBAN invalide refusé avant préparation'
+        );
+        $this->throws(
+            fn () => BankCoordinates::assertBic('12FICHBEXXX'),
+            'BIC invalide refusé avant préparation'
+        );
+        $bankAccountingLines = $pdo->query(
+            "SELECT rc.ligne_ecriture_id
+             FROM rapprochement_lignes_comptables rc
+             WHERE rc.rapprochement_id = {$reconciliationId} AND rc.actif = 1"
+        )->fetchAll(PDO::FETCH_COLUMN);
+        $reconciliations->cancel(
+            $organisationId,
+            $dossierId,
+            $reconciliationId,
+            1
+        );
+        $newReconciliation = $reconciliations->reconcile(
+            $organisationId,
+            $dossierId,
+            $treasuryId,
+            [$bankLineId],
+            array_map('intval', $bankAccountingLines)
+        );
+        $this->true(
+            $newReconciliation !== $reconciliationId,
+            'annulation auditée libérant les lignes pour un nouveau rapprochement'
+        );
+        $manualPayment = $payments->create(
+            $organisationId,
+            $dossierId,
+            $supplier,
+            'decaissement',
+            '2026-03-21',
+            1000,
+            'PARTIEL',
+            $bankAccount
+        );
+        $allocation = $payments->allocatePayment(
+            $organisationId,
+            $dossierId,
+            $manualPayment,
+            $secondExpenseId,
+            1000
+        );
+        $payments->unallocate(
+            $organisationId,
+            $dossierId,
+            $allocation
+        );
+        $this->same(
+            'annule',
+            (string) $pdo->query(
+                "SELECT statut FROM allocations WHERE id = {$allocation}"
+            )->fetchColumn(),
+            'délettrage autorisé avant clôture'
+        );
+        $secondAllocation = $payments->allocatePayment(
+            $organisationId,
+            $dossierId,
+            $manualPayment,
+            $secondExpenseId,
+            1000
+        );
+        $setup->closePeriod($organisationId, $dossierId, $period);
+        $this->throws(
+            fn () => $payments->unallocate(
+                $organisationId,
+                $dossierId,
+                $secondAllocation
+            ),
+            'délettrage refusé en période close'
+        );
+        $this->throws(
+            fn () => $reconciliations->cancel(
+                $organisationId,
+                $dossierId,
+                $newReconciliation,
+                1
+            ),
+            'annulation de rapprochement refusée en période close'
+        );
+        $pdo->exec('BEGIN IMMEDIATE');
+        $pdo->exec('ROLLBACK');
+        $this->same(
+            'confirme',
+            (string) $pdo->query(
+                "SELECT statut FROM rapprochements_bancaires
+                 WHERE id = {$newReconciliation}"
+            )->fetchColumn(),
+            'refus d’annulation atomique sans transaction résiduelle'
+        );
+        $this->same(
+            3,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM permissions
+                 WHERE code IN ('paiements.prepare', 'paiements.export', 'paiements.confirm')"
+            )->fetchColumn(),
+            'séparation des permissions préparer, exporter et confirmer'
+        );
+        $this->true(
+            IntegrityChecker::check($pdo)['ok'],
+            'intégrité après paiements sortants et lettrage'
+        );
     }
 
     private function camtFixture(string $message, string $version, string $container): string
