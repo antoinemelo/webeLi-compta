@@ -359,7 +359,6 @@ test('configuration des modules et référentiels', async ({ page }) => {
     'Paiements',
     'Référentiels',
     'Salaires',
-    'Accès',
     'Audit'
   ]);
   await configurationNavigation.getByRole('link', { name: 'Salaires', exact: true }).click();
@@ -381,8 +380,15 @@ test('configuration des modules et référentiels', async ({ page }) => {
     'Mapping comptable des salaires enregistré.'
   )).toBeVisible();
 
-  await page.getByRole('link', { name: 'Accès', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Accès aux structures' })).toBeVisible();
+  await expect(
+    configurationNavigation.getByRole('link', { name: 'Accès', exact: true })
+  ).toHaveCount(0);
+  await page.goto('/e2e/app/configuration/acces');
+  await expect(page).toHaveURL(/\/e2e\/app\/organisations-dossiers$/);
+  await expect(page.getByRole('heading', {
+    name: 'Organisations et dossiers',
+    exact: true
+  })).toBeVisible();
 });
 
 test('registre des organisations : création, historique et cycle de vie', async ({ page }) => {

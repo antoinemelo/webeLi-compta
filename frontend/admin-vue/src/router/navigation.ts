@@ -60,7 +60,6 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
       activePrefix: '/configuration/referentiels'
     },
     { key: 'payroll', label: 'Salaires', path: '/configuration/salaires' },
-    { key: 'access', label: 'Accès', path: '/configuration/acces' },
     { key: 'audit', label: 'Audit', path: '/configuration/audit' }
   ]
 };

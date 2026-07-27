@@ -61,6 +61,10 @@ const routes: RouteRecordRaw[] = [
     redirect: '/organisations-dossiers'
   },
   {
+    path: '/configuration/acces',
+    redirect: '/organisations-dossiers'
+  },
+  {
     path: '/configuration/referentiels/plan',
     name: 'chart-settings',
     component: AccountingView,

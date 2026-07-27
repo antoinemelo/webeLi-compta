@@ -1897,21 +1897,6 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </form>
       </section>
 
-      <section v-else-if="activeTab === 'acces' && managedReferences" class="configuration-stack">
-        <article class="panel">
-          <div class="panel-heading">
-            <div><p class="eyebrow">Gouvernance centralisée</p><h2>Accès aux structures</h2></div>
-          </div>
-          <p>
-            La gestion des rôles se fait désormais dans l’arborescence
-            <RouterLink to="/organisations-dossiers">Organisations et dossiers</RouterLink>.
-            Cette gestion impose une
-            prévisualisation, un contrôle de version et protège le dernier
-            administrateur.
-          </p>
-        </article>
-      </section>
-
       <section v-else-if="activeTab === 'audit'" class="panel">
         <div class="panel-heading">
           <div>
