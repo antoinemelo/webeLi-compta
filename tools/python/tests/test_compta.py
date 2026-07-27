@@ -32,13 +32,20 @@ class ComptaAdminTests(unittest.TestCase):
 
     def test_database_modes_are_explicit(self) -> None:
         technical = ADMIN.parser().parse_args(["db-create"])
-        initialized = ADMIN.parser().parse_args(["db-create", "--initialize"])
+        initialized = ADMIN.parser().parse_args([
+            "db-create", "--initialize", "--with-pedagogy",
+        ])
         restoration = ADMIN.parser().parse_args([
             "db-restore", "--source", "backup.sqlite",
         ])
+        inspection = ADMIN.parser().parse_args([
+            "db-inspect", "--path", "version-zero.sqlite",
+        ])
         self.assertFalse(technical.initialize)
         self.assertTrue(initialized.initialize)
+        self.assertTrue(initialized.with_pedagogy)
         self.assertEqual(Path("backup.sqlite"), restoration.source)
+        self.assertEqual(Path("version-zero.sqlite"), inspection.path)
 
     def test_sqlite_backup_is_consistent_and_keeps_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -57,7 +64,34 @@ class ComptaAdminTests(unittest.TestCase):
                 connection.execute("INSERT INTO sample VALUES ('conservé')")
             ADMIN.backup_database(source, destination)
             self.assertTrue(source.exists())
+            summary = ADMIN.database_summary(destination)
+            self.assertEqual(1, summary["migrations"])
+            self.assertEqual(0, summary["modeles_pedagogiques"])
+            self.assertEqual(summary["size"], summary["used_size"])
+            restored = dict(summary)
+            ADMIN.assert_restored_content(summary, restored)
+            restored["modeles_pedagogiques"] = 1
+            with self.assertRaises(ADMIN.AdminError):
+                ADMIN.assert_restored_content(summary, restored)
+            source_fingerprints = ADMIN.database_fingerprints(
+                source, ("sample",)
+            )
+            backup_fingerprints = ADMIN.database_fingerprints(
+                destination, ("sample",)
+            )
+            ADMIN.assert_restored_fingerprints(
+                source_fingerprints,
+                backup_fingerprints,
+            )
             with sqlite3.connect(destination) as connection:
+                connection.execute("UPDATE sample SET value = 'altéré'")
+            with self.assertRaises(ADMIN.AdminError):
+                ADMIN.assert_restored_fingerprints(
+                    source_fingerprints,
+                    ADMIN.database_fingerprints(destination, ("sample",)),
+                )
+            with sqlite3.connect(destination) as connection:
+                connection.execute("UPDATE sample SET value = 'conservé'")
                 self.assertEqual(
                     "conservé",
                     connection.execute("SELECT value FROM sample").fetchone()[0],

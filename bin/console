@@ -16,6 +16,7 @@ use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
 use Compta\Modules\Configuration\Application\ModuleAccessService;
+use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
@@ -98,7 +99,7 @@ Compta — commandes du socle
   db:migrate --plan
   db:migrate --apply --backup
   db:integrity
-  instance:init --admin-email=admin@example.test --organisation="Mon organisation" --nature=reelle --dossier="Comptabilité" --slug=comptabilite --type=reel --monnaie=CHF --exercice=2026 --debut=2026-01-01 --fin=2026-12-31 --modules=liquidites,facturation,comptabilite,salaires
+  instance:init --admin-email=admin@example.test --organisation="Mon organisation" --nature=reelle --dossier="Comptabilité" --slug=comptabilite --type=reel --monnaie=CHF --exercice=2026 --debut=2026-01-01 --fin=2026-12-31 --modules=liquidites,facturation,comptabilite,salaires [--pedagogie] [--organisation-pedagogique="École WebeLi"] [--dossier-pedagogique="Démonstration guidée"]
   user:create-admin --email=admin@example.test
   organisation:create --nom="École" --nature=pedagogique
   dossier:create --organisation=1 --nom="Mandat" --slug=mandat --type=exercice
@@ -268,6 +269,65 @@ function initializeInstance(PDO $pdo, string $root, array $options): int
             'Opérations diverses',
             $userId
         );
+        $pedagogy = null;
+        if (isset($options['pedagogie'])) {
+            if (optionString($options, 'nature') === 'pedagogique') {
+                $pedagogyOrganisationId = $organisationId;
+                $pedagogyDossier = $dossier;
+            } else {
+                $pedagogyOrganisationId = $scopes->createOrganisation(
+                    optionString(
+                        $options,
+                        'organisation-pedagogique',
+                        'École WebeLi'
+                    ),
+                    'pedagogique',
+                    $userId
+                );
+                $pedagogyDossier = $registry->createInitialized(
+                    $pedagogyOrganisationId,
+                    optionString(
+                        $options,
+                        'dossier-pedagogique',
+                        'Démonstration guidée'
+                    ),
+                    optionString(
+                        $options,
+                        'slug-pedagogique',
+                        'demonstration-guidee'
+                    ),
+                    'demo',
+                    optionString($options, 'monnaie'),
+                    $modules,
+                    optionString($options, 'variante'),
+                    isset($options['association']),
+                    [
+                        'projets' => isset($options['projets']),
+                        'fonds_affectes' => isset($options['fonds-affectes']),
+                    ],
+                    optionString($options, 'exercice'),
+                    optionString($options, 'debut'),
+                    optionString($options, 'fin'),
+                    'OD',
+                    'Opérations diverses',
+                    $userId
+                );
+            }
+            $catalog = (new PedagogyService(
+                $pdo,
+                $audit,
+                new EntryService($pdo, $audit)
+            ))->installTargetedCatalog(
+                $pedagogyOrganisationId,
+                (int) $pedagogyDossier['id'],
+                $userId
+            );
+            $pedagogy = [
+                'organisation_id' => $pedagogyOrganisationId,
+                'dossier_id' => (int) $pedagogyDossier['id'],
+                'catalogue' => $catalog,
+            ];
+        }
         $pdo->commit();
     } catch (Throwable $exception) {
         if ($pdo->inTransaction()) {
@@ -281,6 +341,7 @@ function initializeInstance(PDO $pdo, string $root, array $options): int
         'organisation_id' => $organisationId,
         'dossier_id' => $dossier['id'],
         'summary' => $dossier['summary'],
+        'pedagogy' => $pedagogy,
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
     return 0;
 }
@@ -609,9 +670,13 @@ function declareVatStatement(PDO $pdo, array $options): int
 }
 
 /** @param array<string, mixed> $options */
-function optionString(array $options, string $key): string
+function optionString(
+    array $options,
+    string $key,
+    ?string $default = null
+): string
 {
-    $value = $options[$key] ?? '';
+    $value = $options[$key] ?? $default ?? '';
     if (!is_string($value) || trim($value) === '') {
         throw new RuntimeException("Option --{$key} requise.");
     }

@@ -168,14 +168,194 @@ def remove_database_files(target: Path) -> None:
 
 def database_summary(path: Path) -> dict[str, int]:
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
-        summary = {"size": path.stat().st_size}
-        for table in (
-            "utilisateurs", "organisations", "dossiers", "comptes", "ecritures"
-        ):
-            summary[table] = int(
+        page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+        freelist_pages = int(
+            connection.execute("PRAGMA freelist_count").fetchone()[0]
+        )
+        summary = {
+            "size": path.stat().st_size,
+            "page_size": page_size,
+            "page_count": page_count,
+            "freelist_pages": freelist_pages,
+            "used_size": (page_count - freelist_pages) * page_size,
+        }
+        tables = {
+            "migrations": "schema_migrations",
+            "utilisateurs": "utilisateurs",
+            "organisations": "organisations",
+            "dossiers": "dossiers",
+            "exercices": "exercices",
+            "comptes": "comptes",
+            "ecritures": "ecritures",
+            "contacts": "contacts",
+            "modeles_pedagogiques": "modeles_exercice",
+            "versions_pedagogiques": "versions_modeles_exercice",
+            "etapes_pedagogiques": "etapes_exercice",
+            "indices_pedagogiques": "indices_exercice",
+            "assignations_pedagogiques": "assignations_exercice",
+            "tentatives_pedagogiques": "tentatives_pedagogiques",
+            "contributions_pedagogiques": "contributions_pedagogiques",
+            "groupes_pedagogiques": "groupes_pedagogiques",
+        }
+        for key, table in tables.items():
+            exists = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            summary[key] = 0 if not exists or exists[0] != 1 else int(
                 connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
             )
         return summary
+
+
+def print_database_summary(path: Path, title: str = "Base contrôlée") -> None:
+    summary = database_summary(path)
+    print(f"{title} : {path}")
+    print(
+        f"  Taille physique : {summary['size']} octets ; "
+        f"contenu utilisé : {summary['used_size']} octets ; "
+        f"pages libres : {summary['freelist_pages']}."
+    )
+    print(
+        f"  Métier : {summary['utilisateurs']} utilisateur(s), "
+        f"{summary['organisations']} organisation(s), "
+        f"{summary['dossiers']} dossier(s), {summary['exercices']} exercice(s), "
+        f"{summary['comptes']} compte(s), {summary['ecritures']} écriture(s), "
+        f"{summary['contacts']} contact(s)."
+    )
+    print(
+        f"  Pédagogie : {summary['modeles_pedagogiques']} parcours, "
+        f"{summary['versions_pedagogiques']} version(s), "
+        f"{summary['etapes_pedagogiques']} étape(s), "
+        f"{summary['indices_pedagogiques']} indice(s), "
+        f"{summary['assignations_pedagogiques']} assignation(s), "
+        f"{summary['tentatives_pedagogiques']} tentative(s)."
+    )
+
+
+def assert_restored_content(
+    source: dict[str, int],
+    restored: dict[str, int],
+) -> None:
+    preserved = (
+        "utilisateurs",
+        "organisations",
+        "dossiers",
+        "exercices",
+        "comptes",
+        "ecritures",
+        "contacts",
+        "modeles_pedagogiques",
+        "versions_pedagogiques",
+        "etapes_pedagogiques",
+        "indices_pedagogiques",
+        "assignations_pedagogiques",
+        "tentatives_pedagogiques",
+        "contributions_pedagogiques",
+        "groupes_pedagogiques",
+    )
+    differences = [
+        f"{key}: {source[key]} → {restored[key]}"
+        for key in preserved
+        if source[key] != restored[key]
+    ]
+    if differences:
+        raise AdminError(
+            "La restauration ne conserve pas les volumes métier : "
+            + ", ".join(differences)
+        )
+
+
+PRESERVED_TABLES = (
+    "utilisateurs",
+    "organisations",
+    "dossiers",
+    "exercices",
+    "comptes",
+    "ecritures",
+    "lignes_ecriture",
+    "contacts",
+    "modeles_exercice",
+    "versions_modeles_exercice",
+    "etapes_exercice",
+    "indices_exercice",
+    "assignations_exercice",
+    "tentatives_pedagogiques",
+    "contributions_pedagogiques",
+    "groupes_pedagogiques",
+    "membres_groupes",
+)
+
+
+def database_fingerprints(
+    path: Path,
+    tables: tuple[str, ...] = PRESERVED_TABLES,
+) -> dict[str, str]:
+    fingerprints: dict[str, str] = {}
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        for table in tables:
+            if not table.replace("_", "").isalnum():
+                raise AdminError(f"Nom de table non sûr : {table}")
+            exists = connection.execute(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            if not exists or exists[0] != 1:
+                continue
+            quoted = '"' + table.replace('"', '""') + '"'
+            columns = [
+                str(row[1])
+                for row in connection.execute(f"PRAGMA table_info({quoted})")
+            ]
+            order = ", ".join(
+                '"' + column.replace('"', '""') + '"' for column in columns
+            )
+            digest = hashlib.sha256()
+            digest.update(("\0".join(columns) + "\0").encode("utf-8"))
+            for row in connection.execute(
+                f"SELECT * FROM {quoted} ORDER BY {order}"
+            ):
+                for value in row:
+                    if value is None:
+                        payload = b"N"
+                    elif isinstance(value, bytes):
+                        payload = b"B" + value
+                    else:
+                        payload = (
+                            type(value).__name__.encode("ascii")
+                            + b":"
+                            + str(value).encode("utf-8")
+                        )
+                    digest.update(len(payload).to_bytes(8, "big"))
+                    digest.update(payload)
+            fingerprints[table] = digest.hexdigest()
+    return fingerprints
+
+
+def assert_restored_fingerprints(
+    source: dict[str, str],
+    restored: dict[str, str],
+) -> None:
+    differences = [
+        table
+        for table, fingerprint in source.items()
+        if restored.get(table) != fingerprint
+    ]
+    if differences:
+        raise AdminError(
+            "La restauration a modifié le contenu protégé des tables : "
+            + ", ".join(differences)
+        )
+
+
+def database_inspect(args: argparse.Namespace) -> int:
+    target = args.path.resolve()
+    check_database(target)
+    print_database_summary(target, "Audit en lecture seule")
+    return 0
 
 
 def initialize_database(
@@ -213,6 +393,13 @@ def initialize_database(
     ]
     if getattr(args, "association", False):
         command.append("--association")
+    if getattr(args, "with_pedagogy", False):
+        command.extend([
+            "--pedagogie",
+            f"--organisation-pedagogique={args.pedagogy_organisation}",
+            f"--dossier-pedagogique={args.pedagogy_dossier}",
+            f"--slug-pedagogique={args.pedagogy_slug}",
+        ])
     run(command, env=environment)
 
 
@@ -232,6 +419,11 @@ def database_create(args: argparse.Namespace) -> int:
     else:
         backup = None
     initialize = bool(getattr(args, "initialize", False))
+    if getattr(args, "with_pedagogy", False) and not initialize:
+        raise AdminError(
+            "--with-pedagogy exige --initialize afin de créer son organisation "
+            "et son dossier."
+        )
     if initialize:
         password = str(
             getattr(args, "admin_password", "")
@@ -243,6 +435,11 @@ def database_create(args: argparse.Namespace) -> int:
             )
     print("Étapes : migrations SQL, catalogue des plans comptables"
           + (", initialisation de l’instance" if initialize else "")
+          + (
+              ", installation des parcours pédagogiques"
+              if getattr(args, "with_pedagogy", False)
+              else ""
+          )
           + ", contrôle d’intégrité.")
     ensure_apply(args, "aucune base n’a été créée")
 
@@ -273,7 +470,8 @@ def database_create(args: argparse.Namespace) -> int:
             f"{summary['utilisateurs']} utilisateur(s), "
             f"{summary['organisations']} organisation(s), "
             f"{summary['dossiers']} dossier(s), "
-            f"{summary['comptes']} compte(s)."
+            f"{summary['comptes']} compte(s), "
+            f"{summary['modeles_pedagogiques']} parcours pédagogique(s)."
         )
     else:
         print(
@@ -298,7 +496,10 @@ def database_restore(args: argparse.Namespace) -> int:
     if target.exists():
         check_database(target)
         previous = backup_path(target, "before-restore")
+    source_summary = database_summary(source)
+    source_fingerprints = database_fingerprints(source)
     print(f"Sauvegarde à restaurer : {source}")
+    print_database_summary(source, "Contenu de la sauvegarde")
     print(f"Base cible : {target}")
     if previous is not None:
         print(f"Sauvegarde préalable de la cible : {previous}")
@@ -318,6 +519,12 @@ def database_restore(args: argparse.Namespace) -> int:
         environment = database_environment(target)
         run(["php", "bin/console", "db:migrate", "--apply", "--backup"], env=environment)
         run(["php", "bin/console", "db:integrity"], env=environment)
+        summary = database_summary(target)
+        assert_restored_content(source_summary, summary)
+        assert_restored_fingerprints(
+            source_fingerprints,
+            database_fingerprints(target),
+        )
     except Exception:
         if temporary.exists():
             temporary.unlink()
@@ -326,11 +533,11 @@ def database_restore(args: argparse.Namespace) -> int:
             shutil.copy2(previous, target)
             print(f"Base précédente restaurée après échec : {previous}")
         raise
-    summary = database_summary(target)
     print(
         f"Restauration terminée : {summary['organisations']} organisation(s), "
         f"{summary['dossiers']} dossier(s), {summary['comptes']} compte(s), "
-        f"{summary['ecritures']} écriture(s)."
+        f"{summary['ecritures']} écriture(s), "
+        f"{summary['modeles_pedagogiques']} parcours pédagogique(s)."
     )
     return 0
 
@@ -626,8 +833,12 @@ def ask(prompt: str, default: str = "") -> str:
     return value or default
 
 
-def confirm(prompt: str) -> bool:
-    return input(f"{prompt} [o/N] : ").strip().lower() in {"o", "oui", "y", "yes"}
+def confirm(prompt: str, *, default: bool = False) -> bool:
+    suffix = "[O/n]" if default else "[o/N]"
+    answer = input(f"{prompt} {suffix} : ").strip().lower()
+    if answer == "":
+        return default
+    return answer in {"o", "oui", "y", "yes"}
 
 
 def interactive_create_database(initialize: bool) -> int:
@@ -662,6 +873,10 @@ def interactive_create_database(initialize: bool) -> int:
         "modules": "liquidites,facturation,comptabilite,salaires",
         "plan_variant": "personne_morale",
         "association": False,
+        "with_pedagogy": False,
+        "pedagogy_organisation": "École WebeLi",
+        "pedagogy_dossier": "Démonstration guidée",
+        "pedagogy_slug": "demonstration-guidee",
     }
     if initialize:
         print()
@@ -695,6 +910,10 @@ def interactive_create_database(initialize: bool) -> int:
         )
         values["association"] = confirm(
             "Ajouter l’overlay du plan comptable pour associations"
+        )
+        values["with_pedagogy"] = confirm(
+            "Installer aussi les sept parcours pédagogiques WebeLi",
+            default=True,
         )
     if not confirm("Créer maintenant cette base"):
         print("Opération annulée.")
@@ -750,6 +969,16 @@ def interactive_restore_database() -> int:
     ))
 
 
+def interactive_inspect_database() -> int:
+    target = Path(ask(
+        "Base à auditer en lecture seule",
+        str(ROOT / "storage" / "database" / "app.sqlite"),
+    ))
+    if not target.is_absolute():
+        target = ROOT / target
+    return database_inspect(argparse.Namespace(path=target))
+
+
 def interactive_database() -> int:
     while True:
         print()
@@ -758,6 +987,7 @@ def interactive_database() -> int:
         print(" 1. Créer une instance utilisable (recommandé)")
         print(" 2. Créer uniquement une base technique vierge")
         print(" 3. Restaurer une sauvegarde existante")
+        print(" 4. Auditer une base sans la modifier")
         print(" 0. Retour")
         try:
             choice = input("Votre choix : ").strip()
@@ -776,6 +1006,8 @@ def interactive_database() -> int:
             return interactive_create_database(False)
         if choice == "3":
             return interactive_restore_database()
+        if choice == "4":
+            return interactive_inspect_database()
         print("Choix invalide.")
 
 
@@ -889,6 +1121,26 @@ def parser() -> argparse.ArgumentParser:
         default="personne_morale",
     )
     database.add_argument("--association", action="store_true")
+    database.add_argument(
+        "--with-pedagogy",
+        action="store_true",
+        help=(
+            "Créer une organisation pédagogique, son dossier et les sept "
+            "parcours WebeLi"
+        ),
+    )
+    database.add_argument(
+        "--pedagogy-organisation",
+        default="École WebeLi",
+    )
+    database.add_argument(
+        "--pedagogy-dossier",
+        default="Démonstration guidée",
+    )
+    database.add_argument(
+        "--pedagogy-slug",
+        default="demonstration-guidee",
+    )
     database.add_argument("--allow-outside-project", action="store_true")
     database.add_argument("--apply", action="store_true")
     database.set_defaults(handler=database_create)
@@ -906,6 +1158,17 @@ def parser() -> argparse.ArgumentParser:
     restoration.add_argument("--allow-outside-project", action="store_true")
     restoration.add_argument("--apply", action="store_true")
     restoration.set_defaults(handler=database_restore)
+
+    inspection = commands.add_parser(
+        "db-inspect",
+        help="Auditer en lecture seule le contenu et l’espace d’une base",
+    )
+    inspection.add_argument(
+        "--path",
+        type=Path,
+        default=ROOT / "storage" / "database" / "app.sqlite",
+    )
+    inspection.set_defaults(handler=database_inspect)
 
     publish = commands.add_parser("git-publish", help="Commit contrôlé puis push")
     publish.add_argument("--message", required=True)

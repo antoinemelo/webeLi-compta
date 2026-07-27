@@ -15,8 +15,9 @@ qui modifient un état commencent par une simulation et exigent `--apply`.
 
 Dans le menu, l’option recommandée crée une instance immédiatement utilisable :
 administrateur, organisation, dossier, exercice, période, journal, plan
-comptable, modules et codes TVA. Le mot de passe est demandé sans être affiché
-ni placé dans la ligne de commande.
+comptable, modules et codes TVA. Elle propose par défaut une seconde organisation
+pédagogique avec son dossier de démonstration et les sept parcours WebeLi. Le mot
+de passe est demandé sans être affiché ni placé dans la ligne de commande.
 
 La sous-commande équivalente utilise la variable d’environnement
 `COMPTA_ADMIN_PASSWORD` :
@@ -29,6 +30,7 @@ python3 tools/python/compta.py db-create \
   --admin-email admin@example.test \
   --organisation "Mon organisation" \
   --dossier "Comptabilité" \
+  --with-pedagogy \
   --apply
 ```
 
@@ -56,7 +58,21 @@ python3 tools/python/compta.py db-restore \
 
 La restauration sauvegarde elle aussi la base cible avant de la remplacer. En
 cas d’échec de création, d’initialisation, de migration ou de restauration, la
-base précédente est remise en place automatiquement.
+base précédente est remise en place automatiquement. Les volumes et les
+empreintes du contenu métier et pédagogique sont comparés avant et après
+l’opération ; toute différence annule la restauration.
+
+Pour contrôler une base ou une ancienne version sans la modifier, notamment le
+nombre de parcours, versions, étapes, indices et assignations pédagogiques :
+
+```bash
+python3 tools/python/compta.py db-inspect \
+  --path storage/database/app_v0.sqlite
+```
+
+Le rapport distingue la taille physique de l’espace réellement utilisé. Une
+copie SQLite cohérente peut donc être sensiblement plus petite que sa source
+lorsque celle-ci conserve des pages libres, sans perte de données.
 
 ## Commit et push
 
