@@ -63,7 +63,8 @@ avant son retrait.
 Le numéro est unique dans un dossier et comporte exactement quatre chiffres.
 L’écran permet de créer et modifier le numéro, le libellé, le parent structurel
 réel et le mode de fonctionnement. Le type du compte est déduit de ce parent.
-Un parent de compte est toujours un groupe principal ou un groupe.
+Un parent de compte est toujours un groupe principal ou un groupe. Un compte
+peut aussi rester sans rubrique ; son type est alors choisi explicitement.
 Le modèle ne crée aucun niveau artificiel pour combler une structure VEB qui
 passe directement d’une classe au compte. Les écritures référencent
 l’identifiant interne du compte : une renumérotation ou un reclassement
@@ -128,3 +129,13 @@ L’import suit volontairement une stratégie non destructive : il crée ou met 
 jour les lignes présentes, mais ne supprime ni ne désactive les lignes absentes
 du fichier. Il ne touche jamais aux écritures, aux soldes ni aux comptes déjà
 désactivés.
+
+Un plan peut aussi être importé sans aucune rubrique. Dans ce cas,
+`parent_code` reste vide sur les lignes `compte` et `type_compte` doit contenir
+le type explicite (`actif`, `passif`, `produit`, `charge` ou `hors_bilan`).
+Les types manquants sont créés automatiquement.
+
+Le bouton **Effacer le plan** remet à zéro comptes, rubriques, règles de sens
+et types dans une transaction. L’opération exige la confirmation `EFFACER` et
+est refusée si une écriture ou toute autre donnée métier référence encore un
+compte. Le panneau détaille alors chaque dépendance à traiter.

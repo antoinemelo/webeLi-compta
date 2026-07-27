@@ -507,7 +507,7 @@ final class AccountingInputValidator
     public function account(Request $request): array
     {
         $data = $this->only($request, [
-            'action', 'id', 'number', 'label', 'sense_mode', 'rubric_id',
+            'action', 'id', 'number', 'label', 'type', 'sense_mode', 'rubric_id',
             'version', 'ordered_ids', 'accounts',
         ]);
         $action = (string) ($data['action'] ?? '');
@@ -531,6 +531,7 @@ final class AccountingInputValidator
                     'id' => $this->integer($account['id'] ?? 0, "accounts.{$index}.id", 1),
                     'number' => (string) ($account['number'] ?? ''),
                     'label' => (string) ($account['label'] ?? ''),
+                    'type' => (string) ($account['type'] ?? ''),
                     'sense_mode' => (string) ($account['sense_mode'] ?? 'automatique'),
                     'rubric_id' => $this->nullablePositiveInteger(
                         $account['rubric_id'] ?? null,
@@ -554,6 +555,7 @@ final class AccountingInputValidator
             'id' => $this->integer($data['id'] ?? 0, 'id', 0),
             'number' => (string) ($data['number'] ?? ''),
             'label' => (string) ($data['label'] ?? ''),
+            'type' => (string) ($data['type'] ?? ''),
             'sense_mode' => (string) ($data['sense_mode'] ?? 'automatique'),
             'rubric_id' => $this->nullablePositiveInteger(
                 $data['rubric_id'] ?? null,
@@ -588,6 +590,22 @@ final class AccountingInputValidator
             ]);
         }
         return ['csv' => $csv, 'fingerprint' => $fingerprint];
+    }
+
+    /** @return array{fingerprint:string,confirmation:string} */
+    public function chartReset(Request $request): array
+    {
+        $data = $this->only($request, ['fingerprint', 'confirmation']);
+        $fingerprint = (string) ($data['fingerprint'] ?? '');
+        if (preg_match('/^[a-f0-9]{64}$/', $fingerprint) !== 1) {
+            throw ApiException::validation([
+                'fingerprint' => ['Vérification absente ou périmée.'],
+            ]);
+        }
+        return [
+            'fingerprint' => $fingerprint,
+            'confirmation' => (string) ($data['confirmation'] ?? ''),
+        ];
     }
 
     /** @return array{exercise_id:int,validate:bool,balances:array<int,int>} */

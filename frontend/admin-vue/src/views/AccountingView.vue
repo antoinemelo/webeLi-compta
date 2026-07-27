@@ -32,6 +32,7 @@ type ChartImportPreview = {
   fingerprint: string;
   summary: {
     rows: number;
+    type_creates: number;
     type_updates: number;
     rubric_creates: number;
     rubric_updates: number;
@@ -39,6 +40,20 @@ type ChartImportPreview = {
     account_updates: number;
   };
   warnings: string[];
+};
+
+type ChartResetPreview = {
+  allowed: boolean;
+  fingerprint: string;
+  confirmation: string;
+  counts: {
+    types: number;
+    rules: number;
+    rubrics: number;
+    accounts: number;
+    entries: number;
+  };
+  blockers: Array<{ source: string; label: string; count: number }>;
 };
 
 const route = useRoute();
@@ -81,6 +96,7 @@ const rubricDrafts = reactive<Record<number, {
 const accountDrafts = reactive<Record<number, {
   number: string;
   label: string;
+  type: 'actif' | 'passif' | 'produit' | 'charge' | 'hors_bilan';
   sense_mode: 'automatique' | 'debit' | 'credit';
   rubric_id: number | null;
 }>>({});
@@ -92,6 +108,11 @@ const chartImportCsv = ref('');
 const chartImportPreview = ref<ChartImportPreview | null>(null);
 const chartImportError = ref('');
 const chartImportBusy = ref(false);
+const chartResetDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const chartResetPreview = ref<ChartResetPreview | null>(null);
+const chartResetConfirmation = ref('');
+const chartResetError = ref('');
+const chartResetBusy = ref(false);
 const newRubric = reactive({
   code: '',
   label: '',
@@ -101,6 +122,7 @@ const newRubric = reactive({
 const newAccount = reactive({
   number: '',
   label: '',
+  type: 'actif' as 'actif' | 'passif' | 'produit' | 'charge' | 'hors_bilan',
   sense_mode: 'automatique' as 'automatique' | 'debit' | 'credit',
   rubric_id: null as number | null
 });
@@ -232,6 +254,7 @@ const dirtyAccounts = computed(() =>
     return draft && (
       draft.number !== account.number
       || draft.label !== account.label
+      || draft.type !== account.type
       || draft.sense_mode !== account.sense_mode
       || draft.rubric_id !== account.rubric_id
     );
@@ -338,6 +361,7 @@ watch(
       accountDrafts[account.id] = {
         number: account.number,
         label: account.label,
+        type: account.type as 'actif' | 'passif' | 'produit' | 'charge' | 'hors_bilan',
         sense_mode: account.sense_mode,
         rubric_id: account.rubric_id
       };
@@ -612,6 +636,7 @@ async function saveAccounts(): Promise<void> {
     id: account.id,
     number: accountDrafts[account.id].number,
     label: accountDrafts[account.id].label,
+    type: accountDrafts[account.id].type,
     sense_mode: accountDrafts[account.id].sense_mode,
     rubric_id: accountDrafts[account.id].rubric_id,
     version: account.version
@@ -629,6 +654,7 @@ async function createAccount(): Promise<void> {
     id: 0,
     number: newAccount.number,
     label: newAccount.label,
+    type: newAccount.type,
     sense_mode: newAccount.sense_mode,
     rubric_id: newAccount.rubric_id,
     version: 0,
@@ -756,6 +782,42 @@ async function applyChartImport(): Promise<void> {
     chartImportError.value = errorMessage(error);
   } finally {
     chartImportBusy.value = false;
+  }
+}
+
+async function previewChartReset(): Promise<void> {
+  chartResetBusy.value = true;
+  chartResetError.value = '';
+  chartResetConfirmation.value = '';
+  chartResetPreview.value = null;
+  chartResetDialog.value?.open();
+  try {
+    chartResetPreview.value = (
+      await api.post<ChartResetPreview>('/accounting/chart/reset/preview', {})
+    ).data;
+  } catch (error) {
+    chartResetError.value = errorMessage(error);
+  } finally {
+    chartResetBusy.value = false;
+  }
+}
+
+async function applyChartReset(): Promise<void> {
+  if (!chartResetPreview.value?.allowed) return;
+  chartResetBusy.value = true;
+  chartResetError.value = '';
+  try {
+    await api.post('/accounting/chart/reset', {
+      fingerprint: chartResetPreview.value.fingerprint,
+      confirmation: chartResetConfirmation.value
+    });
+    await reload();
+    accounting.notice = 'Plan comptable entièrement effacé.';
+    chartResetDialog.value?.close();
+  } catch (error) {
+    chartResetError.value = errorMessage(error);
+  } finally {
+    chartResetBusy.value = false;
   }
 }
 
@@ -1117,6 +1179,12 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
               type="button"
               @click="chooseChartImport"
             >Importer CSV</button>
+            <button
+              v-if="canSetup"
+              class="button danger small"
+              type="button"
+              @click="previewChartReset"
+            >Effacer le plan</button>
             <input
               ref="chartFileInput"
               class="visually-hidden"
@@ -1177,12 +1245,13 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           <label class="wide-control">Rechercher
             <input v-model="accountSearch" type="search" placeholder="Numéro, libellé ou rubrique">
           </label>
-          <div class="table-scroll"><table class="editable-table"><thead><tr><th>N°</th><th>Libellé</th><th>Rubrique</th><th>Sens</th><th>Ordre</th><th>Actions</th></tr></thead>
+          <div class="table-scroll"><table class="editable-table"><thead><tr><th>N°</th><th>Libellé</th><th>Rubrique</th><th>Type</th><th>Sens</th><th>Ordre</th><th>Actions</th></tr></thead>
             <tbody>
               <tr v-for="account in visibleAccounts" :key="account.id" :class="{ inactive: !account.active }">
                 <td><input v-model="accountDrafts[account.id].number" :disabled="!canSetup"></td>
                 <td><input v-model="accountDrafts[account.id].label" :disabled="!canSetup"></td>
                 <td><select v-model="accountDrafts[account.id].rubric_id" :disabled="!canSetup"><option :value="null">Sans rubrique</option><option v-for="rubric in accountRubrics" :key="rubric.id" :value="rubric.id">{{ rubric.code }} — {{ rubric.label }}</option></select></td>
+                <td><select v-model="accountDrafts[account.id].type" :disabled="!canSetup || accountDrafts[account.id].rubric_id !== null"><option v-for="type in workspace.chart.types" :key="type.code" :value="type.code">{{ type.label }}</option></select></td>
                 <td><select v-model="accountDrafts[account.id].sense_mode" :disabled="!canSetup"><option value="automatique">Automatique</option><option value="debit">+/-</option><option value="credit">-/+</option></select></td>
                 <td><button class="icon-button" type="button" :disabled="!canSetup || !!accountSearch" @click="moveAccount(account.id, -1)">↑</button><button class="icon-button" type="button" :disabled="!canSetup || !!accountSearch" @click="moveAccount(account.id, 1)">↓</button></td>
                 <td><button class="button danger small" type="button" :disabled="!canSetup" @click="deleteAccount(account.id)">Retirer</button></td>
@@ -1191,7 +1260,8 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           </table></div>
           <form class="inline-create" @submit.prevent="createAccount">
             <input v-model="newAccount.number" placeholder="N°" required><input v-model="newAccount.label" placeholder="Nouveau compte" required>
-            <select v-model="newAccount.rubric_id"><option :value="null">Rubrique…</option><option v-for="rubric in accountRubrics" :key="rubric.id" :value="rubric.id">{{ rubric.code }} — {{ rubric.label }}</option></select>
+            <select v-model="newAccount.rubric_id"><option :value="null">Sans rubrique</option><option v-for="rubric in accountRubrics" :key="rubric.id" :value="rubric.id">{{ rubric.code }} — {{ rubric.label }}</option></select>
+            <select v-model="newAccount.type" :disabled="newAccount.rubric_id !== null"><option v-for="type in workspace.chart.types" :key="type.code" :value="type.code">{{ type.label }}</option></select>
             <select v-model="newAccount.sense_mode"><option value="automatique">Automatique</option><option value="debit">+/-</option><option value="credit">-/+</option></select>
             <button class="button primary" :disabled="!canSetup">Ajouter</button>
           </form>
@@ -1217,6 +1287,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             <template v-if="chartImportPreview">
               <div class="metric-strip chart-import-summary">
                 <span><small>Lignes contrôlées</small><strong>{{ chartImportPreview.summary.rows }}</strong></span>
+                <span><small>Types à créer</small><strong>{{ chartImportPreview.summary.type_creates }}</strong></span>
                 <span><small>Rubriques à créer</small><strong>{{ chartImportPreview.summary.rubric_creates }}</strong></span>
                 <span><small>Rubriques à modifier</small><strong>{{ chartImportPreview.summary.rubric_updates }}</strong></span>
                 <span><small>Comptes à créer</small><strong>{{ chartImportPreview.summary.account_creates }}</strong></span>
@@ -1233,6 +1304,50 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
                   @click="applyChartImport"
                 >Confirmer l’import</button>
               </div>
+            </template>
+          </div>
+        </ModalDialog>
+
+        <ModalDialog
+          ref="chartResetDialog"
+          title="Effacer entièrement le plan comptable"
+          description="Cette opération est irréversible. Elle est refusée dès qu’une écriture ou une autre donnée métier référence un compte."
+        >
+          <div class="stack">
+            <p v-if="chartResetBusy">Vérification des dépendances en cours…</p>
+            <ErrorSummary v-if="chartResetError" :message="chartResetError" />
+            <template v-if="chartResetPreview">
+              <div class="metric-strip chart-import-summary">
+                <span><small>Comptes</small><strong>{{ chartResetPreview.counts.accounts }}</strong></span>
+                <span><small>Rubriques</small><strong>{{ chartResetPreview.counts.rubrics }}</strong></span>
+                <span><small>Types</small><strong>{{ chartResetPreview.counts.types }}</strong></span>
+                <span><small>Règles</small><strong>{{ chartResetPreview.counts.rules }}</strong></span>
+              </div>
+              <div v-if="!chartResetPreview.allowed" class="notice warning" role="alert">
+                <strong>Effacement impossible.</strong>
+                <ul>
+                  <li v-for="blocker in chartResetPreview.blockers" :key="blocker.source">
+                    {{ blocker.label }} : {{ blocker.count }}
+                  </li>
+                </ul>
+              </div>
+              <template v-else>
+                <label>Confirmation
+                  <input
+                    v-model="chartResetConfirmation"
+                    autocomplete="off"
+                    :placeholder="`Saisissez ${chartResetPreview.confirmation}`"
+                  >
+                </label>
+                <div class="button-row">
+                  <button
+                    class="button danger"
+                    type="button"
+                    :disabled="chartResetBusy || chartResetConfirmation !== chartResetPreview.confirmation"
+                    @click="applyChartReset"
+                  >Effacer définitivement</button>
+                </div>
+              </template>
             </template>
           </div>
         </ModalDialog>

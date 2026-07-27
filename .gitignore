@@ -11,3 +11,6 @@
 *.sqlite-shm
 *.sqlite-wal
 *.log
+/ops/compta.deploy.json
+__pycache__/
+*.pyc

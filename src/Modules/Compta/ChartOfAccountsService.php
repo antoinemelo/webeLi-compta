@@ -197,6 +197,33 @@ final class ChartOfAccountsService
         );
     }
 
+    private function createAccountType(
+        int $organisationId,
+        int $dossierId,
+        string $code,
+        string $label,
+        int $order,
+        ?int $actorId = null,
+    ): int {
+        if (!in_array($code, self::TYPES, true) || trim($label) === '') {
+            throw new AccountingException('Type de compte CSV invalide.');
+        }
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO types_comptes
+                (organisation_id, dossier_id, code, libelle, ordre, cree_par)
+             VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([
+            $organisationId,
+            $dossierId,
+            $code,
+            trim($label),
+            $order,
+            $actorId,
+        ]);
+        return (int) $this->pdo->lastInsertId();
+    }
+
     /** @param list<array{id:int,libelle:string,version:int}> $rows */
     public function renameAccountTypesBatch(
         int $organisationId,
@@ -620,9 +647,6 @@ final class ChartOfAccountsService
         if ($old === false) {
             throw new AccountingException('Compte absent du dossier.');
         }
-        if ($rubricId === null) {
-            $rubricId = (int) ($old['rubrique_id'] ?? 0) ?: null;
-        }
         $derivedType = $this->accountRubricType(
             $organisationId,
             $dossierId,
@@ -630,6 +654,8 @@ final class ChartOfAccountsService
         );
         if ($derivedType !== null) {
             $type = $derivedType;
+        } elseif ($type === '') {
+            $type = (string) $old['type'];
         }
         if (str_starts_with($number, '9') && $type !== 'hors_bilan') {
             throw new AccountingException(
@@ -693,7 +719,7 @@ final class ChartOfAccountsService
 
     /**
      * @param list<array{
-     *   id:int,numero:string,libelle:string,sens_mode:string,
+     *   id:int,numero:string,libelle:string,type:string,sens_mode:string,
      *   rubrique_id:?int,version:int
      * }> $rows
      * @param list<int> $orderedIds
@@ -719,7 +745,7 @@ final class ChartOfAccountsService
                     (int) $row['id'],
                     (string) $row['numero'],
                     (string) $row['libelle'],
-                    '',
+                    (string) $row['type'],
                     (string) $row['sens_mode'],
                     (int) $row['version'],
                     $actorId,
@@ -925,6 +951,104 @@ final class ChartOfAccountsService
     }
 
     /** @return array<string,mixed> */
+    public function previewReset(int $organisationId, int $dossierId): array
+    {
+        $this->assertDossierScope($organisationId, $dossierId);
+        $counts = [
+            'types' => $this->scopeCount('types_comptes', $organisationId, $dossierId),
+            'rules' => $this->scopeCount('regles_sens_comptes', $organisationId, $dossierId),
+            'rubrics' => $this->scopeCount('rubriques_comptables', $organisationId, $dossierId),
+            'accounts' => $this->scopeCount('comptes', $organisationId, $dossierId),
+            'entries' => $this->scopeCount('ecritures', $organisationId, $dossierId),
+        ];
+        $blockers = [];
+        if ($counts['entries'] > 0) {
+            $blockers[] = [
+                'source' => 'ecritures',
+                'label' => 'Écritures comptables',
+                'count' => $counts['entries'],
+            ];
+        }
+        foreach ($this->accountReferenceCounts($organisationId, $dossierId) as $row) {
+            if ($row['source'] === 'lignes_ecriture') {
+                continue;
+            }
+            $blockers[] = $row;
+        }
+        return [
+            'allowed' => $blockers === [],
+            'fingerprint' => $this->resetFingerprint($organisationId, $dossierId),
+            'confirmation' => 'EFFACER',
+            'counts' => $counts,
+            'blockers' => $blockers,
+        ];
+    }
+
+    /** @return array<string,int> */
+    public function reset(
+        int $organisationId,
+        int $dossierId,
+        string $expectedFingerprint,
+        string $confirmation,
+        ?int $actorId = null,
+    ): array {
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $expectedFingerprint,
+            $confirmation,
+            $actorId
+        ): array {
+            if ($confirmation !== 'EFFACER') {
+                throw new AccountingException('Saisissez EFFACER pour confirmer.');
+            }
+            $preview = $this->previewReset($organisationId, $dossierId);
+            if (!hash_equals((string) $preview['fingerprint'], $expectedFingerprint)) {
+                throw new AccountingException(
+                    'Le plan comptable a changé depuis la vérification. Recommencez.'
+                );
+            }
+            if (!$preview['allowed']) {
+                throw new AccountingException(
+                    'Le plan comptable est encore référencé et ne peut pas être effacé.'
+                );
+            }
+            $counts = $preview['counts'];
+            for ($level = 9; $level >= 1; $level--) {
+                $this->pdo->prepare(
+                    'DELETE FROM comptes
+                     WHERE organisation_id = ? AND dossier_id = ? AND niveau = ?'
+                )->execute([$organisationId, $dossierId, $level]);
+            }
+            foreach (array_reverse(self::STRUCTURE_LEVELS) as $level) {
+                $this->pdo->prepare(
+                    'DELETE FROM rubriques_comptables
+                     WHERE organisation_id = ? AND dossier_id = ?
+                       AND niveau_structure = ?'
+                )->execute([$organisationId, $dossierId, $level]);
+            }
+            $this->pdo->prepare(
+                'DELETE FROM regles_sens_comptes
+                 WHERE organisation_id = ? AND dossier_id = ?'
+            )->execute([$organisationId, $dossierId]);
+            $this->pdo->prepare(
+                'DELETE FROM types_comptes
+                 WHERE organisation_id = ? AND dossier_id = ?'
+            )->execute([$organisationId, $dossierId]);
+            $this->audit->log(
+                'compta.plan_efface',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'plan_comptable',
+                (string) $dossierId,
+                $counts
+            );
+            return $counts;
+        });
+    }
+
+    /** @return array<string,mixed> */
     public function importCsv(
         int $organisationId,
         int $dossierId,
@@ -956,8 +1080,24 @@ final class ChartOfAccountsService
                 $typesByCode[(string) $type['code']] = $type;
             }
             foreach ($specifications['types'] as $type) {
-                $existing = $typesByCode[$type['code']];
-                if ((string) $existing['libelle'] !== $type['label']) {
+                $existing = $typesByCode[$type['code']] ?? null;
+                if ($existing === null) {
+                    $id = $this->createAccountType(
+                        $organisationId,
+                        $dossierId,
+                        $type['code'],
+                        $type['label'],
+                        $type['order'],
+                        $actorId
+                    );
+                    $typesByCode[$type['code']] = [
+                        'id' => $id,
+                        'code' => $type['code'],
+                        'libelle' => $type['label'],
+                        'ordre' => $type['order'],
+                        'version' => 1,
+                    ];
+                } elseif ((string) $existing['libelle'] !== $type['label']) {
                     $this->renameAccountType(
                         $organisationId,
                         $dossierId,
@@ -1076,7 +1216,9 @@ final class ChartOfAccountsService
             }
             $orderedAccountIds = [];
             foreach ($specifications['accounts'] as $row) {
-                $rubricId = (int) $rubricsByCode[$row['parent_code']]['id'];
+                $rubricId = $row['parent_code'] === ''
+                    ? null
+                    : (int) $rubricsByCode[$row['parent_code']]['id'];
                 $existing = $accountsByNumber[$row['number']] ?? null;
                 if ($existing === null) {
                     $id = $this->createConfigured(
@@ -1099,7 +1241,8 @@ final class ChartOfAccountsService
                     if (
                         (string) $existing['libelle'] !== $row['label']
                         || (string) $existing['sens_mode'] !== $row['sense']
-                        || (int) ($existing['rubrique_id'] ?? 0) !== $rubricId
+                        || (int) ($existing['rubrique_id'] ?? 0) !== (int) ($rubricId ?? 0)
+                        || (string) $existing['type'] !== $row['type']
                     ) {
                         $this->updateAccount(
                             $organisationId,
@@ -1169,6 +1312,7 @@ final class ChartOfAccountsService
                 'type_compte' => $types[] = [
                     'code' => $row['code'],
                     'label' => $this->requiredCsvLabel($row),
+                    'order' => $row['ordre'],
                 ],
                 'regle_sens' => $prefixes[] = $row['code'],
                 'rubrique' => $rubricRows[] = $row,
@@ -1183,15 +1327,21 @@ final class ChartOfAccountsService
             $knownTypes[(string) $type['code']] = $type;
         }
         $seenTypes = [];
+        $typeCreates = 0;
         $typeUpdates = 0;
         foreach ($types as $type) {
-            if (!isset($knownTypes[$type['code']]) || isset($seenTypes[$type['code']])) {
+            if (
+                !in_array($type['code'], self::TYPES, true)
+                || isset($seenTypes[$type['code']])
+            ) {
                 throw new AccountingException(
                     "Type de compte CSV inconnu ou dupliqué : {$type['code']}."
                 );
             }
             $seenTypes[$type['code']] = true;
-            if ((string) $knownTypes[$type['code']]['libelle'] !== $type['label']) {
+            if (!isset($knownTypes[$type['code']])) {
+                $typeCreates++;
+            } elseif ((string) $knownTypes[$type['code']]['libelle'] !== $type['label']) {
                 $typeUpdates++;
             }
         }
@@ -1320,14 +1470,29 @@ final class ChartOfAccountsService
             }
             $seenAccounts[$number] = true;
             $parentCode = $row['parent_code'];
-            $parent = $plannedByCode[$parentCode] ?? null;
-            if (
-                $parent === null
-                || !in_array($parent['level'], ['groupe_principal', 'groupe'], true)
-            ) {
-                throw new AccountingException(
-                    "Rubrique du compte {$number} absente ou incompatible."
-                );
+            if ($parentCode === '') {
+                $type = $row['type_compte'];
+                if (!in_array($type, self::TYPES, true)) {
+                    throw new AccountingException(
+                        "Le compte {$number} sans rubrique exige un type comptable."
+                    );
+                }
+            } else {
+                $parent = $plannedByCode[$parentCode] ?? null;
+                if (
+                    $parent === null
+                    || !in_array($parent['level'], ['groupe_principal', 'groupe'], true)
+                ) {
+                    throw new AccountingException(
+                        "Rubrique du compte {$number} absente ou incompatible."
+                    );
+                }
+                $type = $parent['type'];
+                if ($row['type_compte'] !== '' && $row['type_compte'] !== $type) {
+                    throw new AccountingException(
+                        "Le type du compte {$number} ne correspond pas à sa rubrique."
+                    );
+                }
             }
             $sense = $row['sens'];
             if (!in_array($sense, ['automatique', 'debit', 'credit'], true)) {
@@ -1346,6 +1511,7 @@ final class ChartOfAccountsService
                 (string) $existing['libelle'] !== $label
                 || (string) $existing['sens_mode'] !== $sense
                 || (string) $existing['rubrique_code'] !== $parentCode
+                || (string) $existing['type'] !== $type
             ) {
                 $accountUpdates++;
             }
@@ -1353,16 +1519,39 @@ final class ChartOfAccountsService
                 'number' => $number,
                 'label' => $label,
                 'parent_code' => $parentCode,
-                'type' => $parent['type'],
+                'type' => $type,
                 'sense' => $sense,
                 'order' => $row['ordre'],
             ];
         }
-        if ($rubrics === [] || $accounts === []) {
+        if ($accounts === []) {
             throw new AccountingException(
-                'Le CSV doit contenir au moins une rubrique et un compte.'
+                'Le CSV doit contenir au moins un compte.'
             );
         }
+        $requiredTypes = [];
+        foreach ($rubrics as $rubric) {
+            $requiredTypes[$rubric['type']] = true;
+        }
+        foreach ($accounts as $account) {
+            $requiredTypes[$account['type']] = true;
+        }
+        foreach (array_keys($requiredTypes) as $code) {
+            if (isset($knownTypes[$code]) || isset($seenTypes[$code])) {
+                continue;
+            }
+            $types[] = [
+                'code' => $code,
+                'label' => self::TYPE_LABELS[$code],
+                'order' => (array_search($code, self::TYPES, true) + 1) * 10,
+            ];
+            $seenTypes[$code] = true;
+            $typeCreates++;
+        }
+        foreach ($types as $index => &$type) {
+            $type['order'] = (int) ($type['order'] ?? (($index + 1) * 10));
+        }
+        unset($type);
         return [
             'specifications' => [
                 'types' => $types,
@@ -1372,6 +1561,7 @@ final class ChartOfAccountsService
             ],
             'summary' => [
                 'rows' => count($rows),
+                'type_creates' => $typeCreates,
                 'type_updates' => $typeUpdates,
                 'rubric_creates' => $rubricCreates,
                 'rubric_updates' => $rubricUpdates,
@@ -1792,6 +1982,124 @@ final class ChartOfAccountsService
             $current = $parentId > 0 ? ($byId[$parentId] ?? null) : null;
         }
         return implode(' ‹ ', $parts);
+    }
+
+    private function scopeCount(
+        string $table,
+        int $organisationId,
+        int $dossierId,
+    ): int {
+        if (!in_array($table, [
+            'types_comptes',
+            'regles_sens_comptes',
+            'rubriques_comptables',
+            'comptes',
+            'ecritures',
+        ], true)) {
+            throw new AccountingException('Table de contrôle du plan invalide.');
+        }
+        $stmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM {$table}
+             WHERE organisation_id = ? AND dossier_id = ?"
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function resetFingerprint(int $organisationId, int $dossierId): string
+    {
+        $snapshot = [];
+        foreach ([
+            'types_comptes',
+            'regles_sens_comptes',
+            'rubriques_comptables',
+            'comptes',
+        ] as $table) {
+            $stmt = $this->pdo->prepare(
+                "SELECT * FROM {$table}
+                 WHERE organisation_id = ? AND dossier_id = ?
+                 ORDER BY id"
+            );
+            $stmt->execute([$organisationId, $dossierId]);
+            $snapshot[$table] = $stmt->fetchAll();
+        }
+        return hash(
+            'sha256',
+            json_encode($snapshot, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE)
+        );
+    }
+
+    /** @return list<array{source:string,label:string,count:int}> */
+    private function accountReferenceCounts(
+        int $organisationId,
+        int $dossierId,
+    ): array {
+        $labels = [
+            'categories_immobilisations' => 'Catégories d’immobilisations',
+            'comptes_tresorerie' => 'Comptes de trésorerie',
+            'dettes_salaires' => 'Dettes salariales',
+            'documents_financiers' => 'Documents financiers',
+            'immobilisations' => 'Immobilisations',
+            'lignes_document' => 'Lignes de documents',
+            'lignes_ecriture' => 'Lignes d’écritures',
+            'mapping_comptes_salaires' => 'Paramètres de salaires',
+            'mappings_comptes_consolidation' => 'Mappings de consolidation',
+            'modeles_depenses_recurrentes' => 'Dépenses récurrentes',
+            'modeles_factures_recurrentes' => 'Factures récurrentes',
+            'paiements' => 'Paiements',
+            'paiements_salaires' => 'Paiements de salaires',
+            'paires_comptes_interentites' => 'Paires interentités',
+            'parametres_change' => 'Paramètres de change',
+            'sorties_immobilisations' => 'Sorties d’immobilisations',
+            'suggestions_comptabilisation' => 'Suggestions bancaires',
+            'tva_codes' => 'Codes TVA',
+            'tva_regimes' => 'Paramètres TVA',
+            'versions_mappings_consolidation' => 'Versions de mappings de consolidation',
+            'versions_paires_interentites' => 'Versions de paires interentités',
+        ];
+        $tables = $this->pdo->query(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+             ORDER BY name"
+        )->fetchAll(PDO::FETCH_COLUMN);
+        $counts = [];
+        foreach ($tables as $table) {
+            $table = (string) $table;
+            if ($table === 'comptes') {
+                continue;
+            }
+            $quotedTable = '"' . str_replace('"', '""', $table) . '"';
+            $foreignKeys = $this->pdo->query(
+                "PRAGMA foreign_key_list({$quotedTable})"
+            )->fetchAll();
+            foreach ($foreignKeys as $foreignKey) {
+                if ((string) ($foreignKey['table'] ?? '') !== 'comptes') {
+                    continue;
+                }
+                $column = (string) ($foreignKey['from'] ?? '');
+                $quotedColumn = '"' . str_replace('"', '""', $column) . '"';
+                $stmt = $this->pdo->prepare(
+                    "SELECT COUNT(*)
+                     FROM {$quotedTable} child
+                     INNER JOIN comptes c ON c.id = child.{$quotedColumn}
+                     WHERE c.organisation_id = ? AND c.dossier_id = ?"
+                );
+                $stmt->execute([$organisationId, $dossierId]);
+                $count = (int) $stmt->fetchColumn();
+                if ($count > 0) {
+                    $counts[$table] = ($counts[$table] ?? 0) + $count;
+                }
+            }
+        }
+        $rows = [];
+        foreach ($counts as $source => $count) {
+            $rows[] = [
+                'source' => $source,
+                'label' => $labels[$source] ?? str_replace('_', ' ', ucfirst($source)),
+                'count' => $count,
+            ];
+        }
+        return $rows;
     }
 
     private function assertDossierScope(int $organisationId, int $dossierId): void

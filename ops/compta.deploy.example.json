@@ -1,0 +1,10 @@
+{
+  "transport": "ftps",
+  "host": "ftp.example.test",
+  "port": 21,
+  "username": "compte-ftp",
+  "password": "CHANGE_ME",
+  "timeout": 30,
+  "passive": true,
+  "remote_root": "/www/webe.li/compta"
+}

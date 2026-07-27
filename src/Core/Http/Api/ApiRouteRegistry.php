@@ -289,6 +289,18 @@ final class ApiRouteRegistry
             $this->add(
                 $router,
                 'POST',
+                '/api/v1/accounting/chart/reset/preview',
+                $this->accounting->previewChartReset(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/chart/reset',
+                $this->accounting->resetChart(...)
+            );
+            $this->add(
+                $router,
+                'POST',
                 '/api/v1/accounting/opening',
                 $this->accounting->saveOpening(...)
             );

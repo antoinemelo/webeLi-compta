@@ -203,6 +203,34 @@ final class AccountingApiController
         );
     }
 
+    public function previewChartReset(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('compta.setup');
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->previewChartReset(
+                $organisationId,
+                $dossierId
+            )
+        );
+    }
+
+    public function resetChart(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->chartReset($request);
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->resetChart(
+                $organisationId,
+                $dossierId,
+                $data['fingerprint'],
+                $data['confirmation'],
+                $userId
+            )
+        );
+    }
+
     public function createVatPeriod(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');

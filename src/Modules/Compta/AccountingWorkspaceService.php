@@ -789,6 +789,29 @@ final class AccountingWorkspaceService
         );
     }
 
+    /** @return array<string,mixed> */
+    public function previewChartReset(int $organisationId, int $dossierId): array
+    {
+        return $this->chart->previewReset($organisationId, $dossierId);
+    }
+
+    /** @return array<string,int> */
+    public function resetChart(
+        int $organisationId,
+        int $dossierId,
+        string $fingerprint,
+        string $confirmation,
+        int $actorId,
+    ): array {
+        return $this->chart->reset(
+            $organisationId,
+            $dossierId,
+            $fingerprint,
+            $confirmation,
+            $actorId
+        );
+    }
+
     /** @param array<string,mixed> $data */
     public function mutateAccount(
         int $organisationId,
@@ -802,6 +825,7 @@ final class AccountingWorkspaceService
                     'id' => $row['id'],
                     'numero' => $row['number'],
                     'libelle' => $row['label'],
+                    'type' => $row['type'],
                     'sens_mode' => $row['sense_mode'],
                     'rubrique_id' => $row['rubric_id'],
                     'version' => $row['version'],
@@ -841,7 +865,7 @@ final class AccountingWorkspaceService
                 $dossierId,
                 $data['number'],
                 $data['label'],
-                '',
+                $data['type'],
                 $data['sense_mode'],
                 $actorId,
                 $data['rubric_id']
@@ -854,7 +878,7 @@ final class AccountingWorkspaceService
             $data['id'],
             $data['number'],
             $data['label'],
-            '',
+            $data['type'],
             $data['sense_mode'],
             $data['version'],
             $actorId,

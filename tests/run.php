@@ -4819,6 +4819,40 @@ final class Tests
             $chartImport->status,
             'import CSV validé et appliqué atomiquement par l’API'
         );
+        $chartResetNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/reset/preview'
+        ));
+        $this->same(
+            403,
+            $chartResetNoCsrf->status,
+            'vérification de remise à zéro protégée par CSRF'
+        );
+        $chartResetPreview = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/reset/preview',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()]
+        ));
+        $this->same(200, $chartResetPreview->status, 'dépendances du plan contrôlées par API');
+        $chartResetJson = $this->responseJson($chartResetPreview);
+        $this->false(
+            (bool) ($chartResetJson['data']['allowed'] ?? true),
+            'API interdit d’effacer un plan déjà mouvementé'
+        );
+        $chartReset = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/reset',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'fingerprint' => $chartResetJson['data']['fingerprint'] ?? '',
+                'confirmation' => 'EFFACER',
+            ]]
+        ));
+        $this->same(
+            422,
+            $chartReset->status,
+            'effacement bloqué sans aucune mutation partielle'
+        );
         $this->true(
             !is_file(dirname(__DIR__) . '/templates/compta/plan.php')
             && !is_file(dirname(__DIR__) . '/templates/compta/report.php')
@@ -5937,6 +5971,99 @@ final class Tests
                  WHERE dossier_id = {$ids['dossier_a']} AND numero = '1000'"
             )->fetchColumn(),
             'échec de prévisualisation sans mutation partielle'
+        );
+        $resetReferenceAccount = $this->accountId(
+            $pdo,
+            $ids['dossier_a'],
+            '1000'
+        );
+        $pdo->prepare(
+            "INSERT INTO comptes_tresorerie
+                (organisation_id, dossier_id, compte_comptable_id, libelle, type)
+             VALUES (?, ?, ?, 'Blocage temporaire', 'caisse')"
+        )->execute([
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $resetReferenceAccount,
+        ]);
+        $temporaryTreasuryId = (int) $pdo->lastInsertId();
+        $blockedReset = $chart->previewReset(
+            $ids['organisation_a'],
+            $ids['dossier_a']
+        );
+        $this->false(
+            (bool) $blockedReset['allowed'],
+            'remise à zéro refusée quand le plan reste référencé'
+        );
+        $pdo->prepare('DELETE FROM comptes_tresorerie WHERE id = ?')
+            ->execute([$temporaryTreasuryId]);
+        $emptyDossier = (new ScopeManager($pdo, $audit))->createDossier(
+            $ids['organisation_a'],
+            'Plan vierge',
+            'plan-vierge',
+            'reel'
+        );
+        $chart->createConfigured(
+            $ids['organisation_a'],
+            $emptyDossier,
+            '1000',
+            'Compte temporaire',
+            'actif'
+        );
+        $resetPreview = $chart->previewReset(
+            $ids['organisation_a'],
+            $emptyDossier
+        );
+        $this->true((bool) $resetPreview['allowed'], 'plan inutilisé effaçable');
+        $chart->reset(
+            $ids['organisation_a'],
+            $emptyDossier,
+            (string) $resetPreview['fingerprint'],
+            'EFFACER',
+            $reportActorId
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM comptes WHERE dossier_id = {$emptyDossier}"
+            )->fetchColumn(),
+            'définitions du plan entièrement effacées'
+        );
+        $flatCsv = "\xEF\xBB\xBF"
+            . "type_ligne;niveau;code;libelle;parent_code;type_compte;sens;ordre\n"
+            . "compte;;1000;Caisse;;actif;automatique;10\n";
+        $flatPreview = $chart->previewCsv(
+            $ids['organisation_a'],
+            $emptyDossier,
+            $flatCsv
+        );
+        $this->same(
+            1,
+            $flatPreview['summary']['type_creates'],
+            'type requis détecté pour un plan plat'
+        );
+        $chart->importCsv(
+            $ids['organisation_a'],
+            $emptyDossier,
+            $flatCsv,
+            (string) $flatPreview['fingerprint'],
+            $reportActorId
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM rubriques_comptables
+                 WHERE dossier_id = {$emptyDossier}"
+            )->fetchColumn(),
+            'plan plat importé sans rubrique'
+        );
+        $this->same(
+            'actif',
+            (string) $pdo->query(
+                "SELECT type FROM comptes
+                 WHERE dossier_id = {$emptyDossier} AND numero = '1000'"
+            )->fetchColumn(),
+            'compte plat importé avec son type explicite'
         );
 
         $bank = $this->accountId($pdo, $ids['dossier_a'], '1020');

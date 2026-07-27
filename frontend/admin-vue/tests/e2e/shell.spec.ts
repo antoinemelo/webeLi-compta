@@ -729,7 +729,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   expect(rubricOptions.length).toBeGreaterThan(1);
   expect(rubricOptions.every((label) => !label.includes('‹'))).toBe(true);
   expect(rubricOptions.slice(1).every((label) => label.includes(' — '))).toBe(true);
-  expect(await accountRow.locator('select').nth(1).locator('option').allTextContents()).toEqual([
+  expect(await accountRow.locator('select').nth(2).locator('option').allTextContents()).toEqual([
     'Automatique',
     '+/-',
     '-/+'
@@ -760,6 +760,13 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await expect(page.getByText('Aucune écriture ni aucun solde')).toBeVisible();
   await page.getByRole('button', { name: 'Confirmer l’import' }).click();
   await expect(page.getByText('Plan comptable importé après validation complète.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Effacer le plan' }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Effacer entièrement le plan comptable'
+  })).toBeVisible();
+  await expect(page.getByText('Effacement impossible.')).toBeVisible();
+  await page.getByRole('button', { name: 'Fermer' }).click();
 
   await page.getByRole('button', { name: 'Ouverture', exact: true }).click();
   await expect(page.getByRole('columnheader', { name: 'Sens', exact: true })).toBeVisible();

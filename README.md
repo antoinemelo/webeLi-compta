@@ -249,3 +249,14 @@ dossier, l’exercice et le module visibles. Les dossiers réel, démonstration 
 exercice ont des bandeaux textuels distincts. La navigation, la saisie
 comptable, le réordonnancement clavier, les vues 360 px et l’impression sont
 documentés dans le [guide interface et accessibilité](docs/interface-accessibilite.md).
+
+## Administration
+
+La création sûre d’une base, la publication Git et le déploiement incrémental
+FTPS sont regroupés dans :
+
+```bash
+python3 tools/python/compta.py --help
+```
+
+Voir [le guide d’administration Python](docs/administration-python.md).
