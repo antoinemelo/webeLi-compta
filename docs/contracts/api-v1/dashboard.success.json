@@ -58,6 +58,8 @@
         "overdue_cents": 30000,
         "open_count": 2,
         "overdue_count": 1,
+        "draft_count": 1,
+        "unposted_count": 1,
         "aging": {
           "not_due": 50000,
           "days_1_30": 30000,
@@ -71,6 +73,8 @@
         "overdue_cents": 0,
         "open_count": 1,
         "overdue_count": 0,
+        "draft_count": 0,
+        "unposted_count": 1,
         "aging": {
           "not_due": 45000,
           "days_1_30": 0,
@@ -109,7 +113,7 @@
       ],
       "revenue_definition": "Comptes de type produit : crédits moins débits.",
       "expenses_definition": "Comptes de type charge : débits moins crédits.",
-      "open_items_definition": "Documents émis ou comptabilisés, nets des allocations valides ; les avoirs non alloués portent un signe négatif.",
+      "open_items_definition": "Documents comptabilisés, nets des paiements et avoirs comptabilisés ; les brouillons et documents à comptabiliser sont signalés sans que leur montant soit inclus.",
       "overdue_definition": "Échéance strictement antérieure à la date d’arrêté.",
       "aging_buckets": [
         "not_due",

@@ -171,9 +171,11 @@ final class TreasuryWorkspaceService
                     c.iban_paiement AS iban, c.bic_paiement AS bic
              FROM documents_financiers d
              JOIN contacts c ON c.id = d.contact_id
+             JOIN comptes collectif ON collectif.id = d.compte_collectif_id
              WHERE d.organisation_id = ? AND d.dossier_id = ?
-               AND d.workflow = 'depense' AND d.type = 'facture_fournisseur'
+               AND d.type = 'facture_fournisseur'
                AND d.statut = 'comptabilise'
+               AND collectif.type = 'passif'
              ORDER BY d.date_echeance, d.id",
             [$organisationId, $dossierId]
         );

@@ -58,7 +58,7 @@ final class BillingInputValidator
     }
 
     /** @return array<string,mixed> */
-    public function document(Request $request): array
+    public function document(Request $request, bool $update = false): array
     {
         $this->rejectScope($request);
         $data = $request->input();
@@ -88,7 +88,7 @@ final class BillingInputValidator
             $errors['currency'][] = 'Code devise ISO requis.';
         }
         if (str_contains($type, 'fournisseur') && $external === '') {
-            $errors['external_number'][] = 'Numéro fournisseur requis.';
+            $errors['external_number'][] = 'Référence fournisseur requise.';
         }
         $result = [
             'type' => $type,
@@ -110,6 +110,14 @@ final class BillingInputValidator
                 $errors
             ),
         ];
+        if ($update) {
+            $result['document_id'] = $this->positiveInt(
+                $data,
+                'document_id',
+                $errors
+            );
+            $result['version'] = $this->positiveInt($data, 'version', $errors);
+        }
         $this->fail($errors);
         return $result;
     }
@@ -371,6 +379,17 @@ final class BillingInputValidator
     public function allocation(Request $request): array
     {
         return $this->ids($request, ['payment_id', 'document_id', 'amount_cents']);
+    }
+
+    /** @return array{payment_id:int,collective_account_id:int,exercise_id:int,journal_id:int} */
+    public function paymentPosting(Request $request): array
+    {
+        return $this->ids($request, [
+            'payment_id',
+            'collective_account_id',
+            'exercise_id',
+            'journal_id',
+        ]);
     }
 
     /** @return array{credit_id:int,document_id:int,amount_cents:int} */

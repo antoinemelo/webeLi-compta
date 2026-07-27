@@ -257,6 +257,7 @@ final class BillingWorkspaceService
                 'version' => (int) $row['version'],
                 'contact_id' => (int) $row['contact_id'],
                 'contact' => (string) $row['contact'],
+                'collective_account_id' => (int) $row['compte_collectif_id'],
                 'document_date' => (string) $row['date_document'],
                 'due_date' => (string) $row['date_echeance'],
                 'currency' => (string) $row['monnaie'],
@@ -285,7 +286,23 @@ final class BillingWorkspaceService
                     ? null : (int) $row['document_origine_id'],
                 'scor_reference' => (string) $row['reference_scor'],
                 'has_archived_pdf' => (string) $row['pdf_empreinte_sha256'] !== '',
-                'lines' => [],
+                'lines' => $row['statut'] !== 'brouillon'
+                    ? []
+                    : array_map(
+                        static fn (array $line): array => [
+                            'id' => (int) $line['id'],
+                            'label' => (string) $line['libelle'],
+                            'quantity_milli' => (int) $line['quantite_milli'],
+                            'unit_price_cents' => (int) $line['prix_unitaire_centimes'],
+                            'input_mode' => (string) $line['mode_saisie'],
+                            'account_id' => (int) $line['compte_id'],
+                            'vat_code_id' => (int) $line['code_tva_id'],
+                            'net_cents' => (int) $line['base_nette_centimes'],
+                            'vat_cents' => (int) $line['tva_centimes'],
+                            'gross_cents' => (int) $line['total_brut_centimes'],
+                        ],
+                        $this->billing->lines((int) $row['id'])
+                    ),
             ];
         }
         return $items;
@@ -665,6 +682,7 @@ final class BillingWorkspaceService
                 'id' => (int) $row['id'],
                 'code' => (string) $row['code'],
                 'label' => (string) $row['libelle'],
+                'type' => (string) $row['type'],
             ], $catalog['journals']),
             'currencies' => $catalog['currencies'],
             'exchange_rates' => $catalog['exchange_rates'],

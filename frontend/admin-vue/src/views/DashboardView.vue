@@ -215,6 +215,15 @@ async function refresh(): Promise<void> {
             dont {{ projection.open_items.receivables.overdue_count }} échu(s) pour
             <strong>{{ formatMoney(projection.open_items.receivables.overdue_cents, currency) }}</strong>.
           </p>
+          <small
+            v-if="projection.open_items.receivables.draft_count
+              || projection.open_items.receivables.unposted_count"
+            class="pending-documents"
+          >
+            {{ projection.open_items.receivables.draft_count }} brouillon(s) à émettre
+            · {{ projection.open_items.receivables.unposted_count }} document(s) à comptabiliser.
+            Montants exclus de la créance.
+          </small>
         </article>
         <article class="panel">
           <div class="panel-heading">
@@ -229,6 +238,15 @@ async function refresh(): Promise<void> {
             dont {{ projection.open_items.payables.overdue_count }} échu(s) pour
             <strong>{{ formatMoney(projection.open_items.payables.overdue_cents, currency) }}</strong>.
           </p>
+          <small
+            v-if="projection.open_items.payables.draft_count
+              || projection.open_items.payables.unposted_count"
+            class="pending-documents"
+          >
+            {{ projection.open_items.payables.draft_count }} brouillon(s) à émettre
+            · {{ projection.open_items.payables.unposted_count }} document(s) à comptabiliser.
+            Montants exclus de la dette.
+          </small>
         </article>
       </section>
 

@@ -1765,7 +1765,7 @@ final class Tests
             ['compte_id' => $bankAccount, 'debit_centimes' => 50000],
             ['compte_id' => $capital, 'credit_centimes' => 50000],
         ]);
-        $post('sale', '2026-02-10', 'Vente comptabilisée', [
+        $saleEntryId = $post('sale', '2026-02-10', 'Vente comptabilisée', [
             ['compte_id' => $receivable, 'debit_centimes' => 100000],
             ['compte_id' => $revenue, 'credit_centimes' => 100000],
         ]);
@@ -1850,7 +1850,7 @@ final class Tests
               date_document, date_echeance, adresse_snapshot_json,
               contact_snapshot_json, total_net_centimes, total_tva_centimes,
               total_brut_centimes)
-             VALUES (?, ?, ?, ?, 'emis', ?, ?, ?, '{}', '{}', ?, 0, ?)"
+             VALUES (?, ?, ?, ?, 'comptabilise', ?, ?, ?, '{}', '{}', ?, 0, ?)"
         );
         $document->execute([
             $organisationId, $dossierId, $customerId, 'facture_client',
@@ -1866,20 +1866,35 @@ final class Tests
             $organisationId, $dossierId, $supplierId, 'facture_fournisseur',
             'ACH-TDB-1', '2026-04-01', '2026-04-30', 30000, 30000,
         ]);
+        $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, statut, numero,
+              date_document, date_echeance, adresse_snapshot_json,
+              contact_snapshot_json, total_net_centimes, total_tva_centimes,
+              total_brut_centimes)
+             VALUES
+              (?, ?, ?, 'facture_client', 'brouillon', '',
+               '2026-04-05', '2026-05-05', '{}', '{}', 900000, 0, 900000),
+              (?, ?, ?, 'facture_fournisseur', 'emis', 'ACH-TDB-A-COMPTA',
+               '2026-04-06', '2026-05-06', '{}', '{}', 800000, 0, 800000)"
+        )->execute([
+            $organisationId, $dossierId, $customerId,
+            $organisationId, $dossierId, $supplierId,
+        ]);
         $payment = $pdo->prepare(
             "INSERT INTO paiements
              (organisation_id, dossier_id, contact_id, sens, date_paiement,
-              montant_centimes, reference)
-             VALUES (?, ?, ?, ?, ?, ?, ?)"
+              montant_centimes, reference, ecriture_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         );
         $payment->execute([
             $organisationId, $dossierId, $customerId, 'encaissement',
-            '2026-03-15', 40000, 'Paiement partiel',
+            '2026-03-15', 40000, 'Paiement partiel', $saleEntryId,
         ]);
         $partialPaymentId = (int) $pdo->lastInsertId();
         $payment->execute([
             $organisationId, $dossierId, $customerId, 'encaissement',
-            '2026-04-10', 7000, 'À lettrer',
+            '2026-04-10', 7000, 'À lettrer', null,
         ]);
         $allocation = $pdo->prepare(
             'INSERT INTO allocations
@@ -1977,6 +1992,16 @@ final class Tests
             30000,
             (int) $projection['open_items']['payables']['open_cents'],
             'dette fournisseur ouverte issue des documents et allocations'
+        );
+        $this->same(
+            1,
+            (int) $projection['open_items']['receivables']['draft_count'],
+            'brouillon client signalé sans gonfler les créances'
+        );
+        $this->same(
+            1,
+            (int) $projection['open_items']['payables']['unposted_count'],
+            'facture fournisseur émise signalée sans gonfler les dettes'
         );
         $this->same(
             55000,
@@ -9603,6 +9628,47 @@ final class Tests
 
         $draftA = $draft(100000, 'Facture mille');
         $draftB = $draft(5000, 'Second brouillon');
+        $draftBVersion = (int) $billing->document(
+            $organisationId,
+            $dossierId,
+            $draftB
+        )['version'];
+        $billing->updateDraft(
+            $organisationId,
+            $dossierId,
+            $draftB,
+            $draftBVersion,
+            'facture_client',
+            $customer,
+            '2026-03-16',
+            '2026-04-16',
+            [$line('Brouillon corrigé', 7500, $revenue, $exempt)],
+            $receivable
+        );
+        $updatedDraft = $billing->document(
+            $organisationId,
+            $dossierId,
+            $draftB
+        );
+        $this->same(
+            7500,
+            (int) $updatedDraft['total_brut_centimes'],
+            'brouillon de facture modifiable avant émission'
+        );
+        $this->same(
+            'Brouillon corrigé',
+            (string) $billing->lines($draftB)[0]['libelle'],
+            'lignes du brouillon remplacées atomiquement'
+        );
+        $this->throws(
+            fn () => $billing->creditFrom(
+                $organisationId,
+                $dossierId,
+                $draftB,
+                '2026-03-17'
+            ),
+            'avoir impossible tant que la facture reste en brouillon'
+        );
         $this->throws(
             fn () => $vat->deleteCode(
                 $organisationId,
@@ -9753,6 +9819,38 @@ final class Tests
             $clientInvoice,
             $exercise,
             $journal
+        );
+        $settlement = $payments->create(
+            $organisationId,
+            $dossierId,
+            $customer,
+            'encaissement',
+            '2026-04-15',
+            10810,
+            'REGLEMENT-CLIENT',
+            $bank
+        );
+        $payments->allocatePayment(
+            $organisationId,
+            $dossierId,
+            $settlement,
+            $clientInvoice,
+            10810
+        );
+        $settlementEntry = $payments->post(
+            $organisationId,
+            $dossierId,
+            $settlement,
+            $receivable,
+            $exercise,
+            $journal
+        );
+        $this->same(
+            $settlementEntry,
+            (int) $pdo->query(
+                "SELECT ecriture_id FROM paiements WHERE id = {$settlement}"
+            )->fetchColumn(),
+            'paiement intégralement lettré comptabilisé dans le grand livre'
         );
         $supplierInvoice = $billing->createDraft(
             $organisationId,
@@ -11499,6 +11597,36 @@ CSV;
         ]);
         $bankLineId = (int) $pdo->lastInsertId();
         $payments = new PaymentService($pdo, $audit, $entries);
+        $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, statut, numero,
+              date_document, date_echeance, adresse_snapshot_json,
+              contact_snapshot_json, compte_collectif_id, workflow,
+              total_net_centimes, total_tva_centimes, total_brut_centimes)
+             VALUES (?, ?, ?, 'facture_fournisseur', 'comptabilise',
+                     'NON-PASSIF-001', '2026-03-01', '2026-03-31',
+                     '{}', '{}', ?, 'facturation', 5000, 0, 5000)"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $supplier,
+            $expenseAccount,
+        ]);
+        $nonLiabilityDocument = (int) $pdo->lastInsertId();
+        $payableDebtIds = array_map(
+            'intval',
+            array_column(
+                (new TreasuryWorkspaceService($pdo, $payments, $entries))
+                    ->read($organisationId, $dossierId)['payable_debts'],
+                'id'
+            )
+        );
+        $this->true(
+            in_array($expenseId, $payableDebtIds, true)
+            && in_array($secondExpenseId, $payableDebtIds, true)
+            && !in_array($nonLiabilityDocument, $payableDebtIds, true),
+            'paiements sortants limités aux passifs fournisseurs en suspens'
+        );
         $this->throws(
             fn () => $payments->create(
                 $organisationId,

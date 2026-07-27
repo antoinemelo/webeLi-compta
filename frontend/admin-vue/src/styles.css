@@ -924,7 +924,7 @@ textarea {
   width: min(42rem, calc(100% - 2rem));
   max-height: calc(100dvh - 2rem);
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
   border: 0;
   border-radius: 0.75rem;
   color: var(--ink);
@@ -947,6 +947,8 @@ textarea {
   gap: 1rem;
   padding: 1.1rem 1.25rem;
   border-bottom: 1px solid var(--border);
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--surface);
 }
 
 .form-dialog-header h2,
@@ -963,6 +965,8 @@ textarea {
   max-height: calc(100dvh - 8rem);
   padding: 1.25rem;
   overflow-y: auto;
+  border-radius: 0 0 0.75rem 0.75rem;
+  background: var(--surface);
 }
 
 .form-dialog-content > form {
@@ -974,6 +978,12 @@ textarea {
   justify-content: flex-end;
   gap: 0.75rem;
   margin-top: 1.25rem;
+}
+
+.pending-documents {
+  display: block;
+  margin-top: 0.75rem;
+  color: var(--muted);
 }
 
 .toast-region {

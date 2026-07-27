@@ -13,6 +13,7 @@ withDefaults(defineProps<{
 const dialog = ref<HTMLDialogElement | null>(null);
 const closeButton = ref<HTMLButtonElement | null>(null);
 const titleId = useId();
+const emit = defineEmits<{ closed: [] }>();
 
 async function open(): Promise<void> {
   dialog.value?.showModal();
@@ -36,6 +37,7 @@ defineExpose({ open, close });
     :class="['form-dialog', { wide }]"
     :aria-labelledby="titleId"
     @cancel="close"
+    @close="emit('closed')"
   >
     <header class="form-dialog-header">
       <div>

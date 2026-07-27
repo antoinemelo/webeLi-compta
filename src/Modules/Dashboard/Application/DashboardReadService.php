@@ -51,6 +51,16 @@ final class DashboardReadService
             $scope['base_currency']
         );
         $openItems = $this->openItems($organisationId, $dossierId, $asOfDate);
+        $pendingDocuments = $this->pendingDocuments(
+            $organisationId,
+            $dossierId,
+            $asOfDate
+        );
+        foreach (['receivables', 'payables'] as $side) {
+            $openItems[$side]['draft_count'] = $pendingDocuments[$side]['draft_count'];
+            $openItems[$side]['unposted_count'] =
+                $pendingDocuments[$side]['unposted_count'];
+        }
         $bankLines = $this->unreconciledBankLines(
             $organisationId,
             $dossierId,
@@ -80,6 +90,10 @@ final class DashboardReadService
         $isEmpty = !$hasTreasuryValue
             && (int) $openItems['receivables']['open_count'] === 0
             && (int) $openItems['payables']['open_count'] === 0
+            && (int) $openItems['receivables']['draft_count'] === 0
+            && (int) $openItems['receivables']['unposted_count'] === 0
+            && (int) $openItems['payables']['draft_count'] === 0
+            && (int) $openItems['payables']['unposted_count'] === 0
             && (int) $bankLines['count'] === 0
             && (int) $payments['count'] === 0
             && $recentEntries === [];
@@ -129,8 +143,9 @@ final class DashboardReadService
                 'expenses_definition' =>
                     'Comptes de type charge : débits moins crédits.',
                 'open_items_definition' =>
-                    'Documents émis ou comptabilisés, nets des allocations valides ; '
-                    . 'les avoirs non alloués portent un signe négatif.',
+                    'Documents comptabilisés, nets des paiements et avoirs '
+                    . 'comptabilisés ; les brouillons et documents à comptabiliser '
+                    . 'sont signalés sans que leur montant soit inclus.',
                 'overdue_definition' =>
                     'Échéance strictement antérieure à la date d’arrêté.',
                 'aging_buckets' => [
@@ -340,9 +355,10 @@ final class DashboardReadService
                   AND a.statut = 'valide'
                   AND (
                     (p.id IS NOT NULL AND p.statut = 'valide'
+                      AND p.ecriture_id IS NOT NULL
                       AND p.date_paiement <= :as_of_date)
                     OR (credit.id IS NOT NULL
-                      AND credit.statut IN ('emis', 'comptabilise')
+                      AND credit.statut = 'comptabilise'
                       AND credit.date_document <= :as_of_date)
                   )
                 GROUP BY a.document_id
@@ -355,7 +371,7 @@ final class DashboardReadService
                 WHERE a.organisation_id = :organisation
                   AND a.dossier_id = :dossier
                   AND a.statut = 'valide'
-                  AND credit.statut IN ('emis', 'comptabilise')
+                  AND credit.statut = 'comptabilise'
                   AND credit.date_document <= :as_of_date
                 GROUP BY a.avoir_id
              ),
@@ -384,7 +400,7 @@ final class DashboardReadService
                 LEFT JOIN credit_allocations credit ON credit.avoir_id = d.id
                 WHERE d.organisation_id = :organisation
                   AND d.dossier_id = :dossier
-                  AND d.statut IN ('emis', 'comptabilise')
+                  AND d.statut = 'comptabilise'
                   AND d.date_document <= :as_of_date
              ),
              bucketed AS (
@@ -441,6 +457,43 @@ final class DashboardReadService
                 $result[$side]['overdue_cents'] += $amount;
                 $result[$side]['overdue_count'] += $count;
             }
+        }
+        return $result;
+    }
+
+    /** @return array<string,array{draft_count:int,unposted_count:int}> */
+    private function pendingDocuments(
+        int $organisationId,
+        int $dossierId,
+        string $asOfDate,
+    ): array {
+        $stmt = $this->pdo->prepare(
+            "SELECT CASE
+                      WHEN type IN ('facture_client', 'avoir_client')
+                        THEN 'receivables'
+                      ELSE 'payables'
+                    END AS side,
+                    SUM(CASE WHEN statut = 'brouillon' THEN 1 ELSE 0 END)
+                      AS draft_count,
+                    SUM(CASE WHEN statut IN ('emis', 'approuve')
+                             THEN 1 ELSE 0 END) AS unposted_count
+             FROM documents_financiers
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND date_document <= ?
+               AND statut IN ('brouillon', 'emis', 'approuve')
+             GROUP BY side"
+        );
+        $stmt->execute([$organisationId, $dossierId, $asOfDate]);
+        $result = [
+            'receivables' => ['draft_count' => 0, 'unposted_count' => 0],
+            'payables' => ['draft_count' => 0, 'unposted_count' => 0],
+        ];
+        foreach ($stmt->fetchAll() as $row) {
+            $side = (string) $row['side'];
+            $result[$side] = [
+                'draft_count' => (int) $row['draft_count'],
+                'unposted_count' => (int) $row['unposted_count'],
+            ];
         }
         return $result;
     }

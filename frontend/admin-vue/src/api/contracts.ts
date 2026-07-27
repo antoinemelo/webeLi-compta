@@ -1127,6 +1127,8 @@ export type DashboardOpenItems = {
   overdue_cents: number;
   open_count: number;
   overdue_count: number;
+  draft_count: number;
+  unposted_count: number;
   aging: DashboardAging;
 };
 
@@ -1230,6 +1232,7 @@ export type BillingDocument = {
   version: number;
   contact_id: number;
   contact: string;
+  collective_account_id: number;
   document_date: string;
   due_date: string;
   currency: string;
@@ -1369,7 +1372,7 @@ export type BillingPayload = {
       valid_until: string | null;
     }>;
     exercises: Array<{ id: number; label: string }>;
-    journals: Array<{ id: number; code: string; label: string }>;
+    journals: Array<{ id: number; code: string; label: string; type: string }>;
     currencies: Array<{
       code: string; active: boolean; is_base: boolean; version: number;
     }>;

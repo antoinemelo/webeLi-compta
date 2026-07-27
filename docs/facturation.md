@@ -17,6 +17,10 @@ fige l’identité, l’adresse, les lignes, les prix et les snapshots TVA. Le r
 de l’émission rend le même numéro. La comptabilisation produit une écriture
 équilibrée et idempotente.
 
+Avant émission, l’en-tête et les lignes du brouillon restent modifiables dans
+la fenêtre de facture. Un avoir ne peut être créé qu’après l’émission de la
+facture d’origine.
+
 Une facture comptabilisée n’est jamais supprimée ni réécrite. Sa correction
 passe par un avoir émis et comptabilisé ; l’original demeure dans l’historique.
 Les factures fournisseurs exigent leur numéro externe, unique par fournisseur.
@@ -38,6 +42,10 @@ Un paiement existe indépendamment des factures. Les allocations N–N permetten
 de répartir plusieurs paiements sur une facture ou un paiement sur plusieurs
 factures. La somme allouée ne peut dépasser ni le paiement ni le solde du
 document, même d’un centime.
+
+Lorsque le paiement est entièrement lettré, l’interface le comptabilise dans le
+grand livre. Le compte collectif doit être celui des factures allouées ; un
+rejeu rend la même écriture.
 
 L’échéancier exige une date de référence visible :
 

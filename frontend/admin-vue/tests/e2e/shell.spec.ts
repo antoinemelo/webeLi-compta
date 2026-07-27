@@ -1107,33 +1107,61 @@ test('facturation client, contact 360 et aging utilisent le parcours Vue unique'
   await page.getByLabel('NPA').fill('1200');
   await page.getByLabel('Localité').fill('Genève');
   await page.getByRole('button', { name: 'Ajouter au registre' }).click();
-  await expect(page.getByRole('row').filter({ hasText: 'Client E2E SA' })).toBeVisible();
+  const contactRow = page.getByRole('row').filter({ hasText: 'Client E2E SA' });
+  await expect(contactRow).toBeVisible();
+  await contactRow.getByRole('button', { name: 'Ouvrir' }).click();
+  const contactDialog = page.getByRole('dialog', { name: 'Client E2E SA' });
+  await expect(contactDialog.getByRole('heading', { name: 'Documents' })).toBeVisible();
+  await expect(contactDialog.getByRole('heading', { name: 'Paiements' })).toBeVisible();
+  await contactDialog.getByRole('button', { name: 'Fermer' }).click();
 
   await page.getByRole('link', { name: 'Ventes', exact: true }).click();
   await page.getByRole('button', { name: 'Nouveau document' }).click();
-  await page.getByLabel('Client').selectOption({ label: 'Client E2E SA' });
-  await page.getByLabel('Date du document').fill('2026-07-20');
-  await page.getByLabel('Échéance explicite').fill('2026-07-26');
-  const collective = page.getByLabel('Compte collectif');
+  const newInvoiceDialog = page.getByRole('dialog', {
+    name: 'Nouvelle facture client'
+  });
+  await expect(newInvoiceDialog).toBeVisible();
+  await newInvoiceDialog.getByLabel('Client', { exact: true })
+    .selectOption({ label: 'Client E2E SA' });
+  await newInvoiceDialog.getByLabel('Date du document').fill('2026-07-20');
+  await newInvoiceDialog.getByLabel('Échéance explicite').fill('2026-07-26');
+  const collective = newInvoiceDialog.getByLabel('Paiement de la vente');
   await chooseAccount(collective, '1100', 'Tab');
-  await page.getByLabel('Libellé', { exact: true }).fill('Prestation E2E');
-  await page.getByLabel('Montant', { exact: true }).fill('100.00');
-  const revenue = page.getByLabel('Compte', { exact: true });
+  await newInvoiceDialog.getByLabel('Libellé', { exact: true }).fill('Prestation E2E');
+  await newInvoiceDialog.getByLabel('Montant', { exact: true }).fill('100.00');
+  const revenue = newInvoiceDialog.getByLabel('Compte', { exact: true });
   await revenue.fill('3400');
   await page.getByText('Ligne 1', { exact: true }).click();
   await expect(revenue).toHaveValue(/3400/);
-  await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
-  expect(await page.getByLabel('Code TVA').evaluate((element) =>
+  await newInvoiceDialog.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
+  expect(await newInvoiceDialog.getByLabel('Code TVA').evaluate((element) =>
     (element as HTMLSelectElement).matches(':invalid')
   )).toBe(true);
-  await page.getByLabel('Code TVA').selectOption({ label: 'VE81 · Ventes 8,1 %' });
-  await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
+  await newInvoiceDialog.getByLabel('Code TVA')
+    .selectOption({ label: 'VE81 · Ventes 8,1 %' });
+  await newInvoiceDialog.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
   const invoice = page.getByRole('row').filter({ hasText: 'Client E2E SA' });
   await expect(invoice).toContainText('108.10 CHF');
+  await invoice.getByRole('button', { name: 'Modifier' }).click();
+  const editDialog = page.getByRole('dialog', { name: /Modifier le brouillon/ });
+  await expect(editDialog.getByLabel('Libellé', { exact: true }))
+    .toHaveValue('Prestation E2E');
+  await editDialog.getByLabel('Libellé', { exact: true }).fill('Prestation E2E corrigée');
+  await editDialog.getByRole('button', { name: 'Enregistrer les modifications' }).click();
+  await expect(page.getByText('Brouillon mis à jour.')).toBeVisible();
   await invoice.getByRole('button', { name: 'Émettre' }).click();
   await expect(invoice).toContainText(/F-2026-/);
   await invoice.getByRole('button', { name: 'Comptabiliser' }).click();
   await expect(page.getByText('Document comptabilisé dans le grand livre.')).toBeVisible();
+
+  await page.getByRole('link', { name: 'Achats', exact: true }).click();
+  await page.getByRole('button', { name: 'Nouveau document' }).click();
+  const purchaseDialog = page.getByRole('dialog', {
+    name: 'Nouvelle facture fournisseur'
+  });
+  await expect(purchaseDialog.getByLabel("Paiement de l'achat")).toBeVisible();
+  await expect(purchaseDialog.getByLabel('Référence fournisseur')).toBeVisible();
+  await purchaseDialog.getByRole('button', { name: 'Fermer' }).click();
 
   await page.getByRole('link', { name: 'Échéancier', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Échéancier et lettrage' })).toBeVisible();
@@ -1142,10 +1170,30 @@ test('facturation client, contact 360 et aging utilisent le parcours Vue unique'
   await page.getByRole('button', { name: 'Saisir un paiement' }).click();
   const paymentDialog = page.getByRole('dialog', { name: 'Saisir un paiement' });
   await expect(paymentDialog).toBeVisible();
-  await paymentDialog.getByRole('button', { name: 'Fermer' }).click();
+  await paymentDialog.getByLabel('Contact', { exact: true })
+    .selectOption({ label: 'Client E2E SA' });
+  await paymentDialog.getByLabel('Date').fill('2026-07-26');
+  await paymentDialog.getByLabel('Montant CHF').fill('108.10');
+  await paymentDialog.getByLabel('Référence').fill('REGLEMENT-E2E');
+  await chooseAccount(paymentDialog.getByLabel('Compte de trésorerie'), '1020');
+  await paymentDialog.getByRole('button', { name: 'Enregistrer' }).click();
+  await expect(page.getByText('Paiement saisi indépendamment des factures.'))
+    .toBeVisible();
   await page.getByRole('button', { name: 'Allouer un paiement' }).click();
-  await expect(page.getByRole('dialog', { name: 'Allouer un paiement' })).toBeVisible();
-  await page.getByRole('dialog', { name: 'Allouer un paiement' })
+  const allocationDialog = page.getByRole('dialog', {
+    name: 'Allouer un paiement'
+  });
+  await allocationDialog.getByLabel('Paiement disponible').selectOption({ index: 1 });
+  await allocationDialog.getByLabel('Facture ouverte').selectOption({ index: 1 });
+  await allocationDialog.getByLabel('Montant à allouer').fill('108.10');
+  await allocationDialog.getByRole('button', {
+    name: 'Lettrer et comptabiliser si soldé'
+  }).click();
+  await expect(page.getByText('Paiement intégralement lettré et comptabilisé.'))
+    .toBeVisible();
+  await page.getByRole('button', { name: 'Tracer un rappel' }).click();
+  await expect(page.getByRole('dialog', { name: 'Tracer un rappel' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Tracer un rappel' })
     .getByRole('button', { name: 'Fermer' }).click();
   await page.getByRole('link', { name: 'Récurrences', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Factures récurrentes' })).toBeVisible();

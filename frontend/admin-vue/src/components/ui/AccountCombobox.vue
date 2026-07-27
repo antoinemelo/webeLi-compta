@@ -48,6 +48,7 @@ const open = ref(false);
 const editing = ref(false);
 const activeIndex = ref(0);
 const dropdownStyle = ref<Record<string, string>>({});
+const teleportTarget = ref<HTMLElement | string>('body');
 const generatedId = `account-combobox-${Math.random().toString(36).slice(2, 10)}`;
 const inputId = computed(() => props.id || generatedId);
 const listboxId = computed(() => `${inputId.value}-listbox`);
@@ -175,6 +176,7 @@ watch(open, (isOpen) => {
 onBeforeUnmount(removePositionListeners);
 
 function focusInput(): void {
+  teleportTarget.value = input.value?.closest('dialog') ?? 'body';
   open.value = true;
   editing.value = true;
   query.value = selectedOption.value ? displayLabel(selectedOption.value) : '';
@@ -303,7 +305,7 @@ function onBlur(): void {
       @keydown="onKeydown"
       @blur="onBlur"
     >
-    <Teleport to="body">
+    <Teleport :to="teleportTarget">
       <ul
         v-if="open"
         :id="listboxId"

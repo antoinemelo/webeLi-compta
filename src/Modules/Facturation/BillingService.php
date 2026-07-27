@@ -105,7 +105,9 @@ final class BillingService
                 str_contains($type, 'fournisseur')
                 && trim($externalNumber) === ''
             ) {
-                throw new BillingException('Le numéro de facture fournisseur est requis.');
+                throw new BillingException(
+                    'La référence de facture fournisseur est requise.'
+                );
             }
             $this->assertDraftReferences(
                 $organisationId,
@@ -188,6 +190,160 @@ final class BillingService
                 ['type' => $type]
             );
             return $id;
+        }, true);
+    }
+
+    /**
+     * @param list<array<string,mixed>> $lines
+     */
+    public function updateDraft(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $expectedVersion,
+        string $type,
+        int $contactId,
+        string $documentDate,
+        string $dueDate,
+        array $lines,
+        int $collectiveAccountId,
+        string $externalNumber = '',
+        ?int $attachmentId = null,
+        ?int $actorId = null,
+        string $currency = '',
+        ?int $exchangeRateId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $documentId,
+            $expectedVersion,
+            $type,
+            $contactId,
+            $documentDate,
+            $dueDate,
+            $lines,
+            $collectiveAccountId,
+            $externalNumber,
+            $attachmentId,
+            $actorId,
+            $currency,
+            $exchangeRateId
+        ): void {
+            $document = $this->document($organisationId, $dossierId, $documentId);
+            if (
+                $document['statut'] !== 'brouillon'
+                || $document['workflow'] !== 'facturation'
+                || (int) $document['version'] !== $expectedVersion
+                || (string) $document['type'] !== $type
+            ) {
+                throw new BillingException(
+                    'Brouillon absent, émis ou modifié par un autre utilisateur.'
+                );
+            }
+            $this->assertDate($documentDate);
+            $this->assertDate($dueDate);
+            if ($dueDate < $documentDate || $lines === []) {
+                throw new BillingException('Dates ou lignes du document invalides.');
+            }
+            if (
+                str_contains($type, 'fournisseur')
+                && trim($externalNumber) === ''
+            ) {
+                throw new BillingException(
+                    'La référence de facture fournisseur est requise.'
+                );
+            }
+            $this->assertDraftReferences(
+                $organisationId,
+                $dossierId,
+                $type,
+                $contactId,
+                $collectiveAccountId,
+                $lines
+            );
+            $contact = $this->contacts->snapshot(
+                $organisationId,
+                $dossierId,
+                $contactId
+            );
+            if (trim($currency) === '') {
+                $currency = (string) $document['monnaie'];
+            }
+            $rate = $this->exchange->snapshot(
+                $organisationId,
+                $dossierId,
+                $currency,
+                $documentDate,
+                $exchangeRateId
+            );
+            $snapshot = json_encode(
+                $contact,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
+            );
+            $address = json_encode(
+                $contact['adresse'],
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE
+            );
+            $update = $this->pdo->prepare(
+                "UPDATE documents_financiers
+                 SET contact_id = ?, date_document = ?, date_echeance = ?,
+                     adresse_snapshot_json = ?, contact_snapshot_json = ?,
+                     compte_collectif_id = ?, numero_externe = ?,
+                     justificatif_id = CASE WHEN ? IS NULL
+                       THEN justificatif_id ELSE ? END,
+                     condition_paiement_id = NULL,
+                     condition_paiement_snapshot_json = '{}',
+                     monnaie = ?, devise_base = ?,
+                     taux_change_numerateur = ?,
+                     taux_change_denominateur = ?, taux_change_date = ?,
+                     taux_change_source = ?, modifie_le = datetime('now'),
+                     version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND statut = 'brouillon' AND workflow = 'facturation'
+                   AND version = ?"
+            );
+            $update->execute([
+                $contactId,
+                $documentDate,
+                $dueDate,
+                $address,
+                $snapshot,
+                $collectiveAccountId,
+                trim($externalNumber),
+                $attachmentId,
+                $attachmentId,
+                $rate['currency'],
+                $rate['base_currency'],
+                $rate['numerator'],
+                $rate['denominator'],
+                $rate['rate_date'],
+                $rate['source'],
+                $documentId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($update->rowCount() !== 1) {
+                throw new BillingException('Conflit de version du brouillon.');
+            }
+            $this->replaceLines(
+                $organisationId,
+                $dossierId,
+                $documentId,
+                $lines,
+                $expectedVersion + 1,
+                $actorId
+            );
+            $this->audit->log(
+                'facturation.document_brouillon_modifie',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'document_financier',
+                (string) $documentId,
+                ['type' => $type, 'lignes' => count($lines)]
+            );
         }, true);
     }
 
@@ -770,7 +926,7 @@ final class BillingService
         );
         $exercises->execute([$dossierId]);
         $journals = $this->pdo->prepare(
-            'SELECT id, code, libelle FROM journaux
+            'SELECT id, code, libelle, type FROM journaux
              WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
              ORDER BY code'
         );

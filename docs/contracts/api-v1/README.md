@@ -187,6 +187,7 @@ Les exemples versionnés sont :
 | GET | `/api/v1/facturation` | ventes, achats, contacts 360°, échéancier et récurrences |
 | GET | `/api/v1/facturation/export` | export CSV filtré avec date de référence |
 | POST | `/api/v1/facturation/documents` | création d’un document en brouillon |
+| POST | `/api/v1/facturation/documents/modifier` | modification optimiste d’un brouillon et de ses lignes |
 | POST | `/api/v1/facturation/documents/emettre` | émission et numérotation idempotente |
 | POST | `/api/v1/facturation/documents/comptabiliser` | comptabilisation via `EntryService` |
 | POST | `/api/v1/facturation/documents/avoirs` | création d’un brouillon d’avoir |
@@ -198,6 +199,7 @@ Les exemples versionnés sont :
 | POST | `/api/v1/facturation/recurrences/generer` | génération idempotente de brouillons |
 | POST | `/api/v1/facturation/rappels` | traçage d’un rappel |
 | POST | `/api/v1/facturation/paiements` | saisie d’un paiement indépendant |
+| POST | `/api/v1/facturation/paiements/comptabiliser` | comptabilisation idempotente d’un paiement lettré |
 | POST | `/api/v1/facturation/allocations` | allocation N–N d’un paiement |
 | POST | `/api/v1/facturation/allocations/avoirs` | allocation d’un avoir |
 | POST | `/api/v1/facturation/allocations/annuler` | délettrage audité |

@@ -492,6 +492,7 @@ final class ApiRouteRegistry
             $this->add($router, 'GET', '/api/v1/facturation', $this->billing->show(...));
             $this->add($router, 'GET', '/api/v1/facturation/export', $this->billing->export(...));
             $this->add($router, 'POST', '/api/v1/facturation/documents', $this->billing->createDocument(...));
+            $this->add($router, 'POST', '/api/v1/facturation/documents/modifier', $this->billing->updateDocument(...));
             $this->add($router, 'POST', '/api/v1/facturation/documents/emettre', $this->billing->issueDocument(...));
             $this->add($router, 'POST', '/api/v1/facturation/documents/comptabiliser', $this->billing->postDocument(...));
             $this->add($router, 'POST', '/api/v1/facturation/documents/avoirs', $this->billing->createCredit(...));
@@ -503,6 +504,7 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/facturation/recurrences/generer', $this->billing->generateRecurrences(...));
             $this->add($router, 'POST', '/api/v1/facturation/rappels', $this->billing->createReminder(...));
             $this->add($router, 'POST', '/api/v1/facturation/paiements', $this->billing->createPayment(...));
+            $this->add($router, 'POST', '/api/v1/facturation/paiements/comptabiliser', $this->billing->postPayment(...));
             $this->add($router, 'POST', '/api/v1/facturation/allocations', $this->billing->allocatePayment(...));
             $this->add($router, 'POST', '/api/v1/facturation/allocations/avoirs', $this->billing->allocateCredit(...));
             $this->add($router, 'POST', '/api/v1/facturation/allocations/annuler', $this->billing->unallocate(...));

@@ -156,6 +156,7 @@ final class PaymentService
             if (
                 $payment['statut'] !== 'valide'
                 || $document['type'] !== $expectedType
+                || !in_array($document['statut'], ['emis', 'comptabilise'], true)
                 || (int) $document['contact_id'] !== (int) $payment['contact_id']
                 || (string) $document['monnaie'] !== (string) $payment['monnaie']
             ) {
@@ -297,6 +298,26 @@ final class PaymentService
             }
             if ($payment['compte_tresorerie_id'] === null || $payment['statut'] !== 'valide') {
                 throw new BillingException('Compte de trésorerie absent ou paiement annulé.');
+            }
+            $allocatedAccounts = $this->pdo->prepare(
+                "SELECT COUNT(DISTINCT d.compte_collectif_id) AS account_count,
+                        MIN(d.compte_collectif_id) AS account_id,
+                        SUM(CASE WHEN d.statut <> 'comptabilise'
+                                 THEN 1 ELSE 0 END) AS unposted_count
+                 FROM allocations a
+                 JOIN documents_financiers d ON d.id = a.document_id
+                 WHERE a.paiement_id = ? AND a.statut = 'valide'"
+            );
+            $allocatedAccounts->execute([$paymentId]);
+            $allocationScope = $allocatedAccounts->fetch() ?: [];
+            if (
+                (int) ($allocationScope['account_count'] ?? 0) !== 1
+                || (int) ($allocationScope['account_id'] ?? 0) !== $collectiveAccountId
+                || (int) ($allocationScope['unposted_count'] ?? 0) !== 0
+            ) {
+                throw new BillingException(
+                    'Les factures lettrées doivent être comptabilisées sur le même compte collectif.'
+                );
             }
             $amount = (int) $payment['montant_base_centimes'];
             $incoming = $payment['sens'] === 'encaissement';

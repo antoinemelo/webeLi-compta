@@ -185,6 +185,47 @@ final class BillingApiController
         }, 201);
     }
 
+    public function updateDocument(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.manage');
+        $data = $this->validator->document($request, true);
+        return $this->execute($request, function () use (
+            $data,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $attachmentId = null;
+            if ($data['attachment'] !== null) {
+                $attachmentId = $this->attachments->store(
+                    $organisationId,
+                    $dossierId,
+                    $data['attachment']['name'],
+                    $data['attachment']['content'],
+                    $userId
+                );
+            }
+            $this->billing->updateDraft(
+                $organisationId,
+                $dossierId,
+                $data['document_id'],
+                $data['version'],
+                $data['type'],
+                $data['contact_id'],
+                $data['document_date'],
+                $data['due_date'],
+                $data['lines'],
+                $data['collective_account_id'],
+                $data['external_number'],
+                $attachmentId,
+                $userId,
+                $data['currency'],
+                $data['exchange_rate_id']
+            );
+            return ['updated' => true];
+        });
+    }
+
     public function issueDocument(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('facturation.issue');
@@ -415,6 +456,23 @@ final class BillingApiController
                 $userId
             ),
         ], 201);
+    }
+
+    public function postPayment(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.pay');
+        $data = $this->validator->paymentPosting($request);
+        return $this->execute($request, fn (): array => [
+            'entry_id' => $this->payments->post(
+                $organisationId,
+                $dossierId,
+                $data['payment_id'],
+                $data['collective_account_id'],
+                $data['exercise_id'],
+                $data['journal_id'],
+                $userId
+            ),
+        ]);
     }
 
     public function allocateCredit(Request $request): Response

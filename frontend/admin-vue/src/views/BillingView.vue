@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
@@ -31,11 +31,14 @@ const notifications = useNotificationStore();
 const today = new Date().toISOString().slice(0, 10);
 const activeTab = computed(() => String(route.params.tab || 'sales'));
 const workspace = computed(() => store.workspace);
-const showDocumentForm = ref(false);
 const showContactForm = ref(false);
 const showRecurrenceForm = ref(false);
+const documentDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const contactDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const reminderDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const paymentDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const allocationDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const editingDocument = ref<BillingDocument | null>(null);
 const documentAttachment = ref<{ name: string; content_base64: string } | null>(null);
 
 const documentDraft = reactive({
@@ -164,6 +167,36 @@ const contactRows = computed(() =>
     net: money(item.balance.net_cents)
   }))
 );
+const contactDocumentRows = computed(() =>
+  (workspace.value?.contact_360?.documents ?? []).map((item) => ({
+    ...item,
+    display_number: item.number || `Brouillon #${item.id}`,
+    type_label: item.type.includes('fournisseur') ? 'Achat' : 'Vente',
+    total: dualMoney(
+      item.gross_cents,
+      item.currency,
+      item.gross_base_cents,
+      item.base_currency
+    ),
+    open: dualMoney(
+      item.open_cents,
+      item.currency,
+      item.open_base_cents,
+      item.base_currency
+    ),
+    status_label: statusLabel(item.status)
+  }))
+);
+const contactPaymentRows = computed(() =>
+  (workspace.value?.contact_360?.payments ?? []).map((item) => ({
+    ...item,
+    direction_label: item.direction === 'encaissement'
+      ? 'Encaissement' : 'Décaissement',
+    amount: money(item.amount_cents, item.currency),
+    allocated: money(item.allocated_cents, item.currency),
+    unallocated: money(item.unallocated_cents, item.currency)
+  }))
+);
 const selectedContact = computed(() =>
   workspace.value?.contacts.find(
     (contact) => contact.id === store.filters.contact_id
@@ -212,6 +245,54 @@ function newLine(): DraftLine {
     account_id: 0,
     vat_code_id: ''
   };
+}
+
+function amountInput(centsValue: number): string {
+  return `${Math.floor(Math.abs(centsValue) / 100)}.${String(
+    Math.abs(centsValue) % 100
+  ).padStart(2, '0')}`;
+}
+
+function resetDocumentDraft(): void {
+  editingDocument.value = null;
+  Object.assign(documentDraft, {
+    contact_id: 0,
+    document_date: today,
+    due_date: today,
+    external_number: '',
+    collective_account_id: 0,
+    currency: context.context?.selection?.dossier.currency || 'CHF',
+    exchange_rate_id: 0,
+    lines: [newLine()]
+  });
+  documentAttachment.value = null;
+}
+
+async function openNewDocument(): Promise<void> {
+  resetDocumentDraft();
+  documentDialog.value?.open();
+}
+
+async function editDocument(item: BillingDocument): Promise<void> {
+  editingDocument.value = item;
+  Object.assign(documentDraft, {
+    contact_id: item.contact_id,
+    document_date: item.document_date,
+    due_date: item.due_date,
+    external_number: item.external_number,
+    collective_account_id: item.collective_account_id,
+    currency: item.currency,
+    exchange_rate_id: 0,
+    lines: item.lines.map((line) => ({
+      label: line.label,
+      amount: amountInput(line.unit_price_cents),
+      input_mode: line.input_mode,
+      account_id: line.account_id,
+      vat_code_id: line.vat_code_id
+    }))
+  });
+  documentAttachment.value = null;
+  documentDialog.value?.open();
 }
 
 function availableVatCodes(
@@ -328,7 +409,7 @@ async function saveDocument(): Promise<void> {
         'Aucun code TVA applicable. Configurez les codes TVA dans Configuration > Référentiels.'
       );
     }
-    await store.mutate('/facturation/documents', {
+    const payload = {
       type: documentType.value,
       contact_id: Number(documentDraft.contact_id),
       document_date: documentDraft.document_date,
@@ -339,10 +420,25 @@ async function saveDocument(): Promise<void> {
       external_number: documentDraft.external_number,
       attachment: documentAttachment.value,
       lines: apiLines(documentDraft.lines, documentDraft.document_date)
-    });
-    showDocumentForm.value = false;
+    };
+    const wasEditing = editingDocument.value !== null;
+    if (editingDocument.value) {
+      await store.mutate('/facturation/documents/modifier', {
+        ...payload,
+        document_id: editingDocument.value.id,
+        version: editingDocument.value.version
+      });
+    } else {
+      await store.mutate('/facturation/documents', payload);
+    }
+    documentDialog.value?.close();
     documentAttachment.value = null;
-    notifications.push('Document enregistré comme brouillon, sans numéro.', 'success');
+    notifications.push(
+      wasEditing
+        ? 'Brouillon mis à jour.'
+        : 'Document enregistré comme brouillon, sans numéro.',
+      'success'
+    );
   } catch (error) {
     notifications.push(
       store.error || (error instanceof Error ? error.message : 'Impossible de poursuivre.'),
@@ -358,14 +454,17 @@ async function issueDocument(item: BillingDocument): Promise<void> {
       version: item.version
     });
     notifications.push('Document émis et numéroté.', 'success');
-  } catch {
-    notifications.push(store.error, 'warning');
+  } catch (error) {
+    notifications.push(
+      store.error || (error instanceof Error ? error.message : 'Impossible de poursuivre.'),
+      'warning'
+    );
   }
 }
 
 async function postDocument(item: BillingDocument): Promise<void> {
   const exercise = workspace.value?.catalog.exercises[0];
-  const journal = workspace.value?.catalog.journals[0];
+  const journal = preferredDocumentJournal(item.type);
   if (!exercise || !journal) {
     notifications.push('Configurez un exercice ouvert et un journal.', 'warning');
     return;
@@ -382,6 +481,22 @@ async function postDocument(item: BillingDocument): Promise<void> {
   }
 }
 
+function preferredDocumentJournal(type: BillingDocument['type']) {
+  const journals = workspace.value?.catalog.journals ?? [];
+  const expectedType = type.includes('fournisseur') ? 'achats' : 'ventes';
+  return journals.find((journal) => journal.type === expectedType)
+    ?? journals.find((journal) => journal.type === 'general')
+    ?? journals[0];
+}
+
+function preferredPaymentJournal() {
+  const journals = workspace.value?.catalog.journals ?? [];
+  return journals.find((journal) => journal.type === 'banque')
+    ?? journals.find((journal) => journal.type === 'caisse')
+    ?? journals.find((journal) => journal.type === 'general')
+    ?? journals[0];
+}
+
 async function createCredit(item: BillingDocument): Promise<void> {
   try {
     await store.mutate('/facturation/documents/avoirs', {
@@ -389,8 +504,11 @@ async function createCredit(item: BillingDocument): Promise<void> {
       date: today
     });
     notifications.push('Brouillon d’avoir créé. Il devra être émis puis comptabilisé.', 'success');
-  } catch {
-    notifications.push(store.error, 'warning');
+  } catch (error) {
+    notifications.push(
+      store.error || (error instanceof Error ? error.message : 'Impossible de poursuivre.'),
+      'warning'
+    );
   }
 }
 
@@ -457,6 +575,8 @@ async function saveContact(): Promise<void> {
 async function selectContact(id: number): Promise<void> {
   store.filters.contact_id = id;
   await store.load();
+  await nextTick();
+  contactDialog.value?.open();
 }
 
 async function clearContact(): Promise<void> {
@@ -527,6 +647,7 @@ async function saveReminder(): Promise<void> {
       channel: reminderDraft.channel,
       note: reminderDraft.note
     });
+    reminderDialog.value?.close();
     notifications.push('Rappel tracé dans l’historique.', 'success');
   } catch {
     notifications.push(store.error, 'warning');
@@ -556,17 +677,78 @@ async function savePayment(): Promise<void> {
 
 async function allocatePayment(): Promise<void> {
   try {
+    const paymentId = Number(allocationDraft.payment_id);
+    const documentId = Number(allocationDraft.document_id);
+    const amountCents = cents(allocationDraft.amount);
+    const payment = workspace.value?.payments.find((item) => item.id === paymentId);
+    const document = workspace.value?.documents.find((item) => item.id === documentId);
+    const fullyAllocated = payment?.unallocated_cents === amountCents;
     await store.mutate('/facturation/allocations', {
-      payment_id: Number(allocationDraft.payment_id),
-      document_id: Number(allocationDraft.document_id),
-      amount_cents: cents(allocationDraft.amount)
+      payment_id: paymentId,
+      document_id: documentId,
+      amount_cents: amountCents
     });
+    let accountingCompleted = false;
+    if (fullyAllocated && document && document.status === 'emis') {
+      if (!workspace.value?.capabilities.post) {
+        throw new Error(
+          'Le paiement est lettré. Une personne autorisée doit comptabiliser la facture avant le paiement.'
+        );
+      }
+      await postDocumentForSettlement(document);
+    }
+    if (
+      fullyAllocated
+      && document
+      && ['emis', 'comptabilise'].includes(document.status)
+    ) {
+      await postPayment(paymentId, document.collective_account_id);
+      accountingCompleted = true;
+    }
     allocationDraft.amount = '';
     allocationDialog.value?.close();
-    notifications.push('Paiement alloué au centime.', 'success');
-  } catch {
-    notifications.push(store.error, 'warning');
+    notifications.push(
+      accountingCompleted
+        ? 'Paiement intégralement lettré et comptabilisé.'
+        : 'Paiement partiellement alloué ; il sera comptabilisé au lettrage complet.',
+      'success'
+    );
+  } catch (error) {
+    notifications.push(
+      store.error || (error instanceof Error ? error.message : 'Impossible de poursuivre.'),
+      'warning'
+    );
   }
+}
+
+async function postDocumentForSettlement(document: BillingDocument): Promise<void> {
+  const exercise = workspace.value?.catalog.exercises[0];
+  const journal = preferredDocumentJournal(document.type);
+  if (!exercise || !journal) {
+    throw new Error('Configurez un exercice ouvert et un journal.');
+  }
+  await store.mutate('/facturation/documents/comptabiliser', {
+    document_id: document.id,
+    exercise_id: exercise.id,
+    journal_id: journal.id
+  });
+}
+
+async function postPayment(
+  paymentId: number,
+  collectiveAccountId: number
+): Promise<void> {
+  const exercise = workspace.value?.catalog.exercises[0];
+  const journal = preferredPaymentJournal();
+  if (!exercise || !journal) {
+    throw new Error('Configurez un exercice ouvert et un journal.');
+  }
+  await store.mutate('/facturation/paiements/comptabiliser', {
+    payment_id: paymentId,
+    collective_account_id: collectiveAccountId,
+    exercise_id: exercise.id,
+    journal_id: journal.id
+  });
 }
 </script>
 
@@ -628,7 +810,7 @@ async function allocatePayment(): Promise<void> {
           class="button primary"
           type="button"
           :disabled="documentVatCodes.length === 0"
-          @click="showDocumentForm = !showDocumentForm"
+          @click="openNewDocument"
         >Nouveau document</button>
       </div>
 
@@ -637,9 +819,19 @@ async function allocatePayment(): Promise<void> {
         <RouterLink to="/configuration/referentiels">Configurer les codes TVA</RouterLink>.
       </div>
 
-      <form v-if="showDocumentForm" class="editor-card" @submit.prevent="saveDocument">
-        <h3>{{ direction === 'sales' ? 'Nouvelle facture client' : 'Nouvelle facture fournisseur' }}</h3>
-        <div class="form-grid">
+      <ModalDialog
+        ref="documentDialog"
+        :title="editingDocument
+          ? `Modifier le brouillon #${editingDocument.id}`
+          : direction === 'sales'
+            ? 'Nouvelle facture client'
+            : 'Nouvelle facture fournisseur'"
+        description="Renseignez l’en-tête puis ventilez la facture sur une ou plusieurs lignes."
+        wide
+        @closed="resetDocumentDraft"
+      >
+      <form class="invoice-form" @submit.prevent="saveDocument">
+        <div class="form-grid invoice-header-grid">
           <FormField id="billing-contact" :label="direction === 'sales' ? 'Client' : 'Fournisseur'">
             <template #default="{ describedBy }">
               <select id="billing-contact" v-model.number="documentDraft.contact_id" :aria-describedby="describedBy" required>
@@ -648,7 +840,7 @@ async function allocatePayment(): Promise<void> {
               </select>
             </template>
           </FormField>
-          <FormField v-if="direction === 'purchases'" id="billing-external" label="Numéro fournisseur">
+          <FormField v-if="direction === 'purchases'" id="billing-external" label="Référence fournisseur">
             <template #default="{ describedBy }"><input id="billing-external" v-model="documentDraft.external_number" :aria-describedby="describedBy" required></template>
           </FormField>
           <FormField id="billing-date" label="Date du document">
@@ -657,7 +849,10 @@ async function allocatePayment(): Promise<void> {
           <FormField id="billing-due" label="Échéance explicite">
             <template #default="{ describedBy }"><input id="billing-due" v-model="documentDraft.due_date" type="date" :aria-describedby="describedBy" required></template>
           </FormField>
-          <FormField id="billing-collective" label="Compte collectif">
+          <FormField
+            id="billing-collective"
+            :label="direction === 'sales' ? 'Paiement de la vente' : `Paiement de l'achat`"
+          >
             <template #default="{ describedBy }">
               <AccountCombobox
                 id="billing-collective"
@@ -687,29 +882,57 @@ async function allocatePayment(): Promise<void> {
             <template #default="{ describedBy }"><input id="billing-attachment" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" :aria-describedby="describedBy" @change="attachmentSelected"></template>
           </FormField>
         </div>
-        <fieldset v-for="(line, index) in documentDraft.lines" :key="index" class="line-editor">
+        <div class="invoice-lines-heading">
+          <div><h3>Lignes de facture</h3><p>Le montant peut être saisi net ou brut selon la ligne.</p></div>
+          <button class="button secondary small" type="button" @click="documentDraft.lines.push(newLine())">Ajouter une ligne</button>
+        </div>
+        <fieldset v-for="(line, index) in documentDraft.lines" :key="index" class="invoice-line">
           <legend>Ligne {{ index + 1 }}</legend>
-          <input v-model="line.label" aria-label="Libellé" placeholder="Libellé" required>
-          <input v-model="line.amount" aria-label="Montant" inputmode="decimal" placeholder="Montant" required>
-          <AccountCombobox
-            v-model="line.account_id"
-            :options="workspace.catalog.accounts"
-            aria-label="Compte"
-            placeholder="Compte"
-            required
-          />
-          <select v-model.number="line.vat_code_id" aria-label="Code TVA" required>
-            <option value="" disabled>Sélectionner un code TVA</option>
-            <option v-for="vat in documentVatCodes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option>
-          </select>
-          <select v-model="line.input_mode" aria-label="Mode de saisie"><option value="net">Net</option><option value="brut">Brut</option></select>
-          <button v-if="documentDraft.lines.length > 1" class="button ghost" type="button" @click="documentDraft.lines.splice(index, 1)">Retirer</button>
+          <div class="invoice-line-grid">
+            <FormField :id="`billing-line-label-${index}`" label="Libellé">
+              <template #default="{ describedBy }"><input :id="`billing-line-label-${index}`" v-model="line.label" :aria-describedby="describedBy" placeholder="Prestation ou article" required></template>
+            </FormField>
+            <FormField :id="`billing-line-account-${index}`" label="Compte">
+              <template #default="{ describedBy }">
+                <AccountCombobox
+                  :id="`billing-line-account-${index}`"
+                  v-model="line.account_id"
+                  :options="workspace.catalog.accounts"
+                  :aria-describedby="describedBy"
+                  placeholder="Rechercher un compte"
+                  required
+                />
+              </template>
+            </FormField>
+            <FormField :id="`billing-line-amount-${index}`" label="Montant">
+              <template #default="{ describedBy }"><input :id="`billing-line-amount-${index}`" v-model="line.amount" inputmode="decimal" :aria-describedby="describedBy" placeholder="0.00" required></template>
+            </FormField>
+            <FormField :id="`billing-line-vat-${index}`" label="Code TVA">
+              <template #default="{ describedBy }">
+                <select :id="`billing-line-vat-${index}`" v-model.number="line.vat_code_id" :aria-describedby="describedBy" required>
+                  <option value="" disabled>Sélectionner</option>
+                  <option v-for="vat in documentVatCodes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option>
+                </select>
+              </template>
+            </FormField>
+            <FormField :id="`billing-line-mode-${index}`" label="Saisie">
+              <template #default="{ describedBy }">
+                <select :id="`billing-line-mode-${index}`" v-model="line.input_mode" :aria-describedby="describedBy">
+                  <option value="net">Montant net</option>
+                  <option value="brut">Montant brut</option>
+                </select>
+              </template>
+            </FormField>
+            <button v-if="documentDraft.lines.length > 1" class="button ghost small remove-line" type="button" @click="documentDraft.lines.splice(index, 1)">Retirer</button>
+          </div>
         </fieldset>
-        <div class="button-row">
-          <button class="button ghost" type="button" @click="documentDraft.lines.push(newLine())">Ajouter une ligne</button>
-          <button class="button primary" :disabled="store.saving">Enregistrer le brouillon</button>
+        <div class="dialog-actions">
+          <button class="button primary" :disabled="store.saving">
+            {{ editingDocument ? 'Enregistrer les modifications' : 'Enregistrer le brouillon' }}
+          </button>
         </div>
       </form>
+      </ModalDialog>
 
       <DataTable
         v-if="documentRows.length"
@@ -728,6 +951,7 @@ async function allocatePayment(): Promise<void> {
       >
         <template #cell-actions="{ row }">
           <div class="table-actions">
+            <button v-if="row.status === 'brouillon' && workspace.capabilities.manage" type="button" @click="editDocument(row as BillingDocument)">Modifier</button>
             <button v-if="row.status === 'brouillon' && workspace.capabilities.issue" type="button" @click="issueDocument(row as BillingDocument)">Émettre</button>
             <button v-if="row.status === 'emis' && workspace.capabilities.post" type="button" @click="postDocument(row as BillingDocument)">Comptabiliser</button>
             <button v-if="['emis', 'comptabilise'].includes(String(row.status)) && String(row.type).startsWith('facture_') && workspace.capabilities.manage" type="button" @click="createCredit(row as BillingDocument)">Créer un avoir</button>
@@ -806,24 +1030,75 @@ async function allocatePayment(): Promise<void> {
       >
         <template #cell-actions="{ row }"><button type="button" @click="selectContact(Number(row.id))">Ouvrir</button></template>
       </DataTable>
-      <article v-if="selectedContact && workspace.contact_360" class="detail-card">
-        <div class="toolbar"><div><p class="eyebrow">Vue 360° au {{ workspace.reference_date }}</p><h3>{{ selectedContact.label }}</h3><p>{{ selectedContact.email || 'Sans courriel' }} · {{ selectedContact.address.city }}</p></div><button class="button ghost" type="button" @click="clearContact">Fermer</button></div>
-        <dl class="detail-grid">
-          <div><dt>Créances nettes</dt><dd>{{ money(workspace.contact_360.balance.receivable_cents) }}</dd></div>
-          <div><dt>Dettes nettes</dt><dd>{{ money(workspace.contact_360.balance.payable_cents) }}</dd></div>
-          <div><dt>Solde net</dt><dd>{{ money(workspace.contact_360.balance.net_cents) }}</dd></div>
-          <div><dt>Documents</dt><dd>{{ workspace.contact_360.documents.length }}</dd></div>
-          <div><dt>Paiements</dt><dd>{{ workspace.contact_360.payments.length }}</dd></div>
-        </dl>
-      </article>
+      <ModalDialog
+        ref="contactDialog"
+        :title="selectedContact?.label || 'Vue 360°'"
+        :description="`Historique au ${workspace.reference_date}`"
+        wide
+        @closed="clearContact"
+      >
+        <div v-if="selectedContact && workspace.contact_360" class="contact-history">
+          <p class="contact-summary">
+            {{ selectedContact.email || 'Sans courriel' }}
+            · {{ selectedContact.phone || 'Sans téléphone' }}
+            · {{ selectedContact.address.postal_code }} {{ selectedContact.address.city }}
+          </p>
+          <dl class="detail-grid contact-kpis">
+            <div><dt>Créances nettes</dt><dd>{{ money(workspace.contact_360.balance.receivable_cents) }}</dd></div>
+            <div><dt>Dettes nettes</dt><dd>{{ money(workspace.contact_360.balance.payable_cents) }}</dd></div>
+            <div><dt>Solde net</dt><dd>{{ money(workspace.contact_360.balance.net_cents) }}</dd></div>
+            <div><dt>Documents</dt><dd>{{ workspace.contact_360.documents.length }}</dd></div>
+            <div><dt>Paiements</dt><dd>{{ workspace.contact_360.payments.length }}</dd></div>
+          </dl>
+          <section class="history-section">
+            <h3>Documents</h3>
+            <DataTable
+              v-if="contactDocumentRows.length"
+              caption="Historique des documents du contact"
+              :columns="[
+                { key: 'display_number', label: 'Document' },
+                { key: 'type_label', label: 'Nature' },
+                { key: 'document_date', label: 'Date' },
+                { key: 'due_date', label: 'Échéance' },
+                { key: 'total', label: 'Total' },
+                { key: 'open', label: 'Ouvert' },
+                { key: 'status_label', label: 'Statut' }
+              ]"
+              :rows="contactDocumentRows"
+            />
+            <EmptyState v-else title="Aucun document" description="Aucun document pour ce contact à la date choisie." />
+          </section>
+          <section class="history-section">
+            <h3>Paiements</h3>
+            <DataTable
+              v-if="contactPaymentRows.length"
+              caption="Historique des paiements du contact"
+              :columns="[
+                { key: 'payment_date', label: 'Date' },
+                { key: 'direction_label', label: 'Sens' },
+                { key: 'reference', label: 'Référence' },
+                { key: 'amount', label: 'Montant' },
+                { key: 'allocated', label: 'Alloué' },
+                { key: 'unallocated', label: 'Non alloué' }
+              ]"
+              :rows="contactPaymentRows"
+            />
+            <EmptyState v-else title="Aucun paiement" description="Aucun paiement n’est rattaché à ce contact." />
+          </section>
+        </div>
+      </ModalDialog>
     </template>
 
     <template v-else-if="workspace && activeTab === 'echeancier'">
       <div class="toolbar">
         <div><h2>Échéancier et lettrage</h2><p>Créances et dettes ouvertes, calculées au {{ workspace.reference_date }}.</p></div>
-        <div v-if="workspace.capabilities.pay" class="button-row">
-          <button class="button secondary" type="button" @click="paymentDialog?.open()">Saisir un paiement</button>
-          <button class="button primary" type="button" @click="allocationDialog?.open()">Allouer un paiement</button>
+        <div
+          v-if="workspace.capabilities.pay || workspace.capabilities.remind"
+          class="button-row"
+        >
+          <button v-if="workspace.capabilities.remind" class="button ghost" type="button" @click="reminderDialog?.open()">Tracer un rappel</button>
+          <button v-if="workspace.capabilities.pay" class="button secondary" type="button" @click="paymentDialog?.open()">Saisir un paiement</button>
+          <button v-if="workspace.capabilities.pay" class="button primary" type="button" @click="allocationDialog?.open()">Allouer un paiement</button>
         </div>
       </div>
       <div class="kpi-grid">
@@ -842,36 +1117,183 @@ async function allocatePayment(): Promise<void> {
       />
 
       <ModalDialog ref="paymentDialog" title="Saisir un paiement" description="Enregistrez le règlement indépendamment de son allocation aux factures.">
-        <form v-if="workspace.capabilities.pay" @submit.prevent="savePayment">
+        <form v-if="workspace.capabilities.pay" class="modal-form-grid" @submit.prevent="savePayment">
           <FormField id="payment-contact" label="Contact"><template #default="{ describedBy }"><select id="payment-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="contact in workspace.contacts" :key="contact.id" :value="contact.id">{{ contact.label }}</option></select></template></FormField>
           <FormField id="payment-direction" label="Sens"><template #default="{ describedBy }"><select id="payment-direction" v-model="paymentDraft.direction" :aria-describedby="describedBy"><option value="encaissement">Encaissement client</option><option value="decaissement">Décaissement fournisseur</option></select></template></FormField>
           <FormField id="payment-date" label="Date"><template #default="{ describedBy }"><input id="payment-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="payment-amount" :label="`Montant ${paymentDraft.currency}`"><template #default="{ describedBy }"><input id="payment-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
+          <FormField id="payment-reference" label="Référence"><template #default="{ describedBy }"><input id="payment-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy" placeholder="Communication ou référence bancaire"></template></FormField>
           <FormField id="payment-currency" label="Devise"><template #default="{ describedBy }"><select id="payment-currency" v-model="paymentDraft.currency" :aria-describedby="describedBy" required @change="paymentDraft.exchange_rate_id = 0"><option v-for="currencyItem in workspace.catalog.currencies" :key="currencyItem.code" :value="currencyItem.code">{{ currencyItem.code }}{{ currencyItem.is_base ? ' · base' : '' }}</option></select></template></FormField>
           <FormField v-if="paymentDraft.currency !== context.context?.selection?.dossier.currency" id="payment-rate" label="Taux figé"><template #default="{ describedBy }"><select id="payment-rate" v-model.number="paymentDraft.exchange_rate_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="rate in paymentExchangeRates" :key="rate.id" :value="rate.id">{{ rate.rate_date }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option></select></template></FormField>
           <FormField id="payment-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="payment-account" v-model="paymentDraft.ledger_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
-          <button class="button primary" :disabled="store.saving">Enregistrer</button>
+          <div class="dialog-actions full-row"><button class="button primary" :disabled="store.saving">Enregistrer</button></div>
         </form>
       </ModalDialog>
       <ModalDialog ref="allocationDialog" title="Allouer un paiement" description="Choisissez un paiement disponible puis la facture ouverte à solder.">
-        <form v-if="workspace.capabilities.pay" @submit.prevent="allocatePayment">
+        <form v-if="workspace.capabilities.pay" class="modal-form-grid" @submit.prevent="allocatePayment">
           <FormField id="allocation-payment" label="Paiement disponible"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="payment in workspace.payments.filter((item) => item.unallocated_cents > 0)" :key="payment.id" :value="payment.id">{{ payment.contact }} · {{ money(payment.unallocated_cents, payment.currency) }}</option></select></template></FormField>
           <FormField id="allocation-document" label="Facture ouverte"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="document in workspace.documents.filter((item) => item.open_cents > 0 && item.type.startsWith('facture_'))" :key="document.id" :value="document.id">{{ document.number }} · {{ document.contact }} · {{ money(document.open_cents) }}</option></select></template></FormField>
           <FormField id="allocation-amount" label="Montant à allouer"><template #default="{ describedBy }"><input id="allocation-amount" v-model="allocationDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
-          <button class="button primary" :disabled="store.saving">Lettrer</button>
+          <div class="dialog-actions full-row"><button class="button primary" :disabled="store.saving">Lettrer et comptabiliser si soldé</button></div>
         </form>
       </ModalDialog>
 
-      <form v-if="workspace.capabilities.remind" class="editor-card" @submit.prevent="saveReminder">
-        <h3>Tracer un rappel</h3>
-        <div class="form-grid">
+      <ModalDialog ref="reminderDialog" title="Tracer un rappel" description="Conservez une trace datée de la relance sans modifier la facture.">
+      <form v-if="workspace.capabilities.remind" class="modal-form-grid" @submit.prevent="saveReminder">
           <FormField id="reminder-document" label="Facture client ouverte"><template #default="{ describedBy }"><select id="reminder-document" v-model.number="reminderDraft.document_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="document in workspace.documents.filter((item) => item.type === 'facture_client' && item.open_cents > 0)" :key="document.id" :value="document.id">{{ document.number }} · {{ document.contact }}</option></select></template></FormField>
           <FormField id="reminder-level" label="Niveau"><template #default="{ describedBy }"><input id="reminder-level" v-model.number="reminderDraft.level" type="number" min="1" max="9" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="reminder-channel" label="Canal"><template #default="{ describedBy }"><select id="reminder-channel" v-model="reminderDraft.channel" :aria-describedby="describedBy"><option value="email">Courriel</option><option value="courrier">Courrier</option><option value="telephone">Téléphone</option><option value="autre">Autre</option></select></template></FormField>
           <FormField id="reminder-note" label="Note"><template #default="{ describedBy }"><input id="reminder-note" v-model="reminderDraft.note" :aria-describedby="describedBy"></template></FormField>
-        </div>
-        <button class="button primary" :disabled="store.saving">Enregistrer le rappel</button>
+        <div class="dialog-actions full-row"><button class="button primary" :disabled="store.saving">Enregistrer le rappel</button></div>
       </form>
+      </ModalDialog>
     </template>
   </section>
 </template>
+
+<style scoped>
+.editor-card {
+  padding: 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.form-grid,
+.modal-form-grid,
+.invoice-line-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.invoice-form,
+.contact-history,
+.history-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.invoice-header-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.invoice-lines-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.invoice-lines-heading h3,
+.invoice-lines-heading p,
+.history-section h3,
+.contact-summary {
+  margin: 0;
+}
+
+.invoice-lines-heading p,
+.contact-summary {
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+
+.invoice-line {
+  min-width: 0;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--surface-soft);
+}
+
+.invoice-line legend {
+  padding: 0 0.35rem;
+  font-weight: 750;
+}
+
+.invoice-line-grid {
+  grid-template-columns:
+    minmax(12rem, 1.4fr)
+    minmax(14rem, 1.6fr)
+    minmax(7rem, 0.7fr)
+    minmax(9rem, 0.9fr)
+    minmax(7rem, 0.65fr)
+    auto;
+  align-items: end;
+}
+
+.invoice-line-grid :deep(input),
+.invoice-line-grid :deep(select),
+.invoice-header-grid :deep(input),
+.invoice-header-grid :deep(select),
+.modal-form-grid :deep(input),
+.modal-form-grid :deep(select) {
+  width: 100%;
+  min-width: 0;
+}
+
+.remove-line {
+  min-height: 2.75rem;
+  align-self: end;
+}
+
+.full-row {
+  grid-column: 1 / -1;
+}
+
+.contact-summary {
+  padding: 0.75rem 1rem;
+  border-radius: 0.55rem;
+  background: var(--surface-soft);
+}
+
+.contact-kpis {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.contact-kpis > div {
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+}
+
+.contact-kpis dt {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.contact-kpis dd {
+  margin: 0.25rem 0 0;
+  font-weight: 750;
+}
+
+@media (max-width: 980px) {
+  .invoice-header-grid,
+  .invoice-line-grid,
+  .contact-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .form-grid,
+  .modal-form-grid,
+  .invoice-header-grid,
+  .invoice-line-grid,
+  .contact-kpis {
+    grid-template-columns: 1fr;
+  }
+
+  .invoice-lines-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>
