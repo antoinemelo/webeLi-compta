@@ -87,6 +87,7 @@ use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
 use Compta\Modules\Tresorerie\TreasuryWorkspaceService;
 use Compta\Modules\Tresorerie\ExpenseService;
+use Compta\Modules\Tresorerie\ExpenseException;
 use Compta\Modules\Tresorerie\Http\ExpenseApiController;
 use Compta\Modules\Tresorerie\Http\ExpenseInputValidator;
 use Compta\Modules\Tresorerie\Http\TreasuryApiController;
@@ -10287,6 +10288,81 @@ final class Tests
         );
         $entries = new EntryService($pdo, $audit);
         $expenses = new ExpenseService($pdo, $audit, $entries);
+
+        $withoutVatDossier = $scope->createDossier(
+            $organisationId,
+            'Dépenses sans régime TVA',
+            'depenses-sans-regime-tva',
+            'reel'
+        );
+        (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))
+            ->installForDossier(
+                $organisationId,
+                $withoutVatDossier,
+                'personne_morale'
+            );
+        (new DefaultVatCodeInstaller($pdo, $audit))->install(
+            $organisationId,
+            $withoutVatDossier
+        );
+        $withoutVatSupplier = (new ContactService($pdo, $audit))->create(
+            $organisationId,
+            $withoutVatDossier,
+            [
+                'type_personne' => 'entreprise',
+                'raison_sociale' => 'Fournisseur sans régime TVA',
+            ],
+            ['fournisseur'],
+            [
+                'ligne1' => 'Rue de la TVA 1',
+                'code_postal' => '1200',
+                'localite' => 'Genève',
+                'pays' => 'CH',
+            ]
+        );
+        $withoutVatCode = $pdo->prepare(
+            "SELECT id FROM tva_codes
+             WHERE dossier_id = ? AND code = 'AM81'"
+        );
+        $withoutVatCode->execute([$withoutVatDossier]);
+        try {
+            (new ExpenseService($pdo, $audit, $entries))->createDraft(
+                $organisationId,
+                $withoutVatDossier,
+                $withoutVatSupplier,
+                '2026-01-31',
+                '2026-02-28',
+                'SANS-TVA-001',
+                $this->accountId($pdo, $withoutVatDossier, '2000'),
+                [[
+                    'libelle' => 'Fournitures',
+                    'quantite_milli' => 1000,
+                    'prix_unitaire_centimes' => 10000,
+                    'mode_saisie' => 'net',
+                    'compte_id' => $this->accountId(
+                        $pdo,
+                        $withoutVatDossier,
+                        '6500'
+                    ),
+                    'code_tva_id' => (int) $withoutVatCode->fetchColumn(),
+                    'date_prestation' => '2026-01-31',
+                ]]
+            );
+            $this->true(false, 'absence de régime TVA expliquée sans erreur interne');
+        } catch (Throwable $exception) {
+            $this->same(
+                ExpenseException::class,
+                $exception::class,
+                'absence de régime TVA convertie en erreur métier de dépense'
+            );
+            $this->same(
+                'Aucun régime TVA applicable à cette date. '
+                . 'Configurez-le dans Comptabilité → Clôture → TVA.',
+                $exception->getMessage(),
+                'prérequis TVA précisément expliqué à l’utilisateur'
+            );
+        }
+
         $line = [
             'libelle' => 'Fournitures',
             'quantite_milli' => 1000,
@@ -10308,6 +10384,15 @@ final class Tests
             $proofId
         );
         $created = $expenses->read($organisationId, $dossierId)['expenses'][0];
+        $expenseVatCodes = array_column(
+            $expenses->read($organisationId, $dossierId)['catalog']['vat_codes'],
+            'code'
+        );
+        $this->true(
+            in_array('AM81', $expenseVatCodes, true)
+            && !in_array('VN81', $expenseVatCodes, true),
+            'dépense propose les codes TVA d’achat mais aucun code de vente'
+        );
         $billing = new BillingService($pdo, $audit, $entries);
         $this->same(
             [],

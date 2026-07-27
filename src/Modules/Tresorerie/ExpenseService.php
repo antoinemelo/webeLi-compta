@@ -7,6 +7,7 @@ use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Facturation\BillingException;
 use Compta\Modules\Facturation\BillingService;
+use Compta\Modules\Tva\VatException;
 use DateTimeImmutable;
 use PDO;
 use PDOException;
@@ -72,8 +73,12 @@ final class ExpenseService
                 workflow: 'depense',
                 generationKey: $generationKey
             );
-        } catch (BillingException $exception) {
-            throw new ExpenseException($exception->getMessage(), previous: $exception);
+        } catch (BillingException|VatException $exception) {
+            $message = $exception->getMessage();
+            if ($message === 'Aucun régime TVA applicable à cette date.') {
+                $message .= ' Configurez-le dans Comptabilité → Clôture → TVA.';
+            }
+            throw new ExpenseException($message, previous: $exception);
         }
     }
 
@@ -603,11 +608,21 @@ final class ExpenseService
                 'number' => (string) $row['numero'],
                 'label' => (string) $row['libelle'],
             ], $catalog['accounts']),
-            'vat_codes' => array_map(static fn (array $row): array => [
-                'id' => (int) $row['id'],
-                'code' => (string) $row['code'],
-                'label' => (string) $row['libelle'],
-            ], $catalog['vat_codes']),
+            'vat_codes' => array_map(
+                static fn (array $row): array => [
+                    'id' => (int) $row['id'],
+                    'code' => (string) $row['code'],
+                    'label' => (string) $row['libelle'],
+                ],
+                array_values(array_filter(
+                    $catalog['vat_codes'],
+                    static fn (array $row): bool => in_array(
+                        (string) $row['nature'],
+                        ['prealable', 'acquisition', 'non_taxable', 'correction'],
+                        true
+                    )
+                ))
+            ),
             'exercises' => array_map(static fn (array $row): array => [
                 'id' => (int) $row['id'],
                 'label' => (string) $row['libelle'],
