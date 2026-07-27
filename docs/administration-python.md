@@ -11,20 +11,52 @@ python3 tools/python/compta.py
 Les sous-commandes restent disponibles pour l’automatisation. Toutes celles
 qui modifient un état commencent par une simulation et exigent `--apply`.
 
-## Créer une base neuve
+## Créer ou restaurer une base
+
+Dans le menu, l’option recommandée crée une instance immédiatement utilisable :
+administrateur, organisation, dossier, exercice, période, journal, plan
+comptable, modules et codes TVA. Le mot de passe est demandé sans être affiché
+ni placé dans la ligne de commande.
+
+La sous-commande équivalente utilise la variable d’environnement
+`COMPTA_ADMIN_PASSWORD` :
 
 ```bash
-python3 tools/python/compta.py db-create \
-  --path storage/database/nouvelle.sqlite
+COMPTA_ADMIN_PASSWORD='mot-de-passe-long' \
 python3 tools/python/compta.py db-create \
   --path storage/database/nouvelle.sqlite \
+  --initialize \
+  --admin-email admin@example.test \
+  --organisation "Mon organisation" \
+  --dossier "Comptabilité" \
   --apply
 ```
 
-La commande applique les migrations, charge le catalogue versionné de
-`database/seeds/`, puis exécute le contrôle d’intégrité. Une base existante
-n’est jamais écrasée implicitement. Avec `--replace`, elle est d’abord déplacée
-vers une sauvegarde horodatée.
+Sans `--initialize`, `db-create` produit volontairement une base technique
+vierge : schéma, référentiels globaux et catalogue des plans, mais aucun
+utilisateur, organisation ou dossier.
+
+Une base existante n’est jamais écrasée implicitement. Avec `--replace`, le
+script crée d’abord une copie SQLite cohérente dans `storage/backups/`, incluant
+les données encore présentes dans un éventuel WAL. La copie est contrôlée avant
+le remplacement et son chemin est affiché.
+
+Pour restaurer une sauvegarde, appliquer ensuite automatiquement les migrations
+manquantes et contrôler l’intégrité :
+
+```bash
+python3 tools/python/compta.py db-restore \
+  --source storage/backups/app-before-init-AAAAMMJJ-HHMMSS.sqlite \
+  --path storage/database/app.sqlite
+python3 tools/python/compta.py db-restore \
+  --source storage/backups/app-before-init-AAAAMMJJ-HHMMSS.sqlite \
+  --path storage/database/app.sqlite \
+  --apply
+```
+
+La restauration sauvegarde elle aussi la base cible avant de la remplacer. En
+cas d’échec de création, d’initialisation, de migration ou de restauration, la
+base précédente est remise en place automatiquement.
 
 ## Commit et push
 

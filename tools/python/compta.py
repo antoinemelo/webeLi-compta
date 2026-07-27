@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import argparse
 import ftplib
+import getpass
 import hashlib
 import io
 import json
 import os
 import posixpath
 import shutil
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -100,6 +102,120 @@ def storage_for_database(path: Path) -> Path:
     return path.parent.parent if path.parent.name == "database" else path.parent
 
 
+def database_environment(path: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.update({
+        "APP_DB_PATH": str(path),
+        "APP_STORAGE_PATH": str(storage_for_database(path)),
+        "APP_ENV": "dev",
+        "APP_DEBUG": "0",
+    })
+    return environment
+
+
+def check_database(path: Path, *, require_schema: bool = True) -> None:
+    if not path.is_file():
+        raise AdminError(f"Base SQLite introuvable : {path}")
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if integrity is None or integrity[0] != "ok" or foreign_keys:
+                raise AdminError(f"Base SQLite incohérente : {path}")
+            if require_schema:
+                migrations = connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'schema_migrations'"
+                ).fetchone()
+                if migrations is None or migrations[0] != 1:
+                    raise AdminError(
+                        f"Le fichier n’est pas une base WebeLi / Compta : {path}"
+                    )
+    except sqlite3.DatabaseError as error:
+        raise AdminError(f"Base SQLite illisible ({path}) : {error}") from error
+
+
+def backup_path(target: Path, reason: str) -> Path:
+    directory = storage_for_database(target) / "backups"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate = directory / f"{target.stem}-{reason}-{stamp}.sqlite"
+    if candidate.exists():
+        candidate = directory / (
+            f"{target.stem}-{reason}-{stamp}-{os.urandom(3).hex()}.sqlite"
+        )
+    return candidate
+
+
+def backup_database(source: Path, destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as original:
+            with sqlite3.connect(destination) as backup:
+                original.backup(backup)
+    except sqlite3.DatabaseError as error:
+        if destination.exists():
+            destination.unlink()
+        raise AdminError(f"Sauvegarde SQLite impossible : {error}") from error
+    check_database(destination)
+    return destination
+
+
+def remove_database_files(target: Path) -> None:
+    for path in (target, Path(str(target) + "-wal"), Path(str(target) + "-shm")):
+        if path.exists():
+            path.unlink()
+
+
+def database_summary(path: Path) -> dict[str, int]:
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+        summary = {"size": path.stat().st_size}
+        for table in (
+            "utilisateurs", "organisations", "dossiers", "comptes", "ecritures"
+        ):
+            summary[table] = int(
+                connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+            )
+        return summary
+
+
+def initialize_database(
+    target: Path,
+    args: argparse.Namespace,
+    environment: dict[str, str],
+) -> None:
+    password = str(
+        getattr(args, "admin_password", "")
+        or environment.get("COMPTA_ADMIN_PASSWORD", "")
+    )
+    if len(password) < 12:
+        raise AdminError(
+            "L’initialisation exige COMPTA_ADMIN_PASSWORD "
+            "(12 caractères minimum)."
+        )
+    environment["COMPTA_ADMIN_PASSWORD"] = password
+    year = str(getattr(args, "exercise", "") or datetime.now().year)
+    start = str(getattr(args, "start", "") or f"{year}-01-01")
+    end = str(getattr(args, "end", "") or f"{year}-12-31")
+    command = [
+        "php", "bin/console", "instance:init",
+        f"--admin-email={args.admin_email}",
+        f"--organisation={args.organisation}",
+        f"--nature={args.nature}",
+        f"--dossier={args.dossier}",
+        f"--slug={args.slug}",
+        f"--type={args.dossier_type}",
+        f"--monnaie={args.currency}",
+        f"--exercice={year}",
+        f"--debut={start}",
+        f"--fin={end}",
+        f"--modules={args.modules}",
+        f"--variante={args.plan_variant}",
+    ]
+    if getattr(args, "association", False):
+        command.append("--association")
+    run(command, env=environment)
+
+
 def database_create(args: argparse.Namespace) -> int:
     target = args.path.resolve()
     if ROOT not in target.parents and not args.allow_outside_project:
@@ -110,42 +226,112 @@ def database_create(args: argparse.Namespace) -> int:
     if target.exists():
         if not args.replace:
             raise AdminError("La base existe déjà. Utilisez --replace pour créer une sauvegarde puis la remplacer.")
-        backup = target.with_name(
-            f"{target.stem}.before-init-{datetime.now():%Y%m%d-%H%M%S}{target.suffix}"
-        )
+        check_database(target)
+        backup = backup_path(target, "before-init")
         print(f"Sauvegarde préalable : {backup}")
     else:
         backup = None
-    print("Étapes : migrations SQL, catalogue de seeds comptables, contrôle d’intégrité.")
+    initialize = bool(getattr(args, "initialize", False))
+    if initialize:
+        password = str(
+            getattr(args, "admin_password", "")
+            or os.environ.get("COMPTA_ADMIN_PASSWORD", "")
+        )
+        if len(password) < 12:
+            raise AdminError(
+                "Le mot de passe administrateur doit contenir au moins 12 caractères."
+            )
+    print("Étapes : migrations SQL, catalogue des plans comptables"
+          + (", initialisation de l’instance" if initialize else "")
+          + ", contrôle d’intégrité.")
     ensure_apply(args, "aucune base n’a été créée")
 
     target.parent.mkdir(parents=True, exist_ok=True)
     if backup is not None:
-        shutil.move(target, backup)
-        for suffix in ("-wal", "-shm"):
-            companion = Path(str(target) + suffix)
-            if companion.exists():
-                shutil.move(companion, Path(str(backup) + suffix))
-
-    environment = os.environ.copy()
-    environment.update({
-        "APP_DB_PATH": str(target),
-        "APP_STORAGE_PATH": str(storage_for_database(target)),
-        "APP_ENV": "dev",
-        "APP_DEBUG": "0",
-    })
+        backup_database(target, backup)
+        print(f"Sauvegarde vérifiée : {backup}")
+    remove_database_files(target)
+    environment = database_environment(target)
     try:
         run(["php", "bin/console", "db:migrate", "--apply", "--backup"], env=environment)
         if not args.without_seeds:
             run(["php", "bin/console", "compta:plan-seed"], env=environment)
+        if initialize:
+            initialize_database(target, args, environment)
         run(["php", "bin/console", "db:integrity"], env=environment)
     except Exception:
-        if target.exists():
-            target.unlink()
-        if backup is not None and backup.exists():
-            shutil.move(backup, target)
+        remove_database_files(target)
+        if backup is not None:
+            shutil.copy2(backup, target)
+            print(f"Base précédente restaurée après échec : {backup}")
         raise
-    print(f"Base créée et contrôlée : {target}")
+    summary = database_summary(target)
+    print(f"Base créée et contrôlée : {target} ({summary['size']} octets)")
+    if initialize:
+        print(
+            "Instance utilisable : "
+            f"{summary['utilisateurs']} utilisateur(s), "
+            f"{summary['organisations']} organisation(s), "
+            f"{summary['dossiers']} dossier(s), "
+            f"{summary['comptes']} compte(s)."
+        )
+    else:
+        print(
+            "Base technique vierge : aucun utilisateur, organisation ou dossier "
+            "n’a été créé."
+        )
+    return 0
+
+
+def database_restore(args: argparse.Namespace) -> int:
+    source = args.source.resolve()
+    target = args.path.resolve()
+    if ROOT not in target.parents and not args.allow_outside_project:
+        raise AdminError(
+            "La base cible est hors du projet. Ajoutez "
+            "--allow-outside-project pour confirmer ce périmètre."
+        )
+    check_database(source)
+    if source == target:
+        raise AdminError("La sauvegarde source et la base cible sont identiques.")
+    previous = None
+    if target.exists():
+        check_database(target)
+        previous = backup_path(target, "before-restore")
+    print(f"Sauvegarde à restaurer : {source}")
+    print(f"Base cible : {target}")
+    if previous is not None:
+        print(f"Sauvegarde préalable de la cible : {previous}")
+    ensure_apply(args, "aucune base n’a été restaurée")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if previous is not None:
+        backup_database(target, previous)
+        print(f"Sauvegarde vérifiée : {previous}")
+    temporary = target.with_name(
+        f".{target.name}.restore-{os.urandom(4).hex()}.sqlite"
+    )
+    try:
+        backup_database(source, temporary)
+        remove_database_files(target)
+        os.replace(temporary, target)
+        environment = database_environment(target)
+        run(["php", "bin/console", "db:migrate", "--apply", "--backup"], env=environment)
+        run(["php", "bin/console", "db:integrity"], env=environment)
+    except Exception:
+        if temporary.exists():
+            temporary.unlink()
+        remove_database_files(target)
+        if previous is not None:
+            shutil.copy2(previous, target)
+            print(f"Base précédente restaurée après échec : {previous}")
+        raise
+    summary = database_summary(target)
+    print(
+        f"Restauration terminée : {summary['organisations']} organisation(s), "
+        f"{summary['dossiers']} dossier(s), {summary['comptes']} compte(s), "
+        f"{summary['ecritures']} écriture(s)."
+    )
     return 0
 
 
@@ -444,7 +630,7 @@ def confirm(prompt: str) -> bool:
     return input(f"{prompt} [o/N] : ").strip().lower() in {"o", "oui", "y", "yes"}
 
 
-def interactive_database() -> int:
+def interactive_create_database(initialize: bool) -> int:
     target = Path(ask(
         "Chemin de la base",
         str(ROOT / "storage" / "database" / "app.sqlite"),
@@ -457,7 +643,59 @@ def interactive_database() -> int:
     if target.exists() and not replace:
         print("Opération annulée : la base existante est conservée.")
         return 0
-    without_seeds = not confirm("Charger les seeds comptables")
+    without_seeds = False if initialize else not confirm(
+        "Charger le catalogue des plans comptables"
+    )
+    values: dict[str, Any] = {
+        "initialize": initialize,
+        "admin_password": "",
+        "admin_email": "admin@example.test",
+        "organisation": "Mon organisation",
+        "nature": "reelle",
+        "dossier": "Comptabilité",
+        "slug": "comptabilite",
+        "dossier_type": "reel",
+        "currency": "CHF",
+        "exercise": str(datetime.now().year),
+        "start": "",
+        "end": "",
+        "modules": "liquidites,facturation,comptabilite,salaires",
+        "plan_variant": "personne_morale",
+        "association": False,
+    }
+    if initialize:
+        print()
+        print("Première instance")
+        print("-" * 42)
+        values["admin_email"] = ask(
+            "Adresse e-mail de l’administrateur",
+            values["admin_email"],
+        )
+        password = getpass.getpass("Mot de passe administrateur (12 caractères minimum) : ")
+        confirmation = getpass.getpass("Confirmez le mot de passe : ")
+        if password != confirmation or len(password) < 12:
+            print("Opération annulée : mots de passe différents ou trop courts.")
+            return 0
+        values["admin_password"] = password
+        values["organisation"] = ask(
+            "Nom de l’organisation",
+            values["organisation"],
+        )
+        values["dossier"] = ask("Nom du dossier", values["dossier"])
+        values["slug"] = ask("Identifiant URL du dossier", values["slug"])
+        values["currency"] = ask("Devise de base", values["currency"]).upper()
+        values["exercise"] = ask("Exercice", values["exercise"])
+        values["start"] = ask(
+            "Début de l’exercice",
+            f"{values['exercise']}-01-01",
+        )
+        values["end"] = ask(
+            "Fin de l’exercice",
+            f"{values['exercise']}-12-31",
+        )
+        values["association"] = confirm(
+            "Ajouter l’overlay du plan comptable pour associations"
+        )
     if not confirm("Créer maintenant cette base"):
         print("Opération annulée.")
         return 0
@@ -467,7 +705,78 @@ def interactive_database() -> int:
         without_seeds=without_seeds,
         allow_outside_project=False,
         apply=True,
+        **values,
     ))
+
+
+def interactive_restore_database() -> int:
+    directory = ROOT / "storage" / "backups"
+    candidates = sorted(
+        directory.glob("*.sqlite"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:10] if directory.is_dir() else []
+    if candidates:
+        print()
+        print("Sauvegardes récentes")
+        for path in candidates:
+            print(
+                f"  - {path} "
+                f"({path.stat().st_size / (1024 * 1024):.2f} Mio)"
+            )
+    source_value = ask("Chemin exact de la sauvegarde à restaurer")
+    if not source_value:
+        print("Opération annulée : choisissez une sauvegarde.")
+        return 0
+    source = Path(source_value)
+    if not source.is_absolute():
+        source = ROOT / source
+    target = Path(ask(
+        "Base cible",
+        str(ROOT / "storage" / "database" / "app.sqlite"),
+    ))
+    if not target.is_absolute():
+        target = ROOT / target
+    if not confirm(
+        "Restaurer cette sauvegarde, après sauvegarde de la base cible"
+    ):
+        print("Opération annulée.")
+        return 0
+    return database_restore(argparse.Namespace(
+        source=source,
+        path=target,
+        allow_outside_project=False,
+        apply=True,
+    ))
+
+
+def interactive_database() -> int:
+    while True:
+        print()
+        print("Bases de données")
+        print("-" * 42)
+        print(" 1. Créer une instance utilisable (recommandé)")
+        print(" 2. Créer uniquement une base technique vierge")
+        print(" 3. Restaurer une sauvegarde existante")
+        print(" 0. Retour")
+        try:
+            choice = input("Votre choix : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if choice == "0":
+            return 0
+        if choice == "1":
+            return interactive_create_database(True)
+        if choice == "2":
+            print(
+                "ATTENTION : ce mode ne crée ni utilisateur, ni organisation, "
+                "ni dossier."
+            )
+            return interactive_create_database(False)
+        if choice == "3":
+            return interactive_restore_database()
+        print("Choix invalide.")
 
 
 def interactive_publish() -> int:
@@ -515,7 +824,7 @@ def interactive_menu() -> int:
         "2": ("Lancer la qualification complète", lambda: run(
             ["php", "bin/console", "qualify"]
         ).returncode),
-        "3": ("Créer une base depuis les migrations et seeds", interactive_database),
+        "3": ("Créer ou restaurer une base de données", interactive_database),
         "4": ("Créer un commit Git puis le pousser", interactive_publish),
         "5": ("Déployer le delta applicatif versionné", interactive_deploy),
     }
@@ -548,7 +857,10 @@ def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Administration WebeLi / Compta")
     commands = root.add_subparsers(dest="command")
 
-    database = commands.add_parser("db-create", help="Créer une base depuis migrations et seeds")
+    database = commands.add_parser(
+        "db-create",
+        help="Créer une base technique ou une instance initialisée",
+    )
     database.add_argument(
         "--path",
         type=Path,
@@ -556,9 +868,44 @@ def parser() -> argparse.ArgumentParser:
     )
     database.add_argument("--replace", action="store_true")
     database.add_argument("--without-seeds", action="store_true")
+    database.add_argument("--initialize", action="store_true")
+    database.add_argument("--admin-email", default="admin@example.test")
+    database.add_argument("--organisation", default="Mon organisation")
+    database.add_argument("--nature", choices=["reelle", "pedagogique"], default="reelle")
+    database.add_argument("--dossier", default="Comptabilité")
+    database.add_argument("--slug", default="comptabilite")
+    database.add_argument("--dossier-type", choices=["reel", "demo", "exercice"], default="reel")
+    database.add_argument("--currency", default="CHF")
+    database.add_argument("--exercise", default=str(datetime.now().year))
+    database.add_argument("--start", default="")
+    database.add_argument("--end", default="")
+    database.add_argument(
+        "--modules",
+        default="liquidites,facturation,comptabilite,salaires",
+    )
+    database.add_argument(
+        "--plan-variant",
+        choices=["personne_morale", "raison_individuelle", "societe_personnes"],
+        default="personne_morale",
+    )
+    database.add_argument("--association", action="store_true")
     database.add_argument("--allow-outside-project", action="store_true")
     database.add_argument("--apply", action="store_true")
     database.set_defaults(handler=database_create)
+
+    restoration = commands.add_parser(
+        "db-restore",
+        help="Restaurer une sauvegarde SQLite puis appliquer les migrations",
+    )
+    restoration.add_argument("--source", type=Path, required=True)
+    restoration.add_argument(
+        "--path",
+        type=Path,
+        default=ROOT / "storage" / "database" / "app.sqlite",
+    )
+    restoration.add_argument("--allow-outside-project", action="store_true")
+    restoration.add_argument("--apply", action="store_true")
+    restoration.set_defaults(handler=database_restore)
 
     publish = commands.add_parser("git-publish", help="Commit contrôlé puis push")
     publish.add_argument("--message", required=True)

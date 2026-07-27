@@ -11,9 +11,11 @@ use Compta\Core\Database\MigrationRunner;
 use Compta\Core\Diagnostics\Doctor;
 use Compta\Core\Audit\AuditLogger;
 use Compta\Modules\Dossiers\ScopeManager;
+use Compta\Modules\Dossiers\DossierRegistryService;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
+use Compta\Modules\Configuration\Application\ModuleAccessService;
 use Compta\Modules\Tresorerie\BankImportService;
 use Compta\Modules\Tresorerie\TreasuryAccountService;
 use Compta\Modules\Tresorerie\TreasuryStateService;
@@ -57,6 +59,7 @@ try {
         'app:doctor' => doctor($config, $pdo, $migrations),
         'db:migrate' => migrate($config, $pdo, $migrations, $options),
         'db:integrity' => integrity($pdo),
+        'instance:init' => initializeInstance($pdo, $root, $options),
         'user:create-admin' => createAdmin($pdo, $options),
         'organisation:create' => createOrganisation($pdo, $options),
         'dossier:create' => createDossier($pdo, $options),
@@ -95,6 +98,7 @@ Compta — commandes du socle
   db:migrate --plan
   db:migrate --apply --backup
   db:integrity
+  instance:init --admin-email=admin@example.test --organisation="Mon organisation" --nature=reelle --dossier="Comptabilité" --slug=comptabilite --type=reel --monnaie=CHF --exercice=2026 --debut=2026-01-01 --fin=2026-12-31 --modules=liquidites,facturation,comptabilite,salaires
   user:create-admin --email=admin@example.test
   organisation:create --nom="École" --nature=pedagogique
   dossier:create --organisation=1 --nom="Mandat" --slug=mandat --type=exercice
@@ -196,6 +200,88 @@ function createAdmin(PDO $pdo, array $options): int
         throw $e;
     }
     echo "Administrateur créé : {$email}\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function initializeInstance(PDO $pdo, string $root, array $options): int
+{
+    $email = optionString($options, 'admin-email');
+    $password = getenv('COMPTA_ADMIN_PASSWORD') ?: '';
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        throw new RuntimeException('Adresse e-mail administrateur invalide.');
+    }
+    if (strlen($password) < 12) {
+        throw new RuntimeException(
+            'Définissez COMPTA_ADMIN_PASSWORD (12 caractères minimum).'
+        );
+    }
+    $modules = array_values(array_filter(array_map(
+        'trim',
+        explode(',', optionString($options, 'modules'))
+    )));
+    $audit = new AuditLogger($pdo);
+    $scopes = new ScopeManager($pdo, $audit);
+    $accounting = new AccountingSetupService($pdo, $audit);
+    $moduleAccess = new ModuleAccessService($pdo);
+    $registry = new DossierRegistryService(
+        $pdo,
+        $audit,
+        $scopes,
+        new PlanSeeder($pdo, $root . '/database/seeds'),
+        $accounting,
+        new DefaultVatCodeInstaller($pdo, $audit),
+        $moduleAccess
+    );
+
+    $pdo->beginTransaction();
+    try {
+        $userId = (new UserRepository($pdo))->create($email, $password);
+        $scopes->grantRole(
+            $userId,
+            'administrateur',
+            'installation',
+            actorId: $userId
+        );
+        $organisationId = $scopes->createOrganisation(
+            optionString($options, 'organisation'),
+            optionString($options, 'nature'),
+            $userId
+        );
+        $dossier = $registry->createInitialized(
+            $organisationId,
+            optionString($options, 'dossier'),
+            optionString($options, 'slug'),
+            optionString($options, 'type'),
+            optionString($options, 'monnaie'),
+            $modules,
+            optionString($options, 'variante'),
+            isset($options['association']),
+            [
+                'projets' => isset($options['projets']),
+                'fonds_affectes' => isset($options['fonds-affectes']),
+            ],
+            optionString($options, 'exercice'),
+            optionString($options, 'debut'),
+            optionString($options, 'fin'),
+            'OD',
+            'Opérations diverses',
+            $userId
+        );
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $exception;
+    }
+
+    echo json_encode([
+        'administrator_id' => $userId,
+        'organisation_id' => $organisationId,
+        'dossier_id' => $dossier['id'],
+        'summary' => $dossier['summary'],
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
     return 0;
 }
 

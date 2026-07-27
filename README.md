@@ -252,8 +252,9 @@ documentés dans le [guide interface et accessibilité](docs/interface-accessibi
 
 ## Administration
 
-La création sûre d’une base, la publication Git et le déploiement incrémental
-FTPS sont regroupés dans :
+La création d’une instance utilisable, les bases techniques, la restauration
+contrôlée, la publication Git et le déploiement incrémental FTPS sont regroupés
+dans :
 
 ```bash
 python3 tools/python/compta.py

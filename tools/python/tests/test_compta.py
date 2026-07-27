@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,6 +29,39 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertFalse(ADMIN.is_runtime_path("storage/database/app.sqlite"))
         self.assertFalse(ADMIN.is_runtime_path("config/local.php"))
         self.assertFalse(ADMIN.is_runtime_path("livrables/SPECS_V02/README.md"))
+
+    def test_database_modes_are_explicit(self) -> None:
+        technical = ADMIN.parser().parse_args(["db-create"])
+        initialized = ADMIN.parser().parse_args(["db-create", "--initialize"])
+        restoration = ADMIN.parser().parse_args([
+            "db-restore", "--source", "backup.sqlite",
+        ])
+        self.assertFalse(technical.initialize)
+        self.assertTrue(initialized.initialize)
+        self.assertEqual(Path("backup.sqlite"), restoration.source)
+
+    def test_sqlite_backup_is_consistent_and_keeps_source(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.sqlite"
+            destination = root / "backups" / "source.sqlite"
+            with sqlite3.connect(source) as connection:
+                connection.execute(
+                    "CREATE TABLE schema_migrations "
+                    "(version TEXT PRIMARY KEY, checksum TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations VALUES ('001', 'test')"
+                )
+                connection.execute("CREATE TABLE sample (value TEXT NOT NULL)")
+                connection.execute("INSERT INTO sample VALUES ('conservé')")
+            ADMIN.backup_database(source, destination)
+            self.assertTrue(source.exists())
+            with sqlite3.connect(destination) as connection:
+                self.assertEqual(
+                    "conservé",
+                    connection.execute("SELECT value FROM sample").fetchone()[0],
+                )
 
     def test_local_delivery_reads_the_committed_blob(self) -> None:
         commit = ADMIN.git("rev-parse", "HEAD")
