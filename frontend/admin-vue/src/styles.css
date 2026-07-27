@@ -49,6 +49,47 @@ textarea {
   font: inherit;
 }
 
+.account-combobox {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.account-combobox-input {
+  width: 100%;
+}
+
+.account-combobox-list {
+  position: fixed;
+  z-index: 1000;
+  max-height: min(18rem, 45vh);
+  margin: 0;
+  padding: 0.3rem;
+  overflow-y: auto;
+  list-style: none;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  box-shadow: var(--shadow);
+}
+
+.account-combobox-list li {
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.3rem;
+  cursor: pointer;
+}
+
+.account-combobox-list li.active {
+  color: white;
+  background: var(--ink);
+}
+
+.account-combobox-list li.empty {
+  color: var(--muted);
+  cursor: default;
+}
+
 a {
   color: var(--ink);
 }
@@ -159,24 +200,23 @@ h3,
   height: 2.65rem;
   padding: 0;
   place-items: center;
-  color: var(--ink);
-  background: white;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  border-radius: 999px;
-  box-shadow: 0 8px 22px rgba(8, 9, 34, 0.22);
+  color: white;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   cursor: pointer;
 }
 
 .header-icon-button:hover,
 .header-icon-button[aria-expanded="true"] {
   color: white;
-  background: var(--accent);
-  border-color: var(--accent);
+  background: transparent;
+  opacity: 0.78;
 }
 
 .header-icon-button svg {
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 100%;
+  height: 100%;
   fill: currentColor;
 }
 
@@ -595,6 +635,60 @@ h3,
   background: var(--ink);
 }
 
+.subtabs {
+  position: sticky;
+  z-index: 14;
+  top: 8.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 1rem 0;
+  overflow-x: visible;
+  background: rgba(248, 249, 253, 0.97);
+  backdrop-filter: blur(14px);
+  scrollbar-width: none;
+}
+
+.subtabs a,
+.subtabs button {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.8rem;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  font: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.subtabs a.router-link-exact-active,
+.subtabs a.active,
+.subtabs button.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 700;
+}
+
+.secondary-tabs {
+  z-index: 14;
+  top: 8.25rem;
+}
+
+.tertiary-tabs {
+  position: relative;
+  z-index: auto;
+  top: auto;
+}
+
+.static-tabs {
+  position: relative;
+  top: auto;
+}
+
 .table-scroll {
   max-width: 100%;
   overflow: auto;
@@ -758,6 +852,55 @@ textarea {
 .confirm-dialog h2 {
   margin-top: 0;
   color: var(--ink);
+}
+
+.form-dialog {
+  width: min(42rem, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0.75rem;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+}
+
+.form-dialog.wide {
+  width: min(68rem, calc(100% - 2rem));
+}
+
+.form-dialog::backdrop {
+  background: rgba(18, 20, 42, 0.65);
+}
+
+.form-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.form-dialog-header h2,
+.form-dialog-header p {
+  margin: 0;
+}
+
+.form-dialog-header p {
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+
+.form-dialog-content {
+  max-height: calc(100dvh - 8rem);
+  padding: 1.25rem;
+  overflow-y: auto;
+}
+
+.form-dialog-content > form {
+  margin: 0;
 }
 
 .dialog-actions {
@@ -1081,6 +1224,15 @@ textarea {
   gap: 1rem;
 }
 
+.entry-metadata-row {
+  display: grid;
+  grid-template-columns:
+    minmax(10rem, 0.75fr)
+    minmax(12rem, 1fr)
+    repeat(3, minmax(10rem, 1fr));
+  gap: 0.75rem;
+}
+
 .form-grid.three {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1093,7 +1245,30 @@ textarea {
 }
 
 .editable-table {
+  width: 100%;
   min-width: 760px;
+}
+
+.entry-panel .editable-table {
+  table-layout: fixed;
+  min-width: 900px;
+}
+
+.entry-panel .editable-table th:nth-child(1) {
+  width: 30%;
+}
+
+.entry-panel .editable-table th:nth-child(2) {
+  width: 30%;
+}
+
+.entry-panel .editable-table th:nth-child(3),
+.entry-panel .editable-table th:nth-child(4) {
+  width: 18%;
+}
+
+.entry-panel .editable-table th:nth-child(5) {
+  width: 2.75rem;
 }
 
 .editable-table input,
@@ -1499,10 +1674,60 @@ textarea {
   border-top: 1px solid var(--border);
 }
 
+.payroll-payment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.payroll-payment-step {
+  display: grid;
+  align-content: start;
+  gap: 0.8rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--surface-muted);
+}
+
+.payroll-payment-step header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.payroll-payment-step header > span {
+  display: grid;
+  width: 1.8rem;
+  height: 1.8rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--primary);
+  font-weight: 800;
+}
+
+.payroll-payment-step h3,
+.payroll-payment-step p {
+  margin: 0;
+}
+
+.payroll-payment-step p {
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.payroll-payment-history {
+  margin-top: 1.25rem;
+}
+
 .t-account > div {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  border-top: 2px solid var(--primary);
+  border-top: 2px solid #111;
+  font-family: "Courier New", Courier, monospace;
 }
 
 .t-account section {
@@ -1511,34 +1736,34 @@ textarea {
 }
 
 .t-account section + section {
-  border-left: 2px solid var(--primary);
+  border-left: 2px solid #111;
 }
 
-.subtabs {
-  display: flex;
-  gap: 0.25rem;
-  margin: 1rem 0;
-  overflow-x: auto;
+.t-account section h4 {
+  margin-top: 0;
+  text-align: center;
 }
 
-.subtabs a,
-.subtabs button {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.55rem 0.8rem;
-  border: 0;
-  border-bottom: 3px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  text-decoration: none;
-  white-space: nowrap;
+.t-account section p,
+.t-account footer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.subtabs a.router-link-exact-active,
-.subtabs button.active {
-  border-bottom-color: var(--primary);
-  color: var(--primary);
-  font-weight: 700;
+.t-account .t-account-balance {
+  margin-top: 1rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid #111;
+}
+
+.t-account footer {
+  grid-template-columns: 1fr repeat(2, minmax(8rem, 1fr));
+  padding: 0.75rem 1rem;
+  border-top: 3px double #111;
+  font-family: "Courier New", Courier, monospace;
+  text-align: right;
 }
 
 .inline-create {
@@ -1623,6 +1848,8 @@ textarea {
   }
 
   .form-grid.three,
+  .entry-metadata-row,
+  .payroll-payment-grid,
   .payroll-contract-summary,
   .payroll-variable-row,
   .t-account > div {
@@ -1670,6 +1897,11 @@ textarea {
     width: 100%;
     margin-top: 1rem;
   }
+
+  .secondary-tabs {
+    position: relative;
+    top: auto;
+  }
 }
 
 @media (max-width: 390px) {
@@ -1700,6 +1932,7 @@ textarea {
   .compact-tabs {
     margin-inline: -0.25rem;
   }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1757,6 +1990,161 @@ textarea {
 
 .report-filters {
   align-items: end;
+}
+
+.financial-statement-heading,
+.financial-statement-table,
+.accounting-document-table {
+  font-family: "Courier New", Courier, monospace;
+}
+
+.financial-statement-heading {
+  margin: 1.25rem 0 0.75rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 2px solid var(--ink);
+  color: #111;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+
+.financial-statement-table {
+  width: 100%;
+  min-width: 700px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: #111;
+  font-size: 0.94rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.financial-statement-table th,
+.financial-statement-table td {
+  padding: 0.38rem 0.55rem;
+  vertical-align: top;
+  border: 0;
+  text-align: left;
+}
+
+.financial-statement-table thead th {
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid #111;
+}
+
+.financial-statement-table th:first-child,
+.financial-statement-table td:first-child {
+  width: 68%;
+}
+
+.financial-statement-table .amount {
+  width: 16%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.financial-statement-table td small {
+  display: block;
+  margin: 0.15rem 0 0 8ch;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+}
+
+.financial-statement-table .account-code {
+  display: inline-block;
+  width: 8ch;
+  padding-right: 1ch;
+  white-space: nowrap;
+}
+
+.financial-statement-table .statement-section th {
+  padding-top: 1.15rem;
+  border-bottom: 1px solid #111;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.financial-statement-table .statement-subtotal th {
+  padding-top: 0.55rem;
+  border-top: 1px solid #111;
+  font-weight: 700;
+}
+
+.financial-statement-table .statement-total th {
+  padding-top: 0.65rem;
+  border-top: 3px double #111;
+  border-bottom: 1px solid #111;
+  font-weight: 800;
+}
+
+.financial-statement-table .statement-control td {
+  padding-top: 0.7rem;
+  color: var(--muted);
+  border-top: 1px dotted var(--muted);
+}
+
+.financial-statement-table.financial-ledger-table th:first-child,
+.financial-statement-table.financial-ledger-table td:first-child {
+  width: 44%;
+}
+
+.financial-statement-table.financial-ledger-table .amount {
+  width: 14%;
+}
+
+.financial-statement-table.financial-cash-flow th:first-child,
+.financial-statement-table.financial-cash-flow td:first-child {
+  width: 80%;
+}
+
+.financial-statement-table.financial-cash-flow .amount {
+  width: 20%;
+}
+
+.accounting-document-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  color: #111;
+  font-variant-numeric: tabular-nums;
+}
+
+.accounting-document-table th,
+.accounting-document-table td {
+  padding: 0.4rem 0.55rem;
+  border: 0;
+  text-align: left;
+}
+
+.accounting-document-table thead th {
+  border-bottom: 1px solid #111;
+}
+
+.accounting-document-table .amount {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.statement-display-toggle {
+  display: inline-flex;
+  padding: 0.15rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-muted);
+}
+
+.statement-display-toggle button {
+  min-width: 3rem;
+  padding: 0.35rem 0.65rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.statement-display-toggle button.active {
+  background: var(--primary);
+  color: #fff;
 }
 
 .control-grid,
@@ -1819,6 +2207,7 @@ textarea {
   .topbar,
   .sidebar,
   .compact-tabs,
+  .subtabs,
   .toast-region,
   .breadcrumbs {
     display: none !important;
@@ -1836,5 +2225,14 @@ textarea {
   .empty-state,
   .dashboard-intro > div {
     box-shadow: none;
+  }
+
+  .financial-report-panel {
+    padding: 0;
+    border: 0;
+  }
+
+  .financial-report-panel > .section-heading {
+    display: none;
   }
 }

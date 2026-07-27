@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -1000,7 +1001,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
       </section>
 
       <section v-else-if="activeTab === 'referentiels'" class="configuration-stack">
-        <nav class="subtabs" aria-label="Référentiels gérés">
+        <nav class="subtabs secondary-tabs" aria-label="Référentiels gérés">
           <RouterLink
             v-for="item in referenceNavigation"
             :key="item.key"
@@ -1022,16 +1023,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             </div>
             <div class="configuration-grid">
               <label>Compte comptable
-                <select v-model.number="treasuryDraft.ledger_account_id" required>
-                  <option :value="0">Choisir…</option>
-                  <option
-                    v-for="account in managedReferences.treasury.ledger_accounts"
-                    :key="account.id"
-                    :value="account.id"
-                  >
-                    {{ account.number }} — {{ account.label }}
-                  </option>
-                </select>
+                <AccountCombobox
+                  v-model="treasuryDraft.ledger_account_id"
+                  :options="managedReferences.treasury.ledger_accounts"
+                  placeholder="Choisir…"
+                  required
+                />
               </label>
               <label>Libellé
                 <input v-model="treasuryDraft.label" required>
@@ -1181,10 +1178,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             </div>
             <div class="configuration-grid">
               <label v-for="field in exchangeMappingFields" :key="field[0]">{{ field[1] }}
-                <select v-model.number="exchangeMappingDraft[field[0]]" required>
-                  <option :value="0">Choisir…</option>
-                  <option v-for="account in managedReferences.currencies.accounts" :key="account.id" :value="account.id">{{ account.number }} — {{ account.label }}</option>
-                </select>
+                <AccountCombobox
+                  v-model="exchangeMappingDraft[field[0]]"
+                  :options="managedReferences.currencies.accounts"
+                  placeholder="Choisir…"
+                  required
+                />
               </label>
             </div>
             <button class="button primary" type="submit" :disabled="store.saving">Enregistrer les comptes</button>
@@ -1353,12 +1352,11 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                 </select>
               </label>
               <label>Compte TVA
-                <select v-model.number="vatDraft.account_id">
-                  <option :value="0">Aucun</option>
-                  <option v-for="account in managedReferences.vat.accounts" :key="account.id" :value="account.id">
-                    {{ account.number }} — {{ account.label }}
-                  </option>
-                </select>
+                <AccountCombobox
+                  v-model="vatDraft.account_id"
+                  :options="managedReferences.vat.accounts"
+                  placeholder="Aucun"
+                />
               </label>
               <label>Déduction par défaut (%)
                 <input v-model="vatDraft.default_deduction_percent" inputmode="decimal" required>
@@ -1839,16 +1837,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           <div class="configuration-grid">
             <label v-for="[key, label] in payrollMappingFields" :key="key">
               {{ label }}
-              <select v-model.number="payrollSettings.mapping[key]" required>
-                <option :value="0">Choisir…</option>
-                <option
-                  v-for="account in managedReferences.payroll.accounts"
-                  :key="account.id"
-                  :value="account.id"
-                >
-                  {{ account.number }} — {{ account.label }}
-                </option>
-              </select>
+              <AccountCombobox
+                v-model="payrollSettings.mapping[key]"
+                :options="managedReferences.payroll.accounts"
+                placeholder="Choisir…"
+                required
+              />
             </label>
           </div>
           <div class="form-actions">

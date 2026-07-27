@@ -803,8 +803,12 @@ export type AccountingWorkspace = {
         id: number; numero: string; libelle: string;
         type: 'actif' | 'passif' | 'fonds_propres';
         rubrique_chemin: string; solde_centimes: number;
+        current_cents: number; previous_cents: number;
       }>;
       total_actif_centimes: number; total_passif_centimes: number;
+      current_label: string; previous_label: string | null;
+      previous_total_actif_centimes: number;
+      previous_total_passif_centimes: number;
       equilibre: boolean;
     };
     income_statement: {
@@ -835,6 +839,10 @@ export type AccountingWorkspace = {
         opening_cents: number; closing_cents: number; change_cents: number;
       }>;
       items: Array<{
+        entry_id: number; number: string; date: string; label: string;
+        category: string; amount_cents: number;
+      }>;
+      statement_items: Array<{
         entry_id: number; number: string; date: string; label: string;
         category: string; amount_cents: number;
       }>;

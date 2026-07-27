@@ -1,4 +1,14 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
+
+async function chooseAccount(
+  control: Locator,
+  query: string,
+  commit: 'Enter' | 'Tab' = 'Enter'
+): Promise<void> {
+  await control.fill(query);
+  await control.press(commit);
+  await expect(control).toHaveValue(new RegExp(query, 'i'));
+}
 
 async function login(page: Page): Promise<void> {
   await page.goto('/e2e/login');
@@ -58,6 +68,15 @@ test('connexion, changement de dossier, route profonde et déconnexion', async (
   const scopeButton = page.getByRole('button', {
     name: 'Organisation, dossier et configuration'
   });
+  await expect(scopeButton).toHaveCSS('color', 'rgb(255, 255, 255)');
+  await expect(scopeButton).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  expect(await scopeButton.evaluate((button) => {
+    const icon = button.querySelector('svg');
+    if (!icon) return false;
+    const buttonBox = button.getBoundingClientRect();
+    const iconBox = icon.getBoundingClientRect();
+    return iconBox.width === buttonBox.width && iconBox.height === buttonBox.height;
+  })).toBe(true);
   await expect(scopeButton.locator('path')).toHaveAttribute(
     'd',
     /M8 16A8 8 0 1 0/
@@ -90,6 +109,9 @@ test('connexion, changement de dossier, route profonde et déconnexion', async (
     /CHF\s+1.*200\.00/
   );
   await expect(page.getByRole('heading', { name: 'Trésorerie par compte' })).toBeVisible();
+  await expect(page.getByText('Une lecture du grand livre')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Aging des créances et dettes' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Dernières écritures' })).toHaveCount(0);
 
   await selectDossier(page, 'Démonstration guidée');
   await expect(
@@ -256,7 +278,8 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('link', { name: 'Paiements', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouvelle condition de paiement' })).toBeVisible();
   await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Configuration', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 2 })).toBeVisible();
   await expect(page.getByText('Vue d’ensemble', { exact: true })).toHaveCount(0);
   await expect(
     page.getByLabel('Navigation Configuration').getByRole('link', {
@@ -291,9 +314,11 @@ test('configuration des modules et référentiels', async ({ page }) => {
   })).toHaveAttribute('aria-current', 'page');
 
   await page.getByRole('link', { name: 'Plan comptable', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Configuration', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 2 })).toBeVisible();
 
   await page.getByRole('link', { name: 'Trésorerie', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Configuration', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Nouveau compte de trésorerie' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Débiteurs et créanciers' }).click();
@@ -376,7 +401,8 @@ test('registre des organisations : création, historique et cycle de vie', async
   const creation = page.locator('form').filter({
     has: page.getByRole('heading', { name: 'Créer une organisation' })
   });
-  await creation.getByLabel('Nom usuel').fill('Coopérative E2E');
+  const unsafeOrganisationName = 'Coopérative <script>window.compromised=true</script>';
+  await creation.getByLabel('Nom usuel').fill(unsafeOrganisationName);
   await creation.getByLabel('Raison sociale').fill('Coopérative E2E SA');
   await creation.getByLabel('Source').fill('Extrait RC E2E');
   await creation.getByLabel('Forme juridique').fill('SA');
@@ -384,9 +410,15 @@ test('registre des organisations : création, historique et cycle de vie', async
   await creation.getByRole('button', { name: 'Créer', exact: true }).click();
 
   await expect(page.getByRole('heading', {
-    name: 'Coopérative E2E',
+    name: unsafeOrganisationName,
     exact: true
   })).toBeVisible();
+  await expect(page.locator('script').filter({
+    hasText: 'window.compromised=true'
+  })).toHaveCount(0);
+  expect(await page.evaluate(() => (
+    window as Window & { compromised?: boolean }
+  ).compromised)).toBeUndefined();
   await page.getByRole('button', { name: 'Informations', exact: true }).click();
   await expect(page.getByText('Extrait RC E2E', { exact: false })).toBeVisible();
   await page.getByLabel('Nom usuel').last().fill('Coopérative E2E Groupe');
@@ -599,15 +631,97 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouvelle écriture' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Écritures récentes' })).toBeVisible();
+  const journalAccount = page.getByLabel('Compte ligne 1');
+  await journalAccount.fill('cai');
+  const accountListbox = page.getByRole('listbox');
+  await expect(accountListbox).toBeVisible();
+  const [accountInputBox, accountListboxBox] = await Promise.all([
+    journalAccount.boundingBox(),
+    accountListbox.boundingBox()
+  ]);
+  expect(accountInputBox).not.toBeNull();
+  expect(accountListboxBox).not.toBeNull();
+  expect(accountListboxBox!.width).toBeGreaterThanOrEqual(accountInputBox!.width);
+  expect(accountListboxBox!.width).toBeGreaterThanOrEqual(480);
+  expect(accountListboxBox!.x + accountListboxBox!.width).toBeLessThanOrEqual(
+    page.viewportSize()!.width
+  );
+  await journalAccount.press('Enter');
+  await expect(journalAccount).toHaveValue(/1000.*Caisse/i);
+  await journalAccount.press('Escape');
+  await expect(journalAccount).toHaveValue('');
+  await chooseAccount(journalAccount, '1000');
+  await journalAccount.press('Backspace');
+  await expect(journalAccount).toHaveValue(/1000.*Caiss$/i);
+  await journalAccount.selectText();
+  await journalAccount.press('Backspace');
+  await expect(journalAccount).toHaveValue('');
+  await chooseAccount(journalAccount, '1000');
+  await journalAccount.press('Home');
+  await journalAccount.press('Delete');
+  await expect(journalAccount).toHaveValue(/000.*Caisse$/i);
+  await journalAccount.selectText();
+  await journalAccount.press('Delete');
+  await expect(journalAccount).toHaveValue('');
+  await journalAccount.fill('ss');
+  const initialActiveOption = await journalAccount.getAttribute('aria-activedescendant');
+  await journalAccount.press('ArrowDown');
+  await expect(journalAccount).not.toHaveAttribute(
+    'aria-activedescendant',
+    initialActiveOption || ''
+  );
+  await journalAccount.press('Enter');
+  await expect(journalAccount).toHaveValue(/ss/i);
 
   await page.getByRole('link', { name: 'Extraits', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Extrait de compte' })).toBeVisible();
+  const ledgerAccount = page.getByLabel('Compte', { exact: true });
+  await chooseAccount(ledgerAccount, '1000');
+  await expect(page.getByRole('columnheader', { name: 'Débit (+)' })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Crédit (-)' })).toBeVisible();
+  await chooseAccount(ledgerAccount, '1609');
+  await expect(page.getByRole('columnheader', { name: 'Débit (-)' })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Crédit (+)' })).toBeVisible();
+  await page.getByRole('button', { name: 'Compte en T' }).click();
+  await expect(page.getByRole('heading', { name: 'Débit (-)' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Crédit (+)' })).toBeVisible();
 
   await openConfiguration(page);
   await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
   await expect(page).toHaveURL(/\/e2e\/app\/configuration\/referentiels\/plan$/);
-  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Configuration', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Plan comptable', level: 2 })).toBeVisible();
   await expect(page.getByLabel('Sections du plan comptable')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Comptes', exact: true }).click();
+  const accountRow = page.locator('.plan-workspace table tbody tr').first();
+  const rubricOptions = await accountRow.locator('select').first().locator('option').allTextContents();
+  expect(rubricOptions.length).toBeGreaterThan(1);
+  expect(rubricOptions.every((label) => !label.includes('‹'))).toBe(true);
+  expect(rubricOptions.slice(1).every((label) => label.includes(' — '))).toBe(true);
+  expect(await accountRow.locator('select').nth(1).locator('option').allTextContents()).toEqual([
+    'Automatique',
+    '+/-',
+    '-/+'
+  ]);
+  const saveAccounts = page.getByRole('button', { name: 'Enregistrer', exact: true });
+  await expect(saveAccounts).toHaveCount(1);
+  await expect(saveAccounts).toBeDisabled();
+  const accountLabel = accountRow.locator('input').nth(1);
+  const originalLabel = await accountLabel.inputValue();
+  await accountLabel.fill(`${originalLabel} E2E`);
+  await saveAccounts.click();
+  await expect(page.getByText('1 compte(s) enregistré(s).')).toBeVisible();
+  await accountRow.locator('input').nth(1).fill(originalLabel);
+  await saveAccounts.click();
+
+  await page.getByRole('button', { name: 'Ouverture', exact: true }).click();
+  await expect(page.getByRole('columnheader', { name: 'Sens', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '+/-', exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', {
+    name: 'Enregistrer le brouillon',
+    exact: true
+  })).toHaveCount(1);
 
   const legacy = await page.request.get('/e2e/compta/plan', { maxRedirects: 0 });
   expect(legacy.status()).toBe(303);
@@ -623,9 +737,38 @@ test('états, clôture et dossier fiscal utilisent le grand livre unique', async
   await expect(page.getByRole('heading', { name: 'États financiers' })).toBeVisible();
   await expect(page.getByText('Débit = crédit')).toBeVisible();
   await expect(page.getByText('Résultat réconcilié')).toBeVisible();
+  await page.getByRole('button', { name: 'Bilan', exact: true }).click();
+  const financialStatement = page.locator('.financial-report-panel');
+  const statementTable = financialStatement.locator('.financial-statement-table');
+  await expect(financialStatement.getByText(/BILAN AU/)).toBeVisible();
+  expect(await statementTable.evaluate((element) =>
+    getComputedStyle(element).fontFamily
+  )).toContain('Courier New');
+  const firstStatementAmount = statementTable.locator('.amount').last();
+  expect(await firstStatementAmount.evaluate((element) =>
+    getComputedStyle(element).textAlign
+  )).toBe('right');
+  await expect(financialStatement.getByText(/BILAN AU .* — CHF/)).toBeVisible();
+  await expect(statementTable).not.toContainText('CHF');
+  await expect(statementTable.getByText('Exercice précédent')).toHaveCount(0);
+  await financialStatement.getByRole('button', { name: '%', exact: true }).click();
+  await expect(statementTable.getByText(/100[,.]0\s*%/).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Compte de résultat', exact: true }).click();
+  await expect(financialStatement.getByText(/RÉSULTAT DU .* AU .* — CHF/)).toBeVisible();
+  await expect(page.getByRole('row', {
+    name: /RÉSULTAT NET DE L.EXERCICE/
+  })).toBeVisible();
   await page.getByRole('button', { name: 'Flux de trésorerie' }).click();
   await expect(page.getByRole('heading', { name: 'Flux de trésorerie' })).toBeVisible();
-  await expect(page.getByText(/Méthode directe/)).toBeVisible();
+  await expect(page.getByText(/Méthode indirecte/)).toBeVisible();
+  await expect(page.getByRole('row', {
+    name: /VARIATION NETTE DE LA TRÉSORERIE/
+  })).toBeVisible();
+  await page.emulateMedia({ media: 'print' });
+  await expect(page.locator('.topbar')).toBeHidden();
+  await expect(page.locator('.compact-tabs')).toBeHidden();
+  await expect(financialStatement).toBeVisible();
+  await page.emulateMedia({ media: 'screen' });
 
   await page.getByRole('link', { name: 'Clôture', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Clôture et verrouillage' })).toBeVisible();
@@ -644,6 +787,7 @@ test('registre, plan et dotation des immobilisations utilisent le grand livre un
   await loginAsAdministrator(page);
   await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
+  await page.getByRole('link', { name: 'Clôture', exact: true }).click();
   await page.getByRole('link', { name: 'Amortissements', exact: true }).click();
   await expect(page.getByRole('heading', {
     name: 'Immobilisations et amortissements'
@@ -660,15 +804,10 @@ test('registre, plan et dotation des immobilisations utilisent le grand livre un
     ['Gain de cession', '8510'],
     ['Perte de cession', '8500']
   ] as const) {
-    const select = page.getByRole('combobox', { name: label, exact: true });
-    await expect(select).toContainText(account);
-    const value = await select.evaluate((element, accountCode) => {
-      const option = Array.from((element as HTMLSelectElement).options)
-        .find((candidate) => candidate.textContent?.trim().startsWith(accountCode));
-      return option?.value ?? '';
-    }, account);
-    expect(value).not.toBe('');
-    await select.selectOption(String(value));
+    await chooseAccount(
+      page.getByRole('combobox', { name: label, exact: true }),
+      account
+    );
   }
   await page.getByRole('button', { name: 'Enregistrer', exact: true }).click();
   await expect(page.getByRole('row').filter({ hasText: 'INFO-E2E' })).toBeVisible();
@@ -858,15 +997,13 @@ test('facturation client, contact 360 et aging utilisent le parcours Vue unique'
   await page.getByLabel('Date du document').fill('2026-07-20');
   await page.getByLabel('Échéance explicite').fill('2026-07-26');
   const collective = page.getByLabel('Compte collectif');
-  const receivableValue = await collective.locator('option').filter({ hasText: '1100' })
-    .getAttribute('value');
-  await collective.selectOption(String(receivableValue));
+  await chooseAccount(collective, '1100', 'Tab');
   await page.getByLabel('Libellé', { exact: true }).fill('Prestation E2E');
   await page.getByLabel('Montant', { exact: true }).fill('100.00');
   const revenue = page.getByLabel('Compte', { exact: true });
-  const revenueValue = await revenue.locator('option').filter({ hasText: '3400' })
-    .getAttribute('value');
-  await revenue.selectOption(String(revenueValue));
+  await revenue.fill('3400');
+  await page.getByText('Ligne 1', { exact: true }).click();
+  await expect(revenue).toHaveValue(/3400/);
   await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
   expect(await page.getByLabel('Code TVA').evaluate((element) =>
     (element as HTMLSelectElement).matches(':invalid')
@@ -883,6 +1020,15 @@ test('facturation client, contact 360 et aging utilisent le parcours Vue unique'
   await page.getByRole('link', { name: 'Échéancier', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Échéancier et lettrage' })).toBeVisible();
   await expect(page.getByText('Créances nettes', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Saisir un paiement' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Saisir un paiement' }).click();
+  const paymentDialog = page.getByRole('dialog', { name: 'Saisir un paiement' });
+  await expect(paymentDialog).toBeVisible();
+  await paymentDialog.getByRole('button', { name: 'Fermer' }).click();
+  await page.getByRole('button', { name: 'Allouer un paiement' }).click();
+  await expect(page.getByRole('dialog', { name: 'Allouer un paiement' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Allouer un paiement' })
+    .getByRole('button', { name: 'Fermer' }).click();
   await page.getByRole('link', { name: 'Récurrences', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Factures récurrentes' })).toBeVisible();
 
@@ -904,14 +1050,12 @@ test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page
   await page.getByLabel('Date du document').fill('2026-07-20');
   await page.getByLabel('Échéance').fill('2026-08-19');
   const payable = page.getByLabel('Compte collectif fournisseur');
-  const payableValue = await payable.locator('option').filter({ hasText: '2000' }).getAttribute('value');
-  await payable.selectOption(String(payableValue));
+  await chooseAccount(payable, '2000');
   await expect(page.getByLabel('Justificatif facultatif')).toBeVisible();
   await page.getByLabel('Libellé', { exact: true }).fill('Fournitures de bureau');
   await page.getByLabel('Montant', { exact: true }).fill('100.00');
   const expenseAccount = page.getByLabel('Compte de charge');
-  const expenseValue = await expenseAccount.locator('option').filter({ hasText: '6500' }).getAttribute('value');
-  await expenseAccount.selectOption(String(expenseValue));
+  await chooseAccount(expenseAccount, '6500', 'Tab');
   await page.getByLabel('Code TVA').selectOption({ label: 'AM81 · Achats 8,1 %' });
   await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
   const row = page.getByRole('row').filter({ hasText: 'Fournitures E2E SA' });
@@ -932,10 +1076,7 @@ test('rapprochement, lettrage et paiements sortants utilisent le parcours Vue', 
   await page.getByRole('link', { name: 'Rapprochement', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Rapprochement bancaire' })).toBeVisible();
   const bankSelect = page.getByLabel('Compte bancaire');
-  const bankValue = await bankSelect.locator('option').filter({
-    hasText: 'Banque principale'
-  }).getAttribute('value');
-  await bankSelect.selectOption(String(bankValue));
+  await chooseAccount(bankSelect, 'Banque principale');
   await page.getByLabel('Relevé CAMT ou PostFinance').setInputFiles({
     name: 'postfinance-e2e.csv',
     mimeType: 'text/csv',
@@ -961,11 +1102,19 @@ test('rapprochement, lettrage et paiements sortants utilisent le parcours Vue', 
   await expect(page.getByText('postfinance_csv', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Confirmer l’import' }).click();
   await expect(page.getByText('Relevé confirmé, source et empreinte conservées.')).toBeVisible();
+  await page.getByRole('button', { name: 'Associer banque et comptabilité' }).click();
   await expect(page.getByRole('button', { name: 'Confirmer le rapprochement' })).toBeDisabled();
 
   await page.getByRole('link', { name: 'Lettrage', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Lettrage des paiements' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Nouveau paiement' })).toBeVisible();
+  await page.getByRole('button', { name: 'Allouer à un document ouvert' }).click();
+  await expect(page.getByRole('heading', { name: 'Allouer à un document ouvert' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Taux', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Taux de change' })).toBeVisible();
+  await page.getByRole('button', { name: 'Taux d’intérêt' }).click();
+  await expect(page.getByRole('heading', { name: 'Taux d’intérêt' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Paiements', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Paiements sortants' })).toBeVisible();
@@ -982,7 +1131,13 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await expect(page.getByLabel('Navigation des salaires')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Employés', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Historique des contrats' })).toBeVisible();
-  await expect(page.getByText('PII autorisées', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Nouvel employé' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Nouvel employé' }).click();
+  await expect(page.getByRole('dialog', { name: 'Nouvel employé' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Nouvel employé' })
+    .getByRole('button', { name: 'Fermer' }).click();
+  await expect(page.getByText(/aucun envoi Swissdec/i)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: /^Paie \d{4}$/ })).toHaveCount(0);
 
   const employeesPanel = page.locator('section.panel').filter({
     has: page.getByRole('heading', { name: 'Employés', exact: true })
@@ -1044,6 +1199,13 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await page.getByRole('link', { name: 'Fiches', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fiches de salaire' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Voir et valider' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Paiements et lettrage' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Paiements et lettrage' }).click();
+  const payrollPayments = page.getByRole('dialog', { name: 'Paiements et lettrage' });
+  await expect(payrollPayments).toBeVisible();
+  await expect(payrollPayments.getByRole('heading', { name: 'Saisir le paiement' })).toBeVisible();
+  await expect(payrollPayments.getByRole('heading', { name: 'Allouer à une dette' })).toBeVisible();
+  await payrollPayments.getByRole('button', { name: 'Fermer' }).click();
   await page.getByRole('link', { name: 'Annuels', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Récapitulatifs et certificats' })).toBeVisible();
   await expect(page.getByRole('heading', {

@@ -40,10 +40,7 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
     { key: 'entries', label: 'Journalisation', path: '/compta' },
     { key: 'accounts', label: 'Extraits', path: '/compta/extraits' },
     { key: 'statements', label: 'États financiers', path: '/compta/etats' },
-    { key: 'vat', label: 'TVA', path: '/compta/tva' },
     { key: 'closing', label: 'Clôture', path: '/compta/cloture' },
-    { key: 'tax', label: 'Dossier fiscal', path: '/compta/fiscal' },
-    { key: 'assets', label: 'Amortissements', path: '/compta/amortissements' },
     { key: 'consolidation', label: 'Consolidation', path: '/compta/consolidation' }
   ],
   payroll: [

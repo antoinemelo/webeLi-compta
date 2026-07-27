@@ -71,7 +71,8 @@
         }
       },
       "cash_flow": {
-        "method": "directe_grand_livre",
+        "method": "indirecte_rapprochee",
+        "method_label": "Méthode indirecte — résultat rapproché aux liquidités",
         "date_start": "2026-01-01",
         "date_end": "2026-12-31",
         "opening_cash_cents": 0,
@@ -80,9 +81,19 @@
         "net_change_cents": 0,
         "closing_cash_cents": 0,
         "reconciliation_difference_cents": 0,
-        "classification_status": "a_valider",
+        "classification_status": "complet",
         "accounts": [],
-        "items": []
+        "items": [],
+        "statement_items": [
+          {
+            "entry_id": -1,
+            "number": "",
+            "date": "",
+            "label": "Résultat de l’exercice",
+            "category": "exploitation",
+            "amount_cents": 0
+          }
+        ]
       },
       "controls": {
         "debit_equals_credit": true,

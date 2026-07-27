@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
+import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import type { BillingDocument } from '@/api/contracts';
 import { runtimeConfig } from '@/config';
@@ -32,6 +34,8 @@ const workspace = computed(() => store.workspace);
 const showDocumentForm = ref(false);
 const showContactForm = ref(false);
 const showRecurrenceForm = ref(false);
+const paymentDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const allocationDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const documentAttachment = ref<{ name: string; content_base64: string } | null>(null);
 
 const documentDraft = reactive({
@@ -541,6 +545,9 @@ async function savePayment(): Promise<void> {
       currency: paymentDraft.currency,
       exchange_rate_id: paymentDraft.exchange_rate_id || null
     });
+    paymentDraft.amount = '';
+    paymentDraft.reference = '';
+    paymentDialog.value?.close();
     notifications.push('Paiement saisi indépendamment des factures.', 'success');
   } catch {
     notifications.push(store.error, 'warning');
@@ -554,6 +561,8 @@ async function allocatePayment(): Promise<void> {
       document_id: Number(allocationDraft.document_id),
       amount_cents: cents(allocationDraft.amount)
     });
+    allocationDraft.amount = '';
+    allocationDialog.value?.close();
     notifications.push('Paiement alloué au centime.', 'success');
   } catch {
     notifications.push(store.error, 'warning');
@@ -650,10 +659,13 @@ async function allocatePayment(): Promise<void> {
           </FormField>
           <FormField id="billing-collective" label="Compte collectif">
             <template #default="{ describedBy }">
-              <select id="billing-collective" v-model.number="documentDraft.collective_account_id" :aria-describedby="describedBy" required>
-                <option :value="0" disabled>Sélectionner</option>
-                <option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option>
-              </select>
+              <AccountCombobox
+                id="billing-collective"
+                v-model="documentDraft.collective_account_id"
+                :options="workspace.catalog.accounts"
+                :aria-describedby="describedBy"
+                required
+              />
             </template>
           </FormField>
           <FormField id="billing-currency" label="Devise">
@@ -679,10 +691,13 @@ async function allocatePayment(): Promise<void> {
           <legend>Ligne {{ index + 1 }}</legend>
           <input v-model="line.label" aria-label="Libellé" placeholder="Libellé" required>
           <input v-model="line.amount" aria-label="Montant" inputmode="decimal" placeholder="Montant" required>
-          <select v-model.number="line.account_id" aria-label="Compte" required>
-            <option :value="0" disabled>Compte</option>
-            <option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option>
-          </select>
+          <AccountCombobox
+            v-model="line.account_id"
+            :options="workspace.catalog.accounts"
+            aria-label="Compte"
+            placeholder="Compte"
+            required
+          />
           <select v-model.number="line.vat_code_id" aria-label="Code TVA" required>
             <option value="" disabled>Sélectionner un code TVA</option>
             <option v-for="vat in documentVatCodes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option>
@@ -741,13 +756,13 @@ async function allocatePayment(): Promise<void> {
           <FormField id="billing-rec-end" label="Fin facultative"><template #default="{ describedBy }"><input id="billing-rec-end" v-model="recurrenceDraft.end_date" type="date" :aria-describedby="describedBy"></template></FormField>
           <FormField id="billing-rec-due" label="Délai en jours"><template #default="{ describedBy }"><input id="billing-rec-due" v-model.number="recurrenceDraft.due_days" type="number" min="0" max="365" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="billing-rec-prefix" label="Préfixe fournisseur"><template #default="{ describedBy }"><input id="billing-rec-prefix" v-model="recurrenceDraft.external_prefix" :aria-describedby="describedBy" :required="recurrenceDraft.type === 'facture_fournisseur'"></template></FormField>
-          <FormField id="billing-rec-collective" label="Compte collectif"><template #default="{ describedBy }"><select id="billing-rec-collective" v-model.number="recurrenceDraft.collective_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option></select></template></FormField>
+          <FormField id="billing-rec-collective" label="Compte collectif"><template #default="{ describedBy }"><AccountCombobox id="billing-rec-collective" v-model="recurrenceDraft.collective_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
         </div>
         <fieldset v-for="(line, index) in recurrenceDraft.lines" :key="index" class="line-editor">
           <legend>Ligne {{ index + 1 }}</legend>
           <input v-model="line.label" aria-label="Libellé récurrent" placeholder="Libellé" required>
           <input v-model="line.amount" aria-label="Montant récurrent" inputmode="decimal" placeholder="Montant" required>
-          <select v-model.number="line.account_id" aria-label="Compte récurrent" required><option :value="0" disabled>Compte</option><option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option></select>
+          <AccountCombobox v-model="line.account_id" :options="workspace.catalog.accounts" aria-label="Compte récurrent" placeholder="Compte" required />
           <select v-model.number="line.vat_code_id" aria-label="TVA récurrente" required><option value="" disabled>Sélectionner un code TVA</option><option v-for="vat in recurrenceVatCodes" :key="vat.id" :value="vat.id">{{ vat.code }} · {{ vat.label }}</option></select>
           <select v-model="line.input_mode" aria-label="Mode récurrent"><option value="net">Net</option><option value="brut">Brut</option></select>
         </fieldset>
@@ -804,7 +819,13 @@ async function allocatePayment(): Promise<void> {
     </template>
 
     <template v-else-if="workspace && activeTab === 'echeancier'">
-      <div class="toolbar"><div><h2>Échéancier et lettrage</h2><p>Créances et dettes ouvertes, calculées au {{ workspace.reference_date }}.</p></div></div>
+      <div class="toolbar">
+        <div><h2>Échéancier et lettrage</h2><p>Créances et dettes ouvertes, calculées au {{ workspace.reference_date }}.</p></div>
+        <div v-if="workspace.capabilities.pay" class="button-row">
+          <button class="button secondary" type="button" @click="paymentDialog?.open()">Saisir un paiement</button>
+          <button class="button primary" type="button" @click="allocationDialog?.open()">Allouer un paiement</button>
+        </div>
+      </div>
       <div class="kpi-grid">
         <article class="kpi-card"><span>Créances nettes</span><strong>{{ money(workspace.aging.receivables.net_open_cents) }}</strong><small>{{ workspace.aging.receivables.item_count }} document(s)</small></article>
         <article class="kpi-card"><span>Dettes nettes</span><strong>{{ money(workspace.aging.payables.net_open_cents) }}</strong><small>{{ workspace.aging.payables.item_count }} document(s)</small></article>
@@ -820,26 +841,26 @@ async function allocatePayment(): Promise<void> {
         ]"
       />
 
-      <div class="split-grid">
-        <form v-if="workspace.capabilities.pay" class="editor-card" @submit.prevent="savePayment">
-          <h3>Saisir un paiement</h3>
+      <ModalDialog ref="paymentDialog" title="Saisir un paiement" description="Enregistrez le règlement indépendamment de son allocation aux factures.">
+        <form v-if="workspace.capabilities.pay" @submit.prevent="savePayment">
           <FormField id="payment-contact" label="Contact"><template #default="{ describedBy }"><select id="payment-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="contact in workspace.contacts" :key="contact.id" :value="contact.id">{{ contact.label }}</option></select></template></FormField>
           <FormField id="payment-direction" label="Sens"><template #default="{ describedBy }"><select id="payment-direction" v-model="paymentDraft.direction" :aria-describedby="describedBy"><option value="encaissement">Encaissement client</option><option value="decaissement">Décaissement fournisseur</option></select></template></FormField>
           <FormField id="payment-date" label="Date"><template #default="{ describedBy }"><input id="payment-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="payment-amount" :label="`Montant ${paymentDraft.currency}`"><template #default="{ describedBy }"><input id="payment-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="payment-currency" label="Devise"><template #default="{ describedBy }"><select id="payment-currency" v-model="paymentDraft.currency" :aria-describedby="describedBy" required @change="paymentDraft.exchange_rate_id = 0"><option v-for="currencyItem in workspace.catalog.currencies" :key="currencyItem.code" :value="currencyItem.code">{{ currencyItem.code }}{{ currencyItem.is_base ? ' · base' : '' }}</option></select></template></FormField>
           <FormField v-if="paymentDraft.currency !== context.context?.selection?.dossier.currency" id="payment-rate" label="Taux figé"><template #default="{ describedBy }"><select id="payment-rate" v-model.number="paymentDraft.exchange_rate_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="rate in paymentExchangeRates" :key="rate.id" :value="rate.id">{{ rate.rate_date }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option></select></template></FormField>
-          <FormField id="payment-account" label="Compte de trésorerie"><template #default="{ describedBy }"><select id="payment-account" v-model.number="paymentDraft.ledger_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.number }} · {{ account.label }}</option></select></template></FormField>
+          <FormField id="payment-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="payment-account" v-model="paymentDraft.ledger_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
           <button class="button primary" :disabled="store.saving">Enregistrer</button>
         </form>
-        <form v-if="workspace.capabilities.pay" class="editor-card" @submit.prevent="allocatePayment">
-          <h3>Allouer un paiement</h3>
+      </ModalDialog>
+      <ModalDialog ref="allocationDialog" title="Allouer un paiement" description="Choisissez un paiement disponible puis la facture ouverte à solder.">
+        <form v-if="workspace.capabilities.pay" @submit.prevent="allocatePayment">
           <FormField id="allocation-payment" label="Paiement disponible"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="payment in workspace.payments.filter((item) => item.unallocated_cents > 0)" :key="payment.id" :value="payment.id">{{ payment.contact }} · {{ money(payment.unallocated_cents, payment.currency) }}</option></select></template></FormField>
           <FormField id="allocation-document" label="Facture ouverte"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="document in workspace.documents.filter((item) => item.open_cents > 0 && item.type.startsWith('facture_'))" :key="document.id" :value="document.id">{{ document.number }} · {{ document.contact }} · {{ money(document.open_cents) }}</option></select></template></FormField>
           <FormField id="allocation-amount" label="Montant à allouer"><template #default="{ describedBy }"><input id="allocation-amount" v-model="allocationDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
           <button class="button primary" :disabled="store.saving">Lettrer</button>
         </form>
-      </div>
+      </ModalDialog>
 
       <form v-if="workspace.capabilities.remind" class="editor-card" @submit.prevent="saveReminder">
         <h3>Tracer un rappel</h3>

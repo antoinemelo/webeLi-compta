@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
+import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -24,6 +25,9 @@ const activeTab = computed(() => String(route.params.tab || 'use'));
 const workspace = computed(() => store.workspace);
 const exchangeMode = ref<'moyenne' | 'fin_mois'>('moyenne');
 const selectedInterestCode = ref('');
+const reconciliationSection = ref<'import' | 'suggestion' | 'matching'>('import');
+const matchingSection = ref<'payment' | 'allocation'>('payment');
+const ratesSection = ref<'exchange' | 'interest'>('exchange');
 const today = new Date().toISOString().slice(0, 10);
 const selectedId = ref(0);
 const showExpenseForm = ref(false);
@@ -701,10 +705,13 @@ async function toggleRecurrence(item: {
           </FormField>
           <FormField id="expense-collective" label="Compte collectif fournisseur">
             <template #default="{ describedBy }">
-              <select id="expense-collective" v-model.number="expense.collective_account_id" :aria-describedby="describedBy" required>
-                <option :value="0" disabled>Sélectionner</option>
-                <option v-for="item in workspace.catalog.accounts" :key="item.id" :value="item.id">{{ item.number }} · {{ item.label }}</option>
-              </select>
+              <AccountCombobox
+                id="expense-collective"
+                v-model="expense.collective_account_id"
+                :options="workspace.catalog.accounts"
+                :aria-describedby="describedBy"
+                required
+              />
             </template>
           </FormField>
           <FormField id="expense-proof" label="Justificatif facultatif" hint="PDF, JPEG, PNG ou WebP, 10 Mo maximum.">
@@ -715,10 +722,13 @@ async function toggleRecurrence(item: {
           <legend>Ligne {{ index + 1 }}</legend>
           <input v-model="line.libelle" aria-label="Libellé" placeholder="Libellé" required>
           <input v-model="line.prix" aria-label="Montant" inputmode="decimal" placeholder="Montant" required>
-          <select v-model.number="line.compte_id" aria-label="Compte de charge" required>
-            <option :value="0" disabled>Compte</option>
-            <option v-for="item in workspace.catalog.accounts" :key="item.id" :value="item.id">{{ item.number }} · {{ item.label }}</option>
-          </select>
+          <AccountCombobox
+            v-model="line.compte_id"
+            :options="workspace.catalog.accounts"
+            aria-label="Compte de charge"
+            placeholder="Compte"
+            required
+          />
           <select v-model.number="line.code_tva_id" aria-label="Code TVA" required>
             <option :value="0" disabled>TVA</option>
             <option v-for="item in workspace.catalog.vat_codes" :key="item.id" :value="item.id">{{ item.code }} · {{ item.label }}</option>
@@ -811,13 +821,13 @@ async function toggleRecurrence(item: {
             <FormField id="rec-next" label="Prochaine échéance"><template #default="{ describedBy }"><input id="rec-next" v-model="recurrence.next_date" type="date" :aria-describedby="describedBy" required></template></FormField>
             <FormField id="rec-end" label="Fin facultative"><template #default="{ describedBy }"><input id="rec-end" v-model="recurrence.end_date" type="date" :aria-describedby="describedBy"></template></FormField>
             <FormField id="rec-prefix" label="Préfixe fournisseur"><template #default="{ describedBy }"><input id="rec-prefix" v-model="recurrence.external_prefix" :aria-describedby="describedBy" required></template></FormField>
-            <FormField id="rec-collective" label="Compte collectif"><template #default="{ describedBy }"><select id="rec-collective" v-model.number="recurrence.collective_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in workspace.catalog.accounts" :key="item.id" :value="item.id">{{ item.number }} · {{ item.label }}</option></select></template></FormField>
+            <FormField id="rec-collective" label="Compte collectif"><template #default="{ describedBy }"><AccountCombobox id="rec-collective" v-model="recurrence.collective_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
           </div>
           <fieldset v-for="(line, index) in recurrence.lines" :key="index" class="line-editor">
             <legend>Ligne {{ index + 1 }}</legend>
             <input v-model="line.libelle" aria-label="Libellé récurrent" placeholder="Libellé" required>
             <input v-model="line.prix" aria-label="Montant récurrent" inputmode="decimal" placeholder="Montant" required>
-            <select v-model.number="line.compte_id" aria-label="Compte récurrent" required><option :value="0" disabled>Compte</option><option v-for="item in workspace.catalog.accounts" :key="item.id" :value="item.id">{{ item.number }} · {{ item.label }}</option></select>
+            <AccountCombobox v-model="line.compte_id" :options="workspace.catalog.accounts" aria-label="Compte récurrent" placeholder="Compte" required />
             <select v-model.number="line.code_tva_id" aria-label="TVA récurrente" required><option :value="0" disabled>TVA</option><option v-for="item in workspace.catalog.vat_codes" :key="item.id" :value="item.id">{{ item.code }} · {{ item.label }}</option></select>
             <select v-model="line.mode_saisie" aria-label="Mode récurrent"><option value="net">Net</option><option value="brut">Brut</option></select>
           </fieldset>
@@ -841,16 +851,24 @@ async function toggleRecurrence(item: {
           <p>Le relevé, ses empreintes et le grand livre restent des sources distinctes.</p>
         </div>
       </div>
+      <nav class="subtabs secondary-tabs section-tabs" aria-label="Étapes du rapprochement">
+        <button :class="{ active: reconciliationSection === 'import' }" type="button" @click="reconciliationSection = 'import'">Importer un relevé</button>
+        <button :class="{ active: reconciliationSection === 'suggestion' }" type="button" @click="reconciliationSection = 'suggestion'">Proposer une comptabilisation</button>
+        <button :class="{ active: reconciliationSection === 'matching' }" type="button" @click="reconciliationSection = 'matching'">Associer banque et comptabilité</button>
+      </nav>
 
-      <form v-if="treasury.workspace.capabilities.import" class="editor-card" @submit.prevent="previewStatement">
+      <form v-if="reconciliationSection === 'import' && treasury.workspace.capabilities.import" class="editor-card" @submit.prevent="previewStatement">
         <h3>Importer un relevé</h3>
         <div class="form-grid">
           <FormField id="statement-account" label="Compte bancaire">
             <template #default="{ describedBy }">
-              <select id="statement-account" v-model.number="importAccountId" :aria-describedby="describedBy" required>
-                <option :value="0" disabled>Sélectionner</option>
-                <option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }} · {{ item.iban || 'IBAN absent' }}</option>
-              </select>
+              <AccountCombobox
+                id="statement-account"
+                v-model="importAccountId"
+                :options="treasury.workspace.treasury_accounts"
+                :aria-describedby="describedBy"
+                required
+              />
             </template>
           </FormField>
           <FormField id="statement-file" label="Relevé CAMT ou PostFinance">
@@ -862,7 +880,7 @@ async function toggleRecurrence(item: {
         <div class="button-row"><button class="button primary" :disabled="treasury.saving">Prévisualiser</button></div>
       </form>
 
-      <article v-if="importPreview" class="detail-card">
+      <article v-if="reconciliationSection === 'import' && importPreview" class="detail-card">
         <h3>Prévisualisation sans comptabilisation</h3>
         <dl class="detail-grid">
           <div><dt>Format</dt><dd>{{ importPreview.format }}</dd></div>
@@ -874,7 +892,7 @@ async function toggleRecurrence(item: {
       </article>
 
       <form
-        v-if="treasury.workspace.capabilities.suggest"
+        v-if="reconciliationSection === 'suggestion' && treasury.workspace.capabilities.suggest"
         class="editor-card"
         @submit.prevent="proposeSuggestion"
       >
@@ -891,10 +909,13 @@ async function toggleRecurrence(item: {
           </FormField>
           <FormField id="suggestion-account" label="Compte de contrepartie">
             <template #default="{ describedBy }">
-              <select id="suggestion-account" v-model.number="suggestionDraft.counterpart_account_id" :aria-describedby="describedBy" required>
-                <option :value="0" disabled>Sélectionner</option>
-                <option v-for="account in treasury.workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.numero }} · {{ account.libelle }}</option>
-              </select>
+              <AccountCombobox
+                id="suggestion-account"
+                v-model="suggestionDraft.counterpart_account_id"
+                :options="treasury.workspace.catalog.accounts"
+                :aria-describedby="describedBy"
+                required
+              />
             </template>
           </FormField>
           <FormField id="suggestion-label" label="Libellé">
@@ -911,7 +932,7 @@ async function toggleRecurrence(item: {
       </form>
 
       <DataTable
-        v-if="treasury.workspace.suggestions.length"
+        v-if="reconciliationSection === 'suggestion' && treasury.workspace.suggestions.length"
         caption="Suggestions de comptabilisation"
         :columns="[
           { key: 'label', label: 'Libellé' },
@@ -933,13 +954,16 @@ async function toggleRecurrence(item: {
         </template>
       </DataTable>
 
-      <section class="editor-card">
+      <section v-if="reconciliationSection === 'matching'" class="editor-card">
         <div class="toolbar">
           <div><h3>Associer banque et comptabilité</h3><p>Sélections 1–1, 1–N ou N–1 ; écart exigé à zéro.</p></div>
-          <select v-model.number="reconciliationAccountId" aria-label="Compte à rapprocher">
-            <option :value="0" disabled>Compte bancaire</option>
-            <option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }}</option>
-          </select>
+          <AccountCombobox
+            v-model="reconciliationAccountId"
+            :options="treasury.workspace.treasury_accounts"
+            aria-label="Compte à rapprocher"
+            placeholder="Compte bancaire"
+            required
+          />
         </div>
         <div class="reconciliation-grid">
           <div>
@@ -989,7 +1013,7 @@ async function toggleRecurrence(item: {
       </section>
 
       <DataTable
-        v-if="treasury.workspace.reconciliations.length"
+        v-if="reconciliationSection === 'matching' && treasury.workspace.reconciliations.length"
         caption="Historique des rapprochements"
         :columns="[
           { key: 'created_at', label: 'Créé le' },
@@ -1018,7 +1042,11 @@ async function toggleRecurrence(item: {
       <div class="toolbar">
         <div><h2>Lettrage des paiements</h2><p>Un paiement reste indépendant et peut couvrir plusieurs documents.</p></div>
       </div>
-      <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="createPayment">
+      <nav class="subtabs secondary-tabs section-tabs" aria-label="Étapes du lettrage">
+        <button :class="{ active: matchingSection === 'payment' }" type="button" @click="matchingSection = 'payment'">Nouveau paiement</button>
+        <button :class="{ active: matchingSection === 'allocation' }" type="button" @click="matchingSection = 'allocation'">Allouer à un document ouvert</button>
+      </nav>
+      <form v-if="matchingSection === 'payment' && treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="createPayment">
         <h3>Nouveau paiement</h3>
         <div class="form-grid">
           <FormField id="matching-contact" label="Contact"><template #default="{ describedBy }"><select id="matching-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.catalog.contacts" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
@@ -1026,7 +1054,7 @@ async function toggleRecurrence(item: {
           <FormField id="matching-date" label="Date"><template #default="{ describedBy }"><input id="matching-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="matching-amount" label="Montant"><template #default="{ describedBy }"><input id="matching-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="matching-reference" label="Référence"><template #default="{ describedBy }"><input id="matching-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy"></template></FormField>
-          <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><select id="matching-account" v-model.number="paymentDraft.treasury_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
+          <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="matching-account" v-model="paymentDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" :aria-describedby="describedBy" required /></template></FormField>
           <FormField id="matching-bank-line" label="Ligne bancaire facultative" hint="Le montant cumulé et le sens sont contrôlés côté serveur.">
             <template #default="{ describedBy }">
               <select id="matching-bank-line" v-model.number="paymentDraft.bank_line_id" :aria-describedby="describedBy">
@@ -1043,7 +1071,7 @@ async function toggleRecurrence(item: {
         <button class="button primary" :disabled="treasury.saving">Créer le paiement</button>
       </form>
 
-      <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
+      <form v-if="matchingSection === 'allocation' && treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
         <h3>Allouer à un document ouvert</h3>
         <div class="form-grid">
           <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.payments.filter((entry) => entry.non_alloue_centimes > 0)" :key="item.id" :value="item.id">{{ item.date_paiement }} · {{ item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes) }}</option></select></template></FormField>
@@ -1054,7 +1082,7 @@ async function toggleRecurrence(item: {
       </form>
 
       <DataTable
-        v-if="treasury.workspace.allocations.length"
+        v-if="matchingSection === 'allocation' && treasury.workspace.allocations.length"
         caption="Allocations et délettrages"
         :columns="[
           { key: 'document_numero', label: 'Document' },
@@ -1078,7 +1106,7 @@ async function toggleRecurrence(item: {
       <form v-if="treasury.workspace.capabilities.prepare_payments" class="editor-card" @submit.prevent="prepareBatch">
         <h3>Dettes approuvées et comptabilisées</h3>
         <div class="form-grid">
-          <FormField id="batch-account" label="Compte débiteur"><template #default="{ describedBy }"><select id="batch-account" v-model.number="batchDraft.treasury_account_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.treasury_accounts" :key="item.id" :value="item.id">{{ item.label }} · {{ item.iban || 'IBAN absent' }}</option></select></template></FormField>
+          <FormField id="batch-account" label="Compte débiteur"><template #default="{ describedBy }"><AccountCombobox id="batch-account" v-model="batchDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" :aria-describedby="describedBy" required /></template></FormField>
           <FormField id="batch-date" label="Date d’exécution"><template #default="{ describedBy }"><input id="batch-date" v-model="batchDraft.execution_date" type="date" :aria-describedby="describedBy" required></template></FormField>
         </div>
         <label v-for="debt in treasury.workspace.payable_debts" :key="debt.id" class="selection-row">
@@ -1108,10 +1136,12 @@ async function toggleRecurrence(item: {
               <option :value="0" disabled>Ligne bancaire débitée</option>
               <option v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id && item.amount_cents < 0 && item.treasury_account_id === batch.treasury_account_id)" :key="line.id" :value="line.id">{{ line.booking_date }} · {{ line.label }} · {{ money(line.amount_cents, line.currency) }}</option>
             </select>
-            <select v-model.number="confirmationDraft.fee_account_id" aria-label="Compte de frais bancaires">
-              <option :value="0">Sans frais séparés</option>
-              <option v-for="account in treasury.workspace.catalog.accounts" :key="account.id" :value="account.id">{{ account.numero }} · {{ account.libelle }}</option>
-            </select>
+            <AccountCombobox
+              v-model="confirmationDraft.fee_account_id"
+              :options="treasury.workspace.catalog.accounts"
+              aria-label="Compte de frais bancaires"
+              placeholder="Sans frais séparés"
+            />
             <button type="button" :disabled="!confirmationDraft.bank_line_id" @click="confirmBatch(batch)">Confirmer par le relevé</button>
           </div>
         </article>
@@ -1120,7 +1150,11 @@ async function toggleRecurrence(item: {
     </template>
 
     <template v-else-if="workspace && treasury.workspace && activeTab === 'taux'">
-      <div class="toolbar">
+      <nav class="subtabs secondary-tabs section-tabs" aria-label="Types de taux">
+        <button :class="{ active: ratesSection === 'exchange' }" type="button" @click="ratesSection = 'exchange'">Taux de change</button>
+        <button :class="{ active: ratesSection === 'interest' }" type="button" @click="ratesSection = 'interest'">Taux d’intérêt</button>
+      </nav>
+      <div v-if="ratesSection === 'exchange'" class="toolbar">
         <div>
           <p class="eyebrow">Référentiel public partagé</p>
           <h2>Taux de change</h2>
@@ -1140,10 +1174,10 @@ async function toggleRecurrence(item: {
       </div>
 
       <SkeletonBlock
-        v-if="treasury.marketLoading && !treasury.exchangeHistory"
+        v-if="ratesSection === 'exchange' && treasury.marketLoading && !treasury.exchangeHistory"
         :lines="8"
       />
-      <template v-else-if="treasury.exchangeHistory">
+      <template v-else-if="ratesSection === 'exchange' && treasury.exchangeHistory">
         <p
           v-if="treasury.exchangeHistory.refresh.monthly.warning || treasury.exchangeHistory.refresh.daily.warning"
           class="market-warning"
@@ -1251,8 +1285,7 @@ async function toggleRecurrence(item: {
         <p class="market-note">{{ treasury.exchangeHistory.definitions.accounting }}</p>
       </template>
 
-      <hr class="market-divider">
-      <div class="toolbar">
+      <div v-if="ratesSection === 'interest'" class="toolbar">
         <div>
           <p class="eyebrow">Référentiel public partagé</p>
           <h2>Taux d’intérêt</h2>
@@ -1275,10 +1308,10 @@ async function toggleRecurrence(item: {
       </div>
 
       <SkeletonBlock
-        v-if="treasury.marketLoading && !treasury.interestHistory"
+        v-if="ratesSection === 'interest' && treasury.marketLoading && !treasury.interestHistory"
         :lines="8"
       />
-      <template v-else-if="treasury.interestHistory">
+      <template v-else-if="ratesSection === 'interest' && treasury.interestHistory">
         <p
           v-if="treasury.interestHistory.refresh.monthly.warning"
           class="market-warning"

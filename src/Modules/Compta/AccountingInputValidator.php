@@ -328,9 +328,6 @@ final class AccountingInputValidator
         if ($parsed === false || $parsed->format('Y-m-d') !== $date) {
             $errors['date'][] = 'Date AAAA-MM-JJ valide requise.';
         }
-        if (!is_string($data['label'] ?? null) || trim($data['label']) === '') {
-            $errors['label'][] = 'Libellé requis.';
-        }
         if (!is_bool($data['validate'] ?? null)) {
             $errors['validate'][] = 'Booléen requis.';
         }
@@ -380,7 +377,7 @@ final class AccountingInputValidator
             'exercise_id' => (int) $data['exercise_id'],
             'journal_id' => (int) $data['journal_id'],
             'date' => $date,
-            'label' => trim((string) $data['label']),
+            'label' => trim((string) ($data['label'] ?? '')),
             'reference' => trim((string) ($data['reference'] ?? '')),
             'attachment_reference' => trim(
                 (string) ($data['attachment_reference'] ?? '')
@@ -475,11 +472,41 @@ final class AccountingInputValidator
     {
         $data = $this->only($request, [
             'action', 'id', 'number', 'label', 'sense_mode', 'rubric_id',
-            'version', 'ordered_ids',
+            'version', 'ordered_ids', 'accounts',
         ]);
         $action = (string) ($data['action'] ?? '');
-        if (!in_array($action, ['save', 'delete', 'reorder'], true)) {
+        if (!in_array($action, ['save', 'save_batch', 'delete', 'reorder'], true)) {
             throw ApiException::validation(['action' => ['Action invalide.']]);
+        }
+        $accounts = [];
+        if ($action === 'save_batch') {
+            if (!is_array($data['accounts'] ?? null) || $data['accounts'] === []) {
+                throw ApiException::validation([
+                    'accounts' => ['Au moins un compte modifié est requis.'],
+                ]);
+            }
+            foreach ($data['accounts'] as $index => $account) {
+                if (!is_array($account)) {
+                    throw ApiException::validation([
+                        "accounts.{$index}" => ['Compte invalide.'],
+                    ]);
+                }
+                $accounts[] = [
+                    'id' => $this->integer($account['id'] ?? 0, "accounts.{$index}.id", 1),
+                    'number' => (string) ($account['number'] ?? ''),
+                    'label' => (string) ($account['label'] ?? ''),
+                    'sense_mode' => (string) ($account['sense_mode'] ?? 'automatique'),
+                    'rubric_id' => $this->nullablePositiveInteger(
+                        $account['rubric_id'] ?? null,
+                        "accounts.{$index}.rubric_id"
+                    ),
+                    'version' => $this->integer(
+                        $account['version'] ?? 0,
+                        "accounts.{$index}.version",
+                        0
+                    ),
+                ];
+            }
         }
         return [
             'action' => $action,
@@ -496,6 +523,7 @@ final class AccountingInputValidator
                 $data['ordered_ids'] ?? [],
                 'ordered_ids'
             ),
+            'accounts' => $accounts,
         ];
     }
 

@@ -20,6 +20,7 @@ use Compta\Core\Http\WebApplication;
 use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Security\ArraySessionStore;
 use Compta\Core\Security\Csrf;
+use Compta\Core\Support\Html;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Compta\AccountingInputValidator;
@@ -455,6 +456,11 @@ final class Tests
         $this->true(strlen($token) === 64, 'jeton CSRF aléatoire');
         $this->true($csrf->validate($token), 'jeton CSRF accepté');
         $this->false($csrf->validate('incorrect'), 'jeton CSRF incorrect refusé');
+        $this->same(
+            '&lt;script&gt;window.compromised=true&lt;/script&gt;',
+            Html::escape('<script>window.compromised=true</script>'),
+            'contenu HTML utilisateur échappé contre XSS'
+        );
         $_SERVER['REQUEST_URI'] = '/education/login';
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $request = Request::fromGlobals('/edu');
@@ -463,7 +469,7 @@ final class Tests
 
     private function databaseTests(): void
     {
-        [$pdo, $runner] = $this->database();
+        [$pdo, $runner, $databasePath] = $this->database();
         $applied = $runner->apply();
         $this->same(
             ['001', '002'],
@@ -475,6 +481,21 @@ final class Tests
         $this->same('1', (string) $pdo->query('PRAGMA foreign_keys')->fetchColumn(), 'clés étrangères actives');
         $this->same('5000', (string) $pdo->query('PRAGMA busy_timeout')->fetchColumn(), 'busy timeout');
         $this->same('wal', mb_strtolower((string) $pdo->query('PRAGMA journal_mode')->fetchColumn()), 'WAL actif');
+        $contender = ConnectionFactory::sqlite($databasePath);
+        $contender->exec('PRAGMA busy_timeout = 50');
+        $pdo->exec('BEGIN IMMEDIATE');
+        $locked = false;
+        try {
+            $contender->exec('BEGIN IMMEDIATE');
+        } catch (\PDOException $exception) {
+            $locked = str_contains(mb_strtolower($exception->getMessage()), 'locked');
+        } finally {
+            $pdo->exec('ROLLBACK');
+        }
+        $this->true($locked, 'second écrivain refusé pendant un verrou SQLite');
+        $contender->exec('BEGIN IMMEDIATE');
+        $contender->exec('ROLLBACK');
+        $this->true(true, 'écriture concurrente possible après libération du verrou');
 
         $this->same(
             2,
@@ -4207,7 +4228,7 @@ final class Tests
                 'exercise_id' => $exerciseId,
                 'journal_id' => $httpJournal,
                 'date' => '2026-05-10',
-                'label' => 'Journalisation Vue',
+                'label' => '',
                 'reference' => 'JOURNAL-VUE',
                 'attachment_reference' => '',
                 'validate' => true,
@@ -4227,7 +4248,11 @@ final class Tests
                 ],
             ]]
         ));
-        $this->same(200, $quickEntry->status, 'journalisation Vue validée');
+        $this->same(
+            200,
+            $quickEntry->status,
+            'journalisation Vue validée sans libellé d’écriture'
+        );
         $this->same(
             2530,
             (int) $pdo->query(
@@ -6420,11 +6445,30 @@ final class Tests
     {
         [$pdo, $runner] = $this->database();
         $runner->apply();
+        $pdo->exec('CREATE TABLE qualification_restore_marker (marker TEXT NOT NULL)');
+        $pdo->prepare(
+            'INSERT INTO qualification_restore_marker (marker) VALUES (?)'
+        )->execute(['LOT15-RESTORE-OK']);
         $directory = $this->tempDir() . '/backups';
         $backup = BackupService::create($pdo, $directory, 'test-instance');
         $this->true(is_file($backup), 'sauvegarde créée');
         $copy = ConnectionFactory::sqlite($backup);
         $this->true(IntegrityChecker::check($copy)['ok'], 'sauvegarde restaurable/intègre');
+        $restoredPath = $this->tempDir() . '/restored.sqlite';
+        file_put_contents($restoredPath, 'base simulée perdue');
+        $this->true(copy($backup, $restoredPath), 'sauvegarde restaurée vers une base cible');
+        $restored = ConnectionFactory::sqlite($restoredPath);
+        $this->same(
+            'LOT15-RESTORE-OK',
+            (string) $restored->query(
+                'SELECT marker FROM qualification_restore_marker'
+            )->fetchColumn(),
+            'donnée témoin relue après restauration réelle'
+        );
+        $this->true(
+            IntegrityChecker::check($restored)['ok'],
+            'base effectivement restaurée intègre'
+        );
 
         $config = AppConfig::load(dirname(__DIR__), [
             'instance_id' => 'doctor-test',
@@ -9602,7 +9646,7 @@ final class Tests
         $proofId = (new AttachmentService($pdo, $audit))->store(
             $organisationId,
             $dossierId,
-            'justificatif.pdf',
+            '../../justificatif.pdf',
             "%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF"
         );
         $entries = new EntryService($pdo, $audit);
@@ -9648,6 +9692,13 @@ final class Tests
                 "SELECT type_mime FROM pieces_jointes WHERE id = {$proofId}"
             )->fetchColumn(),
             'justificatif validé conservé dans SQLite hors webroot'
+        );
+        $this->same(
+            'justificatif.pdf',
+            (string) $pdo->query(
+                "SELECT nom_fichier FROM pieces_jointes WHERE id = {$proofId}"
+            )->fetchColumn(),
+            'traversée de chemin neutralisée sur le nom du justificatif'
         );
         $number = $expenses->submit(
             $organisationId,

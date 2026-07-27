@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
+import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
@@ -125,10 +126,6 @@ async function selectAsset(id: number): Promise<void> {
   selectedAssetId.value = id;
   await load(id);
   section.value = 'schedule';
-}
-
-function accountLabel(account: { number: string; label: string }): string {
-  return `${account.number} — ${account.label}`;
 }
 
 function parseCents(value: string): number {
@@ -473,7 +470,7 @@ async function reverseDisposal(): Promise<void> {
               <label>Opération<select v-model="disposal.type"><option value="cession">Cession</option><option value="mise_au_rebut">Mise au rebut</option></select></label>
               <label>Date<input v-model="disposal.date" type="date" :min="selected.in_service_date" required></label>
               <label v-if="disposal.type === 'cession'">Produit de cession<input v-model="disposal.proceeds" inputmode="decimal" required></label>
-              <label v-if="disposal.type === 'cession'">Compte encaissé / à recevoir<select v-model="disposal.proceeds_account_id"><option :value="null">Choisir si produit non nul…</option><option v-for="account in debitAccounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option></select></label>
+              <label v-if="disposal.type === 'cession'">Compte encaissé / à recevoir<AccountCombobox v-model="disposal.proceeds_account_id" :options="debitAccounts" :empty-value="null" placeholder="Choisir si produit non nul…" /></label>
               <button class="button danger" :disabled="!workspace.capabilities.post || !journalId">Comptabiliser la sortie</button>
             </form>
             <div v-if="selected.exits.length" class="table-scroll">
@@ -508,11 +505,11 @@ async function reverseDisposal(): Promise<void> {
             <label>Code<input v-model="categoryDraft.code" maxlength="20" required></label>
             <label>Libellé<input v-model="categoryDraft.label" required></label>
             <label>Durée proposée (mois)<input v-model.number="categoryDraft.default_duration_months" type="number" min="1" max="1200" required></label>
-            <label>Compte d’actif<select v-model.number="categoryDraft.asset_account_id" aria-label="Compte d’actif" required><option :value="0">Choisir…</option><option v-for="account in assetAccounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option></select></label>
-            <label>Amortissements cumulés<select v-model.number="categoryDraft.accumulated_depreciation_account_id" aria-label="Amortissements cumulés" required><option :value="0">Choisir…</option><option v-for="account in accumulatedAccounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option></select></label>
-            <label>Dotation<select v-model.number="categoryDraft.depreciation_expense_account_id" aria-label="Dotation" required><option :value="0">Choisir…</option><option v-for="account in expenseAccounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option></select></label>
-            <label>Gain de cession<select v-model.number="categoryDraft.disposal_gain_account_id" aria-label="Gain de cession" required><option :value="0">Choisir…</option><option v-for="account in creditAccounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option></select></label>
-            <label>Perte de cession<select v-model.number="categoryDraft.disposal_loss_account_id" aria-label="Perte de cession" required><option :value="0">Choisir…</option><option v-for="account in expenseAccounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option></select></label>
+            <label>Compte d’actif<AccountCombobox v-model="categoryDraft.asset_account_id" :options="assetAccounts" aria-label="Compte d’actif" required /></label>
+            <label>Amortissements cumulés<AccountCombobox v-model="categoryDraft.accumulated_depreciation_account_id" :options="accumulatedAccounts" aria-label="Amortissements cumulés" required /></label>
+            <label>Dotation<AccountCombobox v-model="categoryDraft.depreciation_expense_account_id" :options="expenseAccounts" aria-label="Dotation" required /></label>
+            <label>Gain de cession<AccountCombobox v-model="categoryDraft.disposal_gain_account_id" :options="creditAccounts" aria-label="Gain de cession" required /></label>
+            <label>Perte de cession<AccountCombobox v-model="categoryDraft.disposal_loss_account_id" :options="expenseAccounts" aria-label="Perte de cession" required /></label>
             <label class="checkbox-field"><input v-model="categoryDraft.active" type="checkbox"> Active</label>
             <button class="button primary" :disabled="!workspace.capabilities.setup || assets.saving">Enregistrer</button>
           </form>

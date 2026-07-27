@@ -34,11 +34,16 @@ final class FinancialReportingService
             $exerciseId,
             $dateEnd
         );
-        $balanceSheet = $this->reports->balanceSheet(
+        $balanceSheet = $this->balanceComparison(
             $organisationId,
             $dossierId,
-            $exerciseId,
-            $dateEnd
+            $exercise,
+            $this->reports->balanceSheet(
+                $organisationId,
+                $dossierId,
+                $exerciseId,
+                $dateEnd
+            )
         );
         $income = $this->reports->incomeStatement(
             $organisationId,
@@ -102,7 +107,7 @@ final class FinancialReportingService
                 'read_only' =>
                     'Tous les rapports lisent uniquement les écritures validées ou contre-passées.',
                 'cash_flow' =>
-                    'Méthode directe depuis les comptes de liquidités configurés ; les catégories proposées restent à valider par le préparateur.',
+                    'Méthode indirecte : le résultat est rapproché de la variation des liquidités et les postes restant à classer sont signalés.',
                 'comparison' =>
                     'Le comparatif reprend le dernier exercice antérieur complet disponible.',
             ],
@@ -162,6 +167,63 @@ final class FinancialReportingService
             'change_cents' =>
                 (int) $row['closing_cents'] - (int) $row['opening_cents'],
         ], $accounts->fetchAll());
+        $fallback = $this->pdo->prepare(
+                "SELECT -c.id AS id, c.libelle, 'liquidites' AS type,
+                        d.monnaie, c.id AS account_id, c.numero,
+                        c.libelle AS account_label,
+                        COALESCE(SUM(CASE
+                          WHEN e.id IS NOT NULL
+                           AND (e.source_type = 'ouverture'
+                             OR e.date_comptable < :start)
+                          THEN l.debit_centimes - l.credit_centimes
+                          ELSE 0 END), 0) AS opening_cents,
+                        COALESCE(SUM(CASE
+                          WHEN e.id IS NOT NULL AND e.date_comptable <= :end
+                          THEN l.debit_centimes - l.credit_centimes
+                          ELSE 0 END), 0) AS closing_cents
+                 FROM comptes c
+                 JOIN dossiers d ON d.id = c.dossier_id
+                 LEFT JOIN lignes_ecriture l ON l.compte_id = c.id
+                 LEFT JOIN ecritures e ON e.id = l.ecriture_id
+                   AND e.exercice_id = :exercise
+                   AND e.statut IN ('validee', 'contre_passee')
+                 WHERE c.organisation_id = :organisation
+                   AND c.dossier_id = :dossier
+                   AND c.actif = 1 AND c.imputable = 1
+                   AND c.numero LIKE '100%'
+                   AND NOT EXISTS (
+                     SELECT 1 FROM comptes_tresorerie t
+                     WHERE t.organisation_id = c.organisation_id
+                       AND t.dossier_id = c.dossier_id
+                       AND t.compte_comptable_id = c.id
+                       AND t.actif = 1
+                   )
+                 GROUP BY c.id
+                 HAVING opening_cents <> 0 OR closing_cents <> 0
+                 ORDER BY length(c.numero), c.numero COLLATE NOCASE"
+        );
+        $fallback->execute([
+            'organisation' => $organisationId,
+            'dossier' => $dossierId,
+            'exercise' => $exerciseId,
+            'start' => $dateStart,
+            'end' => $dateEnd,
+        ]);
+        $implicitRows = array_map(static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'label' => (string) $row['libelle'],
+                'type' => (string) $row['type'],
+                'currency' => (string) $row['monnaie'],
+                'ledger_account_id' => (int) $row['account_id'],
+                'ledger_number' => (string) $row['numero'],
+                'ledger_label' => (string) $row['account_label'],
+                'opening_cents' => (int) $row['opening_cents'],
+                'closing_cents' => (int) $row['closing_cents'],
+                'change_cents' =>
+                    (int) $row['closing_cents'] - (int) $row['opening_cents'],
+        ], $fallback->fetchAll());
+        $usesImplicitCashAccounts = $implicitRows !== [];
+        array_push($accountRows, ...$implicitRows);
 
         $movements = $this->pdo->prepare(
             "SELECT e.id, e.numero, e.date_comptable, e.libelle,
@@ -186,38 +248,90 @@ final class FinancialReportingService
              HAVING amount_cents <> 0
              ORDER BY e.date_comptable, e.id"
         );
-        $movements->execute([
-            $organisationId,
-            $dossierId,
-            $exerciseId,
-            $dateStart,
-            $dateEnd,
-        ]);
         $items = [];
         $inflows = 0;
         $outflows = 0;
-        foreach ($movements->fetchAll() as $row) {
-            $amount = (int) $row['amount_cents'];
-            $inflows += max(0, $amount);
-            $outflows += max(0, -$amount);
-            $items[] = [
-                'entry_id' => (int) $row['id'],
-                'number' => (string) $row['numero'],
-                'date' => (string) $row['date_comptable'],
-                'label' => (string) $row['libelle'],
-                'source_type' => (string) $row['source_type'],
-                'source_id' => (string) $row['source_id'],
-                'category' => $this->cashCategory((string) $row['source_type']),
-                'amount_cents' => $amount,
-            ];
+        if (!$usesImplicitCashAccounts) {
+            $movements->execute([
+                $organisationId,
+                $dossierId,
+                $exerciseId,
+                $dateStart,
+                $dateEnd,
+            ]);
+            foreach ($movements->fetchAll() as $row) {
+                $amount = (int) $row['amount_cents'];
+                $inflows += max(0, $amount);
+                $outflows += max(0, -$amount);
+                $items[] = [
+                    'entry_id' => (int) $row['id'],
+                    'number' => (string) $row['numero'],
+                    'date' => (string) $row['date_comptable'],
+                    'label' => (string) $row['libelle'],
+                    'source_type' => (string) $row['source_type'],
+                    'source_id' => (string) $row['source_id'],
+                    'category' => $this->cashCategory((string) $row['source_type']),
+                    'amount_cents' => $amount,
+                ];
+            }
         }
         $opening = array_sum(array_column($accountRows, 'opening_cents'));
         $closing = array_sum(array_column($accountRows, 'closing_cents'));
-        $net = $inflows - $outflows;
+        $net = $closing - $opening;
+        if ($usesImplicitCashAccounts) {
+            $inflows = max(0, $net);
+            $outflows = max(0, -$net);
+        }
+        $income = $this->reports->incomeStatement(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $dateEnd
+        );
+        $result = (int) $income['resultat_centimes'];
+        $depreciation = 0;
+        foreach ($income['items'] as $row) {
+            if (
+                (string) $row['type'] === 'charge'
+                && preg_match('/^(68|69)/', (string) $row['numero']) === 1
+            ) {
+                $depreciation += (int) $row['solde_centimes'];
+            }
+        }
+        $statementItems = [[
+            'entry_id' => -1,
+            'number' => '',
+            'date' => '',
+            'label' => 'Résultat de l’exercice',
+            'category' => 'exploitation',
+            'amount_cents' => $result,
+        ]];
+        if ($depreciation !== 0) {
+            $statementItems[] = [
+                'entry_id' => -2,
+                'number' => '',
+                'date' => '',
+                'label' => 'Amortissements, provisions et corrections de valeur',
+                'category' => 'exploitation',
+                'amount_cents' => $depreciation,
+            ];
+        }
+        $unclassified = $net - $result - $depreciation;
+        if ($unclassified !== 0) {
+            $statementItems[] = [
+                'entry_id' => -3,
+                'number' => '',
+                'date' => '',
+                'label' =>
+                    'Variation des autres postes du bilan et flux à classer',
+                'category' => 'a_classer',
+                'amount_cents' => $unclassified,
+            ];
+        }
         return [
-            'method' => 'directe_grand_livre',
+            'method' => 'indirecte_rapprochee',
             'method_label' =>
-                'Méthode directe — mouvements des comptes de liquidités',
+                'Méthode indirecte — résultat rapproché aux liquidités',
             'date_start' => $dateStart,
             'date_end' => $dateEnd,
             'opening_cash_cents' => $opening,
@@ -227,9 +341,11 @@ final class FinancialReportingService
             'closing_cash_cents' => $closing,
             'reconciled_closing_cents' => $opening + $net,
             'reconciliation_difference_cents' => $closing - ($opening + $net),
-            'classification_status' => 'a_valider',
+            'classification_status' =>
+                $unclassified === 0 ? 'complet' : 'a_valider',
             'accounts' => $accountRows,
             'items' => $items,
+            'statement_items' => $statementItems,
         ];
     }
 
@@ -339,6 +455,65 @@ final class FinancialReportingService
                     (int) $current['resultat_centimes']
                     - (int) $previous['resultat_centimes'],
             ],
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    private function balanceComparison(
+        int $organisationId,
+        int $dossierId,
+        array $exercise,
+        array $current,
+    ): array {
+        $previousStmt = $this->pdo->prepare(
+            'SELECT id, libelle, date_debut, date_fin
+             FROM exercices
+             WHERE dossier_id = ? AND date_fin < ?
+             ORDER BY date_fin DESC LIMIT 1'
+        );
+        $previousStmt->execute([$dossierId, $exercise['date_debut']]);
+        $previousExercise = $previousStmt->fetch();
+        $previous = $previousExercise === false
+            ? [
+                'items' => [],
+                'total_actif_centimes' => 0,
+                'total_passif_centimes' => 0,
+            ]
+            : $this->reports->balanceSheet(
+                $organisationId,
+                $dossierId,
+                (int) $previousExercise['id'],
+                (string) $previousExercise['date_fin']
+            );
+        $rows = [];
+        foreach ([$current['items'], $previous['items']] as $setIndex => $items) {
+            foreach ($items as $item) {
+                $number = (string) $item['numero'];
+                $rows[$number] ??= [
+                    ...$item,
+                    'solde_centimes' => 0,
+                    'current_cents' => 0,
+                    'previous_cents' => 0,
+                ];
+                $key = $setIndex === 0 ? 'current_cents' : 'previous_cents';
+                $rows[$number][$key] = (int) $item['solde_centimes'];
+                if ($setIndex === 0) {
+                    $rows[$number]['solde_centimes'] =
+                        (int) $item['solde_centimes'];
+                }
+            }
+        }
+        ksort($rows, SORT_NATURAL);
+        return [
+            ...$current,
+            'items' => array_values($rows),
+            'current_label' => (string) $exercise['libelle'],
+            'previous_label' => $previousExercise === false
+                ? null : (string) $previousExercise['libelle'],
+            'previous_total_actif_centimes' =>
+                (int) $previous['total_actif_centimes'],
+            'previous_total_passif_centimes' =>
+                (int) $previous['total_passif_centimes'],
         ];
     }
 

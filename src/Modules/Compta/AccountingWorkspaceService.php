@@ -488,6 +488,27 @@ final class AccountingWorkspaceService
             $dateStart,
             $dateEnd
         );
+        $balanceColumns = [
+            'numero' => 'Compte',
+            'libelle' => 'Libellé',
+            'type_libelle' => 'Type',
+            'current_cents' => (string) $financial['balance_sheet']['current_label'],
+        ];
+        if ($financial['balance_sheet']['previous_label'] !== null) {
+            $balanceColumns['previous_cents'] =
+                (string) $financial['balance_sheet']['previous_label'];
+        }
+        $incomeColumns = [
+            'number' => 'Compte',
+            'label' => 'Libellé',
+            'type' => 'Type',
+            'current_cents' =>
+                (string) $financial['income_statement']['current']['label'],
+        ];
+        if ($financial['income_statement']['previous']['exercise_id'] !== null) {
+            $incomeColumns['previous_cents'] =
+                (string) $financial['income_statement']['previous']['label'];
+        }
         [$rows, $columns] = match ($type) {
             'journal' => [
                 $this->completeJournal(
@@ -524,7 +545,6 @@ final class AccountingWorkspaceService
                 [
                     'numero' => 'Compte',
                     'libelle' => 'Libellé',
-                    'rubrique_chemin' => 'Rubrique',
                     'debit_centimes' => 'Débit',
                     'credit_centimes' => 'Crédit',
                     'solde_centimes' => 'Solde',
@@ -532,34 +552,17 @@ final class AccountingWorkspaceService
             ],
             'bilan' => [
                 $financial['balance_sheet']['items'],
-                [
-                    'numero' => 'Compte',
-                    'libelle' => 'Libellé',
-                    'type_libelle' => 'Type',
-                    'rubrique_chemin' => 'Rubrique',
-                    'solde_centimes' => 'Solde',
-                ],
+                $balanceColumns,
             ],
             'resultat' => [
                 $financial['income_statement']['items'],
-                [
-                    'number' => 'Compte',
-                    'label' => 'Libellé',
-                    'type' => 'Type',
-                    'rubric_path' => 'Rubrique',
-                    'current_cents' => 'Exercice courant',
-                    'previous_cents' => 'Exercice précédent',
-                    'delta_cents' => 'Variation',
-                ],
+                $incomeColumns,
             ],
             'flux_tresorerie' => [
-                $financial['cash_flow']['items'],
+                $financial['cash_flow']['statement_items'],
                 [
-                    'date' => 'Date',
-                    'number' => 'Écriture',
                     'label' => 'Libellé',
                     'category' => 'Catégorie',
-                    'source_type' => 'Source',
                     'amount_cents' => 'Flux',
                 ],
             ],
@@ -739,6 +742,27 @@ final class AccountingWorkspaceService
         array $data,
         int $actorId,
     ): void {
+        if ($data['action'] === 'save_batch') {
+            $rows = array_map(
+                static fn (array $row): array => [
+                    'id' => $row['id'],
+                    'numero' => $row['number'],
+                    'libelle' => $row['label'],
+                    'sens_mode' => $row['sense_mode'],
+                    'rubrique_id' => $row['rubric_id'],
+                    'version' => $row['version'],
+                ],
+                $data['accounts']
+            );
+            $this->chart->updateAccountsBatch(
+                $organisationId,
+                $dossierId,
+                $rows,
+                $data['ordered_ids'],
+                $actorId
+            );
+            return;
+        }
         if ($data['action'] === 'delete') {
             $this->chart->removeOrDeactivate(
                 $organisationId,

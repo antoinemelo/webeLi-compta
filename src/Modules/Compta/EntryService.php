@@ -833,7 +833,6 @@ final class EntryService
         }
         if (
             !$this->validDate((string) ($command['date_comptable'] ?? ''))
-            || trim((string) ($command['libelle'] ?? '')) === ''
             || !isset($command['lignes'])
             || !is_array($command['lignes'])
         ) {

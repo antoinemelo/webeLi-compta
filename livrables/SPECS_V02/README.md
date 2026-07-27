@@ -25,6 +25,8 @@ PostgreSQL. La cible est un monolithe modulaire :
 - `docs/05-roadmap-et-recette.md` : ordre, risques et portes de qualité.
 - `docs/06-matrice-reprise-gaeld.md` : ce qui est repris, adapté ou refusé.
 - `docs/07-sources.md` : sources locales et publiques effectivement consultées.
+- `docs/08-qualification-finale.md` : preuves et limites de la recette
+  contradictoire du lot 15.
 - `prompts/00-prompt-maitre.md` : garde-fous à fournir dans chaque session.
 - `prompts/01` à `14`, puis `14b` à `14e` : lots d'implémentation ordonnés.
 - `prompts/15-qualification-finale.md` : audit contradictoire avant livraison.

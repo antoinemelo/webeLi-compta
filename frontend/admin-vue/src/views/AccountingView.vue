@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
+import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import AssetsPanel from '@/components/accounting/AssetsPanel.vue';
 import ConsolidationPanel from '@/components/accounting/ConsolidationPanel.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -20,6 +21,11 @@ type EntryLine = {
   credit: string;
 };
 
+type CashFlowCategory = {
+  key: string;
+  label: string;
+};
+
 const route = useRoute();
 const context = useContextStore();
 const accounting = useAccountingStore();
@@ -27,6 +33,7 @@ const exerciseId = ref(0);
 const selectedAccountId = ref(0);
 const ledgerMode = ref<'list' | 't'>('list');
 const reportSection = ref<'balance' | 'bilan' | 'resultat' | 'flux' | 'grand_livre'>('balance');
+const statementDisplayMode = ref<'currency' | 'percentage'>('currency');
 const reportStart = ref('');
 const reportEnd = ref('');
 const selectedVatStatementId = ref(0);
@@ -88,10 +95,70 @@ let initializedDossierId = 0;
 
 const workspace = computed(() => accounting.workspace);
 const isChartSettings = computed(() => route.name === 'chart-settings');
-const currentTab = computed(() =>
-  isChartSettings.value ? 'plan' : String(route.params.tab || 'journalisation')
-);
+const currentTab = computed(() => {
+  if (isChartSettings.value) return 'plan';
+  const tab = String(route.params.tab || 'journalisation');
+  return ['tva', 'fiscal', 'amortissements'].includes(tab) ? 'cloture' : tab;
+});
+const closingSection = computed(() => {
+  const legacyTab = String(route.params.tab || '');
+  if (legacyTab === 'tva') return 'tva';
+  if (legacyTab === 'fiscal') return 'fiscal';
+  if (legacyTab === 'amortissements') return 'assets';
+  const section = String(route.query.section || 'control');
+  return ['control', 'tva', 'fiscal', 'assets'].includes(section)
+    ? section
+    : 'control';
+});
 const currency = computed(() => context.selection?.dossier.currency || 'CHF');
+const reportEntityName = computed(() =>
+  context.selection?.organization.name || 'Organisation'
+);
+const reportDateLabel = computed(() => {
+  if (!reportEnd.value) return '';
+  return new Intl.DateTimeFormat('fr-CH').format(
+    new Date(`${reportEnd.value}T00:00:00`)
+  );
+});
+const reportStartLabel = computed(() => {
+  if (!reportStart.value) return '';
+  return new Intl.DateTimeFormat('fr-CH').format(
+    new Date(`${reportStart.value}T00:00:00`)
+  );
+});
+const hasPreviousBalance = computed(() =>
+  Boolean(workspace.value?.reports.balance_sheet.previous_label)
+);
+const hasPreviousIncome = computed(() =>
+  Boolean(workspace.value?.reports.income_statement.previous.exercise_id)
+);
+const ledgerDebitSign = computed(() =>
+  workspace.value?.ledger?.account.sens_normal === 'credit' ? '-' : '+'
+);
+const ledgerCreditSign = computed(() =>
+  workspace.value?.ledger?.account.sens_normal === 'credit' ? '+' : '-'
+);
+const incomeRevenueCurrent = computed(() => {
+  const rows = workspace.value?.reports.income_statement.items ?? [];
+  const revenue = rows
+    .filter((row) => row.type === 'produit' && row.number.startsWith('3'))
+    .reduce((total, row) => total + row.current_cents, 0);
+  return revenue || workspace.value?.reports.income_statement.current.products_cents || 0;
+});
+const incomeRevenuePrevious = computed(() => {
+  const rows = workspace.value?.reports.income_statement.items ?? [];
+  const revenue = rows
+    .filter((row) => row.type === 'produit' && row.number.startsWith('3'))
+    .reduce((total, row) => total + row.previous_cents, 0);
+  return revenue || workspace.value?.reports.income_statement.previous.products_cents || 0;
+});
+const cashFlowCategories: CashFlowCategory[] = [
+  { key: 'exploitation', label: 'Flux de trésorerie liés à l’exploitation' },
+  { key: 'investissement', label: 'Flux de trésorerie liés à l’investissement' },
+  { key: 'financement', label: 'Flux de trésorerie liés au financement' },
+  { key: 'a_classer', label: 'Flux restant à classer' },
+  { key: 'transfert_interne', label: 'Transferts internes' }
+];
 const allowed = computed(() =>
   context.moduleEnabled('comptabilite') && context.can('compta.view')
 );
@@ -124,6 +191,22 @@ const visibleAccounts = computed(() => {
       .includes(search)
   );
 });
+const accountRubrics = computed(() =>
+  (workspace.value?.chart.rubrics ?? []).filter(
+    (rubric) => ['groupe_principal', 'groupe'].includes(rubric.structure_level)
+  )
+);
+const dirtyAccounts = computed(() =>
+  (workspace.value?.chart.accounts ?? []).filter((account) => {
+    const draft = accountDrafts[account.id];
+    return draft && (
+      draft.number !== account.number
+      || draft.label !== account.label
+      || draft.sense_mode !== account.sense_mode
+      || draft.rubric_id !== account.rubric_id
+    );
+  })
+);
 const openingAccounts = computed(() =>
   (workspace.value?.chart.accounts ?? []).filter(
     (account) => account.active && ['actif', 'passif'].includes(account.type)
@@ -260,6 +343,41 @@ function formatMoney(cents: number, displayCurrency = currency.value): string {
   const sign = cents < 0 ? '−' : '';
   const absolute = Math.abs(cents);
   return `${sign}${displayCurrency} ${Math.floor(absolute / 100).toLocaleString('fr-CH')}.${String(absolute % 100).padStart(2, '0')}`;
+}
+
+function formatStatementAmount(cents: number | null | undefined): string {
+  if (cents === null || cents === undefined) return '—';
+  return new Intl.NumberFormat('fr-CH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(cents / 100);
+}
+
+function formatStatementValue(
+  cents: number | null | undefined,
+  percentageBase: number
+): string {
+  if (cents === null || cents === undefined) return '—';
+  if (statementDisplayMode.value === 'currency') return formatStatementAmount(cents);
+  if (percentageBase === 0) return '—';
+  return new Intl.NumberFormat('fr-CH', {
+    style: 'percent',
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+  }).format(cents / percentageBase);
+}
+
+function cashFlowItems(category: string) {
+  return workspace.value?.reports.cash_flow.statement_items.filter(
+    (item) => item.category === category
+  ) ?? [];
+}
+
+function cashFlowCategoryTotal(category: string): number {
+  return cashFlowItems(category).reduce(
+    (total, item) => total + item.amount_cents,
+    0
+  );
 }
 
 function addLine(): void {
@@ -403,20 +521,21 @@ async function moveRubric(id: number, direction: -1 | 1): Promise<void> {
   }, 'Ordre des rubriques enregistré.');
 }
 
-async function saveAccount(id: number): Promise<void> {
-  const account = workspace.value?.chart.accounts.find((item) => item.id === id);
-  const draft = accountDrafts[id];
-  if (!account || !draft) return;
+async function saveAccounts(): Promise<void> {
+  if (!dirtyAccounts.value.length) return;
+  const accounts = dirtyAccounts.value.map((account) => ({
+    id: account.id,
+    number: accountDrafts[account.id].number,
+    label: accountDrafts[account.id].label,
+    sense_mode: accountDrafts[account.id].sense_mode,
+    rubric_id: accountDrafts[account.id].rubric_id,
+    version: account.version
+  }));
   await mutateAndReload('/accounting/chart/accounts', {
-    action: 'save',
-    id,
-    number: draft.number,
-    label: draft.label,
-    sense_mode: draft.sense_mode,
-    rubric_id: draft.rubric_id,
-    version: account.version,
-    ordered_ids: []
-  }, 'Compte enregistré.');
+    action: 'save_batch',
+    accounts,
+    ordered_ids: (workspace.value?.chart.accounts ?? []).map((account) => account.id)
+  }, `${accounts.length} compte(s) enregistré(s).`);
 }
 
 async function createAccount(): Promise<void> {
@@ -497,6 +616,10 @@ function selectPlanSection(value: string): void {
   if (['types', 'sense', 'rubrics', 'accounts', 'opening'].includes(value)) {
     planSection.value = value as typeof planSection.value;
   }
+}
+
+function senseLabel(side: 'debit' | 'credit'): string {
+  return side === 'debit' ? '+/-' : '-/+';
 }
 
 function selectReportSection(value: string): void {
@@ -635,7 +758,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
 <template>
   <header class="page-heading accounting-header">
     <div>
-      <h1>{{ isChartSettings ? 'Plan comptable' : 'Comptabilité' }}</h1>
+      <h1>{{ isChartSettings ? 'Configuration' : 'Comptabilité' }}</h1>
       <p>
         {{ isChartSettings
           ? 'Structure, comptes, règles de sens et soldes d’ouverture du dossier.'
@@ -658,7 +781,23 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
     :label="isChartSettings ? 'Navigation Configuration' : 'Navigation comptable'"
   />
 
-  <nav v-if="allowed && isChartSettings" class="subtabs" aria-label="Référentiels gérés">
+  <nav
+    v-if="allowed && currentTab === 'cloture'"
+    class="subtabs secondary-tabs closing-tabs"
+    aria-label="Sections de clôture"
+  >
+    <RouterLink
+      v-for="item in [
+        ['control', 'Contrôle'], ['tva', 'TVA'],
+        ['fiscal', 'Dossier fiscal'], ['assets', 'Amortissements']
+      ]"
+      :key="item[0]"
+      :to="{ path: '/compta/cloture', query: item[0] === 'control' ? {} : { section: item[0] } }"
+      :class="{ active: closingSection === item[0] }"
+    >{{ item[1] }}</RouterLink>
+  </nav>
+
+  <nav v-if="allowed && isChartSettings" class="subtabs static-tabs" aria-label="Référentiels gérés">
     <RouterLink
       v-for="item in referenceNavigation"
       :key="item.key"
@@ -692,39 +831,42 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
               {{ entryBalanced ? 'Équilibrée' : 'À équilibrer' }}
             </span>
           </div>
-          <div class="form-grid three">
-            <label>Date
-              <input v-model="entry.date" type="date" :min="workspace.exercise.start_date" :max="workspace.exercise.end_date" required>
-            </label>
-            <label>Journal
-              <select v-model.number="entry.journal_id" required>
+          <div class="entry-metadata-row">
+            <input
+              v-model="entry.date"
+              type="date"
+              aria-label="Date"
+              :min="workspace.exercise.start_date"
+              :max="workspace.exercise.end_date"
+              required
+            >
+            <select v-model.number="entry.journal_id" aria-label="Journal" required>
                 <option v-for="journal in workspace.catalog.journals" :key="journal.id" :value="journal.id">
                   {{ journal.code }} — {{ journal.label }}
                 </option>
-              </select>
-            </label>
-            <label>Référence
-              <input v-model="entry.reference" maxlength="120">
-            </label>
+            </select>
+            <input v-model="entry.reference" aria-label="Référence" maxlength="120" placeholder="Référence">
+            <input v-model="entry.label" aria-label="Libellé" maxlength="255" placeholder="Libellé">
+            <input
+              v-model="entry.attachment_reference"
+              aria-label="Référence de pièce"
+              maxlength="190"
+              placeholder="Référence de pièce"
+            >
           </div>
-          <label>Libellé
-            <input v-model="entry.label" maxlength="255" required>
-          </label>
-          <label>Référence de pièce
-            <input v-model="entry.attachment_reference" maxlength="190">
-          </label>
           <div class="table-scroll">
             <table class="editable-table">
               <thead><tr><th>Compte</th><th>Libellé ligne</th><th>Débit</th><th>Crédit</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="(line, index) in entry.lines" :key="index">
                   <td>
-                    <select v-model.number="line.account_id" required>
-                      <option :value="0">Choisir…</option>
-                      <option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">
-                        {{ account.number }} — {{ account.label }}
-                      </option>
-                    </select>
+                    <AccountCombobox
+                      v-model="line.account_id"
+                      :options="workspace.catalog.accounts"
+                      :aria-label="`Compte ligne ${index + 1}`"
+                      placeholder="Choisir…"
+                      required
+                    />
                   </td>
                   <td><input v-model="line.label" maxlength="255"></td>
                   <td><input v-model="line.debit" inputmode="decimal" placeholder="0.00"></td>
@@ -750,13 +892,13 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             <span>{{ workspace.journal.total }} écriture(s)</span>
           </div>
           <div class="table-scroll">
-            <table>
-              <thead><tr><th>Date</th><th>N°</th><th>Journal</th><th>Libellé</th><th>Débit</th><th>Crédit</th><th>Statut</th></tr></thead>
+            <table class="accounting-document-table journal-table">
+              <thead><tr><th>Date</th><th>N°</th><th>Compte débité</th><th>Compte crédité</th><th>Libellé</th><th class="amount">Montant</th><th>Statut</th></tr></thead>
               <tbody>
                 <tr v-for="row in workspace.journal.items" :key="row.id">
                   <td>{{ row.date_comptable }}</td><td>{{ row.numero || `#${row.id}` }}</td>
-                  <td>{{ row.journal }}</td><td>{{ row.libelle }}</td>
-                  <td>{{ formatMoney(row.debit_centimes) }}</td><td>{{ formatMoney(row.credit_centimes) }}</td>
+                  <td>{{ row.comptes_debit }}</td><td>{{ row.comptes_credit }}</td><td>{{ row.libelle || row.reference || '—' }}</td>
+                  <td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td>
                   <td><span class="status-chip">{{ row.statut }}</span></td>
                 </tr>
                 <tr v-if="!workspace.journal.items.length"><td colspan="7">Aucune écriture pour cet exercice.</td></tr>
@@ -775,35 +917,36 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           </div>
         </div>
         <label class="wide-control">Compte
-          <select v-model.number="selectedAccountId" @change="selectAccount">
-            <option :value="0">Sélectionner un compte…</option>
-            <option v-for="account in workspace.catalog.accounts" :key="account.id" :value="account.id">
-              {{ account.number }} — {{ account.label }}
-            </option>
-          </select>
+          <AccountCombobox
+            v-model="selectedAccountId"
+            :options="workspace.catalog.accounts"
+            @change="selectAccount"
+          />
         </label>
         <EmptyState v-if="!workspace.ledger" title="Choisissez un compte" description="L’extrait est calculé directement depuis les écritures validées." />
         <template v-else>
           <div class="metric-strip">
-            <span><small>Débit</small><strong>{{ formatMoney(workspace.ledger.total_debit_centimes) }}</strong></span>
-            <span><small>Crédit</small><strong>{{ formatMoney(workspace.ledger.total_credit_centimes) }}</strong></span>
+            <span><small>Débit ({{ ledgerDebitSign }})</small><strong>{{ formatMoney(workspace.ledger.total_debit_centimes) }}</strong></span>
+            <span><small>Crédit ({{ ledgerCreditSign }})</small><strong>{{ formatMoney(workspace.ledger.total_credit_centimes) }}</strong></span>
             <span><small>Solde naturel</small><strong>{{ formatMoney(workspace.ledger.solde_centimes) }}</strong></span>
           </div>
+          <div class="financial-statement-heading">
+            <strong>COMPTE {{ workspace.ledger.account.numero }} — {{ workspace.ledger.account.libelle.toLocaleUpperCase('fr-CH') }} — {{ currency }}</strong>
+          </div>
           <div v-if="ledgerMode === 'list'" class="table-scroll">
-            <table><thead><tr><th>Date</th><th>N°</th><th>Journal</th><th>Libellé</th><th>Montant d’origine et taux</th><th>Débit</th><th>Crédit</th><th>Solde</th></tr></thead>
+            <table class="accounting-document-table"><thead><tr><th>Date</th><th>Libellé</th><th class="amount">Débit ({{ ledgerDebitSign }})</th><th class="amount">Crédit ({{ ledgerCreditSign }})</th><th class="amount">Solde</th></tr></thead>
               <tbody><tr v-for="row in workspace.ledger.items" :key="`${row.ecriture_id}-${row.date_comptable}-${row.libelle}`">
-                <td>{{ row.date_comptable }}</td><td>{{ row.numero }}</td><td>{{ row.journal }}</td><td>{{ row.libelle }}</td>
-                <td><template v-if="row.devise_origine">{{ formatMoney(Math.abs(row.montant_origine_centimes || 0), row.devise_origine) }}<br><small>{{ row.taux_change_date }} · {{ row.taux_change_numerateur }}/{{ row.taux_change_denominateur }} · {{ row.taux_change_source }}</small></template><span v-else>—</span></td>
-                <td>{{ row.debit_centimes ? formatMoney(row.debit_centimes) : '—' }}</td>
-                <td>{{ row.credit_centimes ? formatMoney(row.credit_centimes) : '—' }}</td>
-                <td>{{ formatMoney(row.solde_centimes) }}</td>
+                <td>{{ row.date_comptable }}</td><td>{{ row.numero }} · {{ row.libelle || '—' }}</td>
+                <td class="amount">{{ row.debit_centimes ? formatStatementAmount(row.debit_centimes) : '—' }}</td>
+                <td class="amount">{{ row.credit_centimes ? formatStatementAmount(row.credit_centimes) : '—' }}</td>
+                <td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td>
               </tr></tbody>
             </table>
           </div>
           <div v-else class="t-account">
-            <h3>{{ workspace.ledger.account.numero }} — {{ workspace.ledger.account.libelle }}</h3>
-            <div><section><h4>Débit</h4><p v-for="row in workspace.ledger.items.filter((item) => item.debit_centimes)" :key="`d-${row.ecriture_id}`">{{ row.date_comptable }} · {{ formatMoney(row.debit_centimes) }}</p></section>
-              <section><h4>Crédit</h4><p v-for="row in workspace.ledger.items.filter((item) => item.credit_centimes)" :key="`c-${row.ecriture_id}`">{{ row.date_comptable }} · {{ formatMoney(row.credit_centimes) }}</p></section></div>
+            <div><section><h4>Débit ({{ ledgerDebitSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.debit_centimes)" :key="`d-${row.ecriture_id}`"><span>{{ row.date_comptable }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.debit_centimes) }}</strong></p><p v-if="workspace.ledger.total_credit_centimes > workspace.ledger.total_debit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_credit_centimes - workspace.ledger.total_debit_centimes) }}</strong></p></section>
+              <section><h4>Crédit ({{ ledgerCreditSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.credit_centimes)" :key="`c-${row.ecriture_id}`"><span>{{ row.date_comptable }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.credit_centimes) }}</strong></p><p v-if="workspace.ledger.total_debit_centimes > workspace.ledger.total_credit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_debit_centimes - workspace.ledger.total_credit_centimes) }}</strong></p></section></div>
+            <footer><strong>TOTAUX</strong><span>{{ formatStatementAmount(Math.max(workspace.ledger.total_debit_centimes, workspace.ledger.total_credit_centimes)) }}</span><span>{{ formatStatementAmount(Math.max(workspace.ledger.total_debit_centimes, workspace.ledger.total_credit_centimes)) }}</span></footer>
           </div>
         </template>
       </section>
@@ -813,7 +956,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           <div><p class="eyebrow">Référentiel unique</p><h2>Plan comptable</h2></div>
           <span v-if="!canSetup" class="status-chip warning">Lecture seule</span>
         </div>
-        <nav class="subtabs" aria-label="Sections du plan comptable">
+        <nav class="subtabs secondary-tabs" aria-label="Sections du plan comptable">
           <button v-for="item in [
             ['types', 'Types'], ['sense', 'Sens'], ['rubrics', 'Rubriques'],
             ['accounts', 'Comptes'], ['opening', 'Ouverture']
@@ -873,25 +1016,35 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
               <tr v-for="account in visibleAccounts" :key="account.id" :class="{ inactive: !account.active }">
                 <td><input v-model="accountDrafts[account.id].number" :disabled="!canSetup"></td>
                 <td><input v-model="accountDrafts[account.id].label" :disabled="!canSetup"></td>
-                <td><select v-model="accountDrafts[account.id].rubric_id" :disabled="!canSetup"><option :value="null">Sans rubrique</option><option v-for="rubric in workspace.chart.rubrics" :key="rubric.id" :value="rubric.id">{{ rubric.path }}</option></select></td>
-                <td><select v-model="accountDrafts[account.id].sense_mode" :disabled="!canSetup"><option value="automatique">Automatique</option><option value="debit">Débit</option><option value="credit">Crédit</option></select></td>
+                <td><select v-model="accountDrafts[account.id].rubric_id" :disabled="!canSetup"><option :value="null">Sans rubrique</option><option v-for="rubric in accountRubrics" :key="rubric.id" :value="rubric.id">{{ rubric.code }} — {{ rubric.label }}</option></select></td>
+                <td><select v-model="accountDrafts[account.id].sense_mode" :disabled="!canSetup"><option value="automatique">Automatique</option><option value="debit">+/-</option><option value="credit">-/+</option></select></td>
                 <td><button class="icon-button" type="button" :disabled="!canSetup || !!accountSearch" @click="moveAccount(account.id, -1)">↑</button><button class="icon-button" type="button" :disabled="!canSetup || !!accountSearch" @click="moveAccount(account.id, 1)">↓</button></td>
-                <td><button class="button small" type="button" :disabled="!canSetup" @click="saveAccount(account.id)">Enregistrer</button><button class="button danger small" type="button" :disabled="!canSetup" @click="deleteAccount(account.id)">Retirer</button></td>
+                <td><button class="button danger small" type="button" :disabled="!canSetup" @click="deleteAccount(account.id)">Retirer</button></td>
               </tr>
             </tbody>
           </table></div>
           <form class="inline-create" @submit.prevent="createAccount">
             <input v-model="newAccount.number" placeholder="N°" required><input v-model="newAccount.label" placeholder="Nouveau compte" required>
-            <select v-model="newAccount.rubric_id"><option :value="null">Rubrique…</option><option v-for="rubric in workspace.chart.rubrics" :key="rubric.id" :value="rubric.id">{{ rubric.path }}</option></select>
-            <select v-model="newAccount.sense_mode"><option value="automatique">Automatique</option><option value="debit">Débit</option><option value="credit">Crédit</option></select>
+            <select v-model="newAccount.rubric_id"><option :value="null">Rubrique…</option><option v-for="rubric in accountRubrics" :key="rubric.id" :value="rubric.id">{{ rubric.code }} — {{ rubric.label }}</option></select>
+            <select v-model="newAccount.sense_mode"><option value="automatique">Automatique</option><option value="debit">+/-</option><option value="credit">-/+</option></select>
             <button class="button primary" :disabled="!canSetup">Ajouter</button>
           </form>
+          <div class="button-row">
+            <button
+              class="button primary"
+              type="button"
+              :disabled="!canSetup || !dirtyAccounts.length || accounting.saving"
+              @click="saveAccounts"
+            >
+              Enregistrer
+            </button>
+          </div>
         </template>
 
         <template v-else>
           <div class="section-heading"><div><h3>Soldes d’ouverture</h3><p>{{ workspace.opening.status === 'absent' ? 'Aucun brouillon' : `État : ${workspace.opening.status}` }}</p></div><span v-if="workspace.opening.number">{{ workspace.opening.number }}</span></div>
-          <div class="table-scroll"><table class="editable-table"><thead><tr><th>Compte</th><th>Type</th><th>Sens naturel</th><th>Solde initial</th></tr></thead>
-            <tbody><tr v-for="account in openingAccounts" :key="account.id"><td>{{ account.number }} — {{ account.label }}</td><td>{{ account.type }}</td><td>{{ account.normal_side }}</td><td><input v-model="openingDrafts[account.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00"></td></tr></tbody>
+          <div class="table-scroll"><table class="editable-table"><thead><tr><th>Compte</th><th>Type</th><th>Sens</th><th>Solde initial</th></tr></thead>
+            <tbody><tr v-for="account in openingAccounts" :key="account.id"><td>{{ account.number }} — {{ account.label }}</td><td>{{ account.type }}</td><td>{{ senseLabel(account.normal_side) }}</td><td><input v-model="openingDrafts[account.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00"></td></tr></tbody>
           </table></div>
           <div class="button-row"><button class="button" type="button" :disabled="!canSetup || workspace.opening.status === 'validee'" @click="saveOpening(false)">Enregistrer le brouillon</button><button class="button primary" type="button" :disabled="!canValidate || workspace.opening.status === 'validee'" @click="saveOpening(true)">Valider l’ouverture</button></div>
         </template>
@@ -921,7 +1074,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             <span :class="['status-chip', workspace.reports.controls.result_reconciled ? 'ok' : 'warning']">Résultat réconcilié</span>
             <span :class="['status-chip', workspace.reports.controls.cash_reconciled ? 'ok' : 'warning']">Flux réconcilié</span>
           </div>
-          <nav class="subtabs" aria-label="États financiers">
+          <nav class="subtabs secondary-tabs" aria-label="États financiers">
             <button v-for="item in [
               ['balance', 'Balance'], ['bilan', 'Bilan'], ['resultat', 'Compte de résultat'],
               ['flux', 'Flux de trésorerie'], ['grand_livre', 'Grand livre']
@@ -931,51 +1084,87 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           </nav>
         </section>
 
-        <section v-if="reportSection === 'balance'" class="panel">
+        <section v-if="reportSection === 'balance'" class="panel financial-report-panel">
           <div class="section-heading"><h3>Balance de vérification</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('balance')">Exporter CSV</button></div>
-          <div class="table-scroll"><table><thead><tr><th>Compte</th><th>Rubrique</th><th>Débit</th><th>Crédit</th><th>Solde</th></tr></thead>
-            <tbody><tr v-for="row in workspace.reports.trial_balance.items" :key="row.id"><td>{{ row.numero }} — {{ row.libelle }}</td><td>{{ row.rubrique_chemin || '—' }}</td><td>{{ formatMoney(row.debit_centimes) }}</td><td>{{ formatMoney(row.credit_centimes) }}</td><td>{{ formatMoney(row.solde_centimes) }}</td></tr>
-              <tr v-if="!workspace.reports.trial_balance.items.length"><td colspan="5">Aucun mouvement validé sur la période.</td></tr></tbody>
-            <tfoot><tr><th colspan="2">Totaux</th><th>{{ formatMoney(workspace.reports.trial_balance.total_debit_centimes) }}</th><th>{{ formatMoney(workspace.reports.trial_balance.total_credit_centimes) }}</th><th></th></tr></tfoot>
+          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCE AU {{ reportDateLabel }} — {{ currency }}</strong></div>
+          <div class="table-scroll"><table class="financial-statement-table financial-ledger-table"><thead><tr><th>Compte</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Solde</th></tr></thead>
+            <tbody><tr v-for="row in workspace.reports.trial_balance.items" :key="row.id"><td><span class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td><td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td></tr>
+              <tr v-if="!workspace.reports.trial_balance.items.length"><td colspan="4">Aucun mouvement validé sur la période.</td></tr></tbody>
+            <tfoot><tr class="statement-total"><th>TOTAUX</th><th class="amount">{{ formatStatementAmount(workspace.reports.trial_balance.total_debit_centimes) }}</th><th class="amount">{{ formatStatementAmount(workspace.reports.trial_balance.total_credit_centimes) }}</th><th></th></tr></tfoot>
           </table></div>
         </section>
 
-        <section v-else-if="reportSection === 'bilan'" class="panel">
-          <div class="section-heading"><h3>Bilan</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('bilan')">Exporter CSV</button></div>
-          <div class="metric-strip"><span><small>Actif</small><strong>{{ formatMoney(workspace.reports.balance_sheet.total_actif_centimes) }}</strong></span><span><small>Passif et résultat</small><strong>{{ formatMoney(workspace.reports.balance_sheet.total_passif_centimes) }}</strong></span></div>
-          <div class="table-scroll"><table><thead><tr><th>Compte</th><th>Rubrique</th><th>Classe</th><th>Solde</th></tr></thead>
-            <tbody><tr v-for="row in workspace.reports.balance_sheet.items" :key="`${row.id}-${row.numero}`"><td>{{ row.numero }} — {{ row.libelle }}</td><td>{{ row.rubrique_chemin || '—' }}</td><td>{{ row.type }}</td><td>{{ formatMoney(row.solde_centimes) }}</td></tr></tbody>
+        <section v-else-if="reportSection === 'bilan'" class="panel financial-report-panel">
+          <div class="section-heading"><h3>Bilan</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du bilan"><button :class="{ active: statementDisplayMode === 'currency' }" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('bilan')">Exporter CSV</button></div></div>
+          <div class="financial-statement-heading">
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BILAN AU {{ reportDateLabel }} — {{ currency }}</strong>
+          </div>
+          <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th>Compte et libellé</th><th class="amount">{{ workspace.reports.balance_sheet.current_label }}</th><th v-if="hasPreviousBalance" class="amount">{{ workspace.reports.balance_sheet.previous_label }}</th></tr></thead>
+            <tbody>
+              <tr class="statement-section"><th :colspan="hasPreviousBalance ? 3 : 2">ACTIF</th></tr>
+              <tr v-for="row in workspace.reports.balance_sheet.items.filter((item) => item.type === 'actif')" :key="`actif-${row.numero}`">
+                <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                <td class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</td>
+                <td v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</td>
+              </tr>
+              <tr class="statement-total"><th>TOTAL DE L’ACTIF</th><th class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.total_actif_centimes, workspace.reports.balance_sheet.total_actif_centimes) }}</th><th v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.previous_total_actif_centimes, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</th></tr>
+              <tr class="statement-section"><th :colspan="hasPreviousBalance ? 3 : 2">PASSIF ET CAPITAUX PROPRES</th></tr>
+              <tr v-for="row in workspace.reports.balance_sheet.items.filter((item) => item.type !== 'actif')" :key="`passif-${row.numero}`">
+                <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                <td class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</td>
+                <td v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</td>
+              </tr>
+              <tr class="statement-total"><th>TOTAL DU PASSIF ET DES CAPITAUX PROPRES</th><th class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.total_passif_centimes, workspace.reports.balance_sheet.total_actif_centimes) }}</th><th v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.previous_total_passif_centimes, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</th></tr>
+            </tbody>
           </table></div>
         </section>
 
-        <section v-else-if="reportSection === 'resultat'" class="panel">
-          <div class="section-heading"><div><h3>Compte de résultat comparatif</h3><p>{{ workspace.reports.income_statement.current.label }} / {{ workspace.reports.income_statement.previous.label || 'aucun exercice antérieur' }}</p></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('resultat')">Exporter CSV</button></div>
-          <div class="metric-strip"><span><small>Produits</small><strong>{{ formatMoney(workspace.reports.income_statement.current.products_cents) }}</strong></span><span><small>Charges</small><strong>{{ formatMoney(workspace.reports.income_statement.current.expenses_cents) }}</strong></span><span><small>Résultat</small><strong>{{ formatMoney(workspace.reports.income_statement.current.result_cents) }}</strong></span></div>
-          <div class="table-scroll"><table><thead><tr><th>Compte</th><th>Rubrique</th><th>Courant</th><th>Précédent</th><th>Écart</th></tr></thead>
-            <tbody><tr v-for="row in workspace.reports.income_statement.items" :key="row.number"><td>{{ row.number }} — {{ row.label }}</td><td>{{ row.rubric_path || '—' }}</td><td>{{ formatMoney(row.current_cents) }}</td><td>{{ formatMoney(row.previous_cents) }}</td><td>{{ formatMoney(row.delta_cents) }}</td></tr></tbody>
+        <section v-else-if="reportSection === 'resultat'" class="panel financial-report-panel">
+          <div class="section-heading"><h3>Compte de résultat</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du compte de résultat"><button :class="{ active: statementDisplayMode === 'currency' }" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('resultat')">Exporter CSV</button></div></div>
+          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — RÉSULTAT DU {{ reportStartLabel }} AU {{ reportDateLabel }} — {{ currency }}</strong></div>
+          <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th>Compte et libellé</th><th class="amount">{{ workspace.reports.income_statement.current.label }}</th><th v-if="hasPreviousIncome" class="amount">{{ workspace.reports.income_statement.previous.label }}</th></tr></thead>
+            <tbody>
+              <tr class="statement-section"><th :colspan="hasPreviousIncome ? 3 : 2">PRODUITS</th></tr>
+              <tr v-for="row in workspace.reports.income_statement.items.filter((item) => item.type === 'produit')" :key="`produit-${row.number}`"><td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td><td class="amount">{{ formatStatementValue(row.current_cents, incomeRevenueCurrent) }}</td><td v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(row.previous_cents, incomeRevenuePrevious) }}</td></tr>
+              <tr class="statement-subtotal"><th>TOTAL DES PRODUITS</th><th class="amount">{{ formatStatementValue(workspace.reports.income_statement.current.products_cents, incomeRevenueCurrent) }}</th><th v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(workspace.reports.income_statement.previous.products_cents, incomeRevenuePrevious) }}</th></tr>
+              <tr class="statement-section"><th :colspan="hasPreviousIncome ? 3 : 2">CHARGES</th></tr>
+              <tr v-for="row in workspace.reports.income_statement.items.filter((item) => item.type === 'charge')" :key="`charge-${row.number}`"><td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td><td class="amount">{{ formatStatementValue(-row.current_cents, incomeRevenueCurrent) }}</td><td v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(-row.previous_cents, incomeRevenuePrevious) }}</td></tr>
+              <tr class="statement-subtotal"><th>TOTAL DES CHARGES</th><th class="amount">{{ formatStatementValue(-workspace.reports.income_statement.current.expenses_cents, incomeRevenueCurrent) }}</th><th v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(-workspace.reports.income_statement.previous.expenses_cents, incomeRevenuePrevious) }}</th></tr>
+              <tr class="statement-total"><th>RÉSULTAT NET DE L’EXERCICE</th><th class="amount">{{ formatStatementValue(workspace.reports.income_statement.current.result_cents, incomeRevenueCurrent) }}</th><th v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(workspace.reports.income_statement.previous.result_cents, incomeRevenuePrevious) }}</th></tr>
+            </tbody>
           </table></div>
         </section>
 
-        <section v-else-if="reportSection === 'flux'" class="panel">
+        <section v-else-if="reportSection === 'flux'" class="panel financial-report-panel">
           <div class="section-heading"><div><h3>Flux de trésorerie</h3><p>{{ workspace.reports.cash_flow.method_label }} · classement {{ workspace.reports.cash_flow.classification_status.replace('_', ' ') }}</p></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('flux_tresorerie')">Exporter CSV</button></div>
-          <div class="metric-strip"><span><small>Ouverture</small><strong>{{ formatMoney(workspace.reports.cash_flow.opening_cash_cents) }}</strong></span><span><small>Entrées</small><strong>{{ formatMoney(workspace.reports.cash_flow.inflows_cents) }}</strong></span><span><small>Sorties</small><strong>{{ formatMoney(workspace.reports.cash_flow.outflows_cents) }}</strong></span><span><small>Clôture</small><strong>{{ formatMoney(workspace.reports.cash_flow.closing_cash_cents) }}</strong></span></div>
-          <p :class="['notice', workspace.reports.controls.cash_reconciled ? 'success' : 'warning']">Variation calculée {{ formatMoney(workspace.reports.cash_flow.net_change_cents) }} · écart de réconciliation {{ formatMoney(workspace.reports.cash_flow.reconciliation_difference_cents) }}.</p>
-          <div class="table-scroll"><table><thead><tr><th>Date</th><th>N°</th><th>Libellé</th><th>Catégorie proposée</th><th>Flux</th></tr></thead>
-            <tbody><tr v-for="row in workspace.reports.cash_flow.items" :key="row.entry_id"><td>{{ row.date }}</td><td>{{ row.number }}</td><td>{{ row.label }}</td><td>{{ row.category.replace('_', ' ') }}</td><td>{{ formatMoney(row.amount_cents) }}</td></tr>
-              <tr v-if="!workspace.reports.cash_flow.items.length"><td colspan="5">Aucun mouvement de liquidité sur la période.</td></tr></tbody>
+          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — FLUX DE TRÉSORERIE ENTRE LE {{ reportStartLabel }} ET LE {{ reportDateLabel }} — {{ currency }}</strong></div>
+          <div class="table-scroll"><table class="financial-statement-table financial-cash-flow"><thead><tr><th>Libellé</th><th class="amount">{{ workspace.reports.balance_sheet.current_label }}</th></tr></thead>
+            <tbody>
+              <template v-for="category in cashFlowCategories" :key="category.key">
+                <tr v-if="cashFlowItems(category.key).length" class="statement-section"><th colspan="2">{{ category.label.toLocaleUpperCase('fr-CH') }}</th></tr>
+                <tr v-for="row in cashFlowItems(category.key)" :key="`${category.key}-${row.entry_id}`"><td><span v-if="row.number" class="account-code">{{ row.number }}</span>{{ row.label }}<small v-if="row.date">{{ row.date }}</small></td><td class="amount">{{ formatStatementAmount(row.amount_cents) }}</td></tr>
+                <tr v-if="cashFlowItems(category.key).length" class="statement-subtotal"><th>{{ category.label }}</th><th class="amount">{{ formatStatementAmount(cashFlowCategoryTotal(category.key)) }}</th></tr>
+              </template>
+              <tr v-if="!workspace.reports.cash_flow.statement_items.length"><td colspan="2">Aucun mouvement de liquidité sur la période.</td></tr>
+              <tr class="statement-total"><th>VARIATION NETTE DE LA TRÉSORERIE</th><th class="amount">{{ formatStatementAmount(workspace.reports.cash_flow.net_change_cents) }}</th></tr>
+              <tr><td>Trésorerie à l’ouverture</td><td class="amount">{{ formatStatementAmount(workspace.reports.cash_flow.opening_cash_cents) }}</td></tr>
+              <tr class="statement-total"><th>TRÉSORERIE À LA CLÔTURE</th><th class="amount">{{ formatStatementAmount(workspace.reports.cash_flow.closing_cash_cents) }}</th></tr>
+              <tr class="statement-control"><td>Écart de réconciliation</td><td class="amount">{{ formatStatementAmount(workspace.reports.cash_flow.reconciliation_difference_cents) }}</td></tr>
+            </tbody>
           </table></div>
         </section>
 
-        <section v-else class="panel">
+        <section v-else class="panel financial-report-panel">
           <div class="section-heading"><h3>Grand livre synthétique</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('grand_livre')">Exporter CSV</button></div>
-          <div class="table-scroll"><table><thead><tr><th>Compte</th><th>Initial</th><th>Débit</th><th>Crédit</th><th>Final</th></tr></thead>
-            <tbody><tr v-for="row in workspace.reports.general_ledger.items" :key="row.id"><td>{{ row.numero }} — {{ row.libelle }}</td><td>{{ formatMoney(row.initial_centimes) }}</td><td>{{ formatMoney(row.debit_centimes) }}</td><td>{{ formatMoney(row.credit_centimes) }}</td><td>{{ formatMoney(row.solde_centimes) }}</td></tr>
+          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — GRAND LIVRE AU {{ reportDateLabel }} — {{ currency }}</strong></div>
+          <div class="table-scroll"><table class="financial-statement-table financial-ledger-table"><thead><tr><th>Compte</th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
+            <tbody><tr v-for="row in workspace.reports.general_ledger.items" :key="row.id"><td><span class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td><td class="amount">{{ formatStatementAmount(row.initial_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td></tr>
               <tr v-if="!workspace.reports.general_ledger.items.length"><td colspan="5">Aucun compte mouvementé.</td></tr></tbody>
           </table></div>
         </section>
       </section>
 
-      <section v-else-if="currentTab === 'tva'" class="stack">
+      <section v-else-if="currentTab === 'cloture' && closingSection === 'tva'" class="stack">
         <section class="panel">
           <div class="section-heading"><div><p class="eyebrow">Référentiel TVA unique</p><h2>Décompte TVA</h2></div><span class="status-chip">{{ workspace.vat.standard.format }} {{ workspace.vat.standard.version }}</span></div>
           <p class="notice warning">L’application prépare et valide le fichier XML. La vérification puis la transmission à l’AFC restent manuelles.</p>
@@ -1003,7 +1192,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         </section>
       </section>
 
-      <section v-else-if="currentTab === 'cloture'" class="stack">
+      <section v-else-if="currentTab === 'cloture' && closingSection === 'control'" class="stack">
         <section class="panel">
           <div class="section-heading"><div><p class="eyebrow">Checklist contrôlée</p><h2>Clôture et verrouillage</h2></div><span :class="['status-chip', workspace.closing.can_close ? 'ok' : 'warning']">{{ workspace.closing.can_close ? 'Contrôles automatiques conformes' : 'Écarts à corriger' }}</span></div>
           <p>{{ workspace.closing.definition }}</p>
@@ -1051,7 +1240,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         </section>
       </section>
 
-      <section v-else-if="currentTab === 'fiscal'" class="stack">
+      <section v-else-if="currentTab === 'cloture' && closingSection === 'fiscal'" class="stack">
         <section class="panel">
           <div class="section-heading"><div><p class="eyebrow">Dossier préparatoire</p><h2>Dossier fiscal</h2></div><span class="status-chip warning">Pas une déclaration officielle</span></div>
           <p class="notice warning">{{ workspace.tax_file.disclaimer }}</p>
@@ -1070,7 +1259,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
       </section>
 
       <AssetsPanel
-        v-else-if="currentTab === 'amortissements'"
+        v-else-if="currentTab === 'cloture' && closingSection === 'assets'"
         :exercise-id="exerciseId"
         :currency="currency"
       />

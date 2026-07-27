@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
+import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
@@ -451,7 +452,7 @@ function organisationLabel(organisationId: number): string {
             mappings, conversions et éliminations appartiennent uniquement au groupe.
           </p>
         </details>
-        <nav class="compact-tabs" aria-label="Sections de consolidation">
+        <nav class="subtabs secondary-tabs" aria-label="Sections de consolidation">
           <button :class="{ active: section === 'balance' }" @click="section = 'balance'">Balance</button>
           <button :class="{ active: section === 'setup' }" @click="section = 'setup'">Groupe et mappings</button>
           <button :class="{ active: section === 'reconciliation' }" @click="section = 'reconciliation'">Inter-entités</button>
@@ -557,7 +558,7 @@ function organisationLabel(organisationId: number): string {
           </p>
         </section>
         <template v-if="selectedGroup">
-          <nav class="compact-tabs" aria-label="Étapes de l’assistant de groupe">
+          <nav class="subtabs tertiary-tabs" aria-label="Étapes de l’assistant de groupe">
             <button :class="{ active: wizardStep === 1 }" @click="wizardStep = 1">1. Mode</button>
             <button :class="{ active: wizardStep === 2 }" @click="wizardStep = 2">2. Dossiers membres</button>
             <button :class="{ active: wizardStep === 3 }" @click="wizardStep = 3">3. Ratios et mappings</button>
@@ -648,12 +649,12 @@ function organisationLabel(organisationId: number): string {
                 </select>
               </label>
               <label>Compte source
-                <select v-model.number="mappingDraft.source_account_id" required>
-                  <option :value="0" disabled>Choisir…</option>
-                  <option v-for="account in selectedMappingMember?.accounts || []" :key="account.id" :value="account.id">
-                    {{ account.number }} — {{ account.label }}
-                  </option>
-                </select>
+                <AccountCombobox
+                  v-model="mappingDraft.source_account_id"
+                  :options="selectedMappingMember?.accounts || []"
+                  placeholder="Choisir…"
+                  required
+                />
               </label>
               <label>Compte cible<input v-model="mappingDraft.target_account" required></label>
               <label>Libellé cible<input v-model="mappingDraft.target_label" required></label>
@@ -726,9 +727,9 @@ function organisationLabel(organisationId: number): string {
           <form v-if="workspace.members.length > 1" class="form-grid three" @submit.prevent="savePair">
             <label>Libellé<input v-model="pairDraft.label" required></label>
             <label>Membre gauche<select v-model.number="pairDraft.left_member_id" @change="pairDraft.left_account_id = 0"><option v-for="member in workspace.members" :key="member.id" :value="member.id">{{ member.label }}</option></select></label>
-            <label>Compte gauche<select v-model.number="pairDraft.left_account_id" required><option :value="0" disabled>Choisir…</option><option v-for="account in leftMember?.accounts || []" :key="account.id" :value="account.id">{{ account.number }} — {{ account.label }}</option></select></label>
+            <label>Compte gauche<AccountCombobox v-model="pairDraft.left_account_id" :options="leftMember?.accounts || []" placeholder="Choisir…" required /></label>
             <label>Membre droite<select v-model.number="pairDraft.right_member_id" @change="pairDraft.right_account_id = 0"><option v-for="member in workspace.members" :key="member.id" :value="member.id">{{ member.label }}</option></select></label>
-            <label>Compte droite<select v-model.number="pairDraft.right_account_id" required><option :value="0" disabled>Choisir…</option><option v-for="account in rightMember?.accounts || []" :key="account.id" :value="account.id">{{ account.number }} — {{ account.label }}</option></select></label>
+            <label>Compte droite<AccountCombobox v-model="pairDraft.right_account_id" :options="rightMember?.accounts || []" placeholder="Choisir…" required /></label>
             <button class="button primary" :disabled="!workspace.capabilities.setup">Créer la paire</button>
           </form>
           <div class="table-scroll"><table><thead><tr><th>Paire</th><th>Gauche</th><th>Droite</th><th>Écart</th><th>État</th></tr></thead><tbody>
@@ -766,7 +767,7 @@ function organisationLabel(organisationId: number): string {
               <label>Justification<input v-model="eliminationDraft.justification" required></label>
             </div>
             <div v-for="(line, index) in eliminationDraft.lines" :key="index" class="form-grid four">
-              <label>Compte cible<select v-model="line.target_account" required><option value="" disabled>Choisir…</option><option v-for="target in targetAccounts" :key="target.account" :value="target.account">{{ target.account }} — {{ target.label }}</option></select></label>
+              <label>Compte cible<AccountCombobox v-model="line.target_account" :options="targetAccounts" value-key="account" number-key="account" :empty-value="''" placeholder="Choisir…" required /></label>
               <label>Libellé<input v-model="line.label"></label>
               <label>Débit<input v-model="line.debit" inputmode="decimal" placeholder="0.00"></label>
               <label>Crédit<input v-model="line.credit" inputmode="decimal" placeholder="0.00"></label>

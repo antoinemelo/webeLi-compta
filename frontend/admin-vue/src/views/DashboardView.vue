@@ -38,34 +38,6 @@ const treasuryRows = computed<Array<Record<string, unknown>>>(() =>
       : formatMoney(account.difference_cents, currency.value)
   }))
 );
-const agingRows = computed<Array<Record<string, unknown>>>(() => {
-  if (!projection.value) return [];
-  const buckets = [
-    ['not_due', 'Non échu'],
-    ['days_1_30', '1–30 jours'],
-    ['days_31_60', '31–60 jours'],
-    ['days_61_90', '61–90 jours'],
-    ['days_91_plus', 'Plus de 90 jours']
-  ] as const;
-  return buckets.map(([key, label]) => ({
-    id: key,
-    bucket: label,
-    receivables: formatMoney(projection.value!.open_items.receivables.aging[key], currency.value),
-    payables: formatMoney(projection.value!.open_items.payables.aging[key], currency.value)
-  }));
-});
-const recentRows = computed<Array<Record<string, unknown>>>(() =>
-  (projection.value?.recent_entries ?? []).map((entry) => ({
-    id: entry.id,
-    date: entry.date,
-    number: entry.number || `#${entry.id}`,
-    label: entry.label,
-    journal: entry.journal,
-    amount: formatMoney(entry.amount_cents, currency.value),
-    source_path: entry.source.path
-  }))
-);
-
 watch(
   () => [context.selection?.dossier.id ?? 0, context.exercises] as const,
   ([dossierId, exercises]) => {
@@ -123,7 +95,6 @@ async function refresh(): Promise<void> {
   <header class="page-heading dashboard-header">
     <div>
       <h1>Tableau de bord</h1>
-      <p>Une lecture du grand livre, des échéances et de la banque à une date explicite.</p>
     </div>
     <form v-if="context.selection && context.exercises.length" class="dashboard-filters" @submit.prevent="refresh">
       <FormField id="dashboard-exercise" label="Exercice">
@@ -264,24 +235,6 @@ async function refresh(): Promise<void> {
       <section class="panel">
         <div class="panel-heading">
           <div>
-            <p class="eyebrow">Échéancier</p>
-            <h2>Aging des créances et dettes</h2>
-          </div>
-        </div>
-        <DataTable
-          caption="Répartition des montants ouverts par ancienneté"
-          :columns="[
-            { key: 'bucket', label: 'Ancienneté' },
-            { key: 'receivables', label: 'Créances' },
-            { key: 'payables', label: 'Dettes' }
-          ]"
-          :rows="agingRows"
-        />
-      </section>
-
-      <section class="panel">
-        <div class="panel-heading">
-          <div>
             <p class="eyebrow">Banque et grand livre</p>
             <h2>Trésorerie par compte</h2>
           </div>
@@ -331,37 +284,6 @@ async function refresh(): Promise<void> {
         </article>
       </section>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Activité</p>
-            <h2>Dernières écritures</h2>
-          </div>
-          <RouterLink to="/compta">Voir le journal</RouterLink>
-        </div>
-        <DataTable
-          v-if="recentRows.length"
-          caption="Dix dernières écritures validées à la date d’arrêté"
-          :columns="[
-            { key: 'date', label: 'Date' },
-            { key: 'number', label: 'N°' },
-            { key: 'label', label: 'Libellé' },
-            { key: 'journal', label: 'Journal' },
-            { key: 'amount', label: 'Montant' },
-            { key: 'source', label: 'Source' }
-          ]"
-          :rows="recentRows"
-        >
-          <template #cell-source="{ row }">
-            <RouterLink :to="String(row.source_path)">Consulter</RouterLink>
-          </template>
-        </DataTable>
-        <EmptyState
-          v-else
-          title="Aucune écriture validée"
-          description="Les brouillons ne sont volontairement pas inclus."
-        />
-      </section>
 
       <details class="calculation-details">
         <summary>Définitions du calcul</summary>
