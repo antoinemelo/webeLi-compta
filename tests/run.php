@@ -3624,6 +3624,41 @@ final class Tests
             )->fetchColumn(),
             'édition optimiste du contact persistée'
         );
+        $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, date_document,
+              date_echeance, adresse_snapshot_json, contact_snapshot_json)
+             VALUES (?, ?, ?, 'facture_client', '2026-01-15', '2026-02-15', '{}', '{}')"
+        )->execute([
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $createdContactId,
+        ]);
+        $contactDocumentId = (int) $pdo->lastInsertId();
+        $protectedContactDeletion = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/contacts/delete',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $createdContactId,
+                'version' => 2,
+            ]]
+        ));
+        $this->same(
+            422,
+            $protectedContactDeletion->status,
+            'contact attaché à une facture protégé contre la suppression'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM contacts WHERE id = {$createdContactId}"
+            )->fetchColumn(),
+            'refus de suppression sans mutation partielle du contact'
+        );
+        $pdo->exec(
+            "DELETE FROM documents_financiers WHERE id = {$contactDocumentId}"
+        );
         $employeeContact = $app->handle(new Request(
             'POST',
             '/api/v1/configuration/references/contacts',
@@ -3661,6 +3696,70 @@ final class Tests
                  FROM employes WHERE contact_id = {$employeeContactId}"
             )->fetchColumn(),
             'contact employé immédiatement visible dans Salaires et à compléter'
+        );
+        $employeeContactVersion = (int) $pdo->query(
+            "SELECT version FROM contacts WHERE id = {$employeeContactId}"
+        )->fetchColumn();
+        $updatedEmployeeContact = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/contacts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $employeeContactId,
+                'version' => $employeeContactVersion,
+                'type' => 'personne',
+                'company' => '',
+                'first_name' => 'Jeanne',
+                'last_name' => 'Salariée Martin',
+                'email' => 'jeanne.martin@example.test',
+                'phone' => '+41 22 000 00 03',
+                'language' => 'fr',
+                'roles' => ['employe'],
+                'address_line1' => 'Rue du Travail 4',
+                'address_line2' => '',
+                'postal_code' => '1202',
+                'city' => 'Genève',
+                'country' => 'CH',
+            ]]
+        ));
+        $this->same(
+            200,
+            $updatedEmployeeContact->status,
+            'contact employé existant modifié sans conflit de référence'
+        );
+        $this->same(
+            'Jeanne Salariée Martin|jeanne.martin@example.test|2',
+            (string) $pdo->query(
+                "SELECT e.prenom || ' ' || e.nom || '|' || e.email || '|' || c.version
+                 FROM employes e
+                 JOIN contacts c ON c.id = e.contact_id
+                 WHERE e.contact_id = {$employeeContactId}"
+            )->fetchColumn(),
+            'modification du contact synchronisée vers le profil salarié'
+        );
+        $deletedEmployeeContact = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/contacts/delete',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $employeeContactId,
+                'version' => 2,
+            ]]
+        ));
+        $this->same(
+            200,
+            $deletedEmployeeContact->status,
+            'contact sans pièce comptable ni fiche de salaire supprimé'
+        );
+        $this->same(
+            '0|0',
+            (string) $pdo->query(
+                "SELECT
+                    (SELECT COUNT(*) FROM contacts WHERE id = {$employeeContactId})
+                    || '|' ||
+                    (SELECT COUNT(*) FROM employes WHERE contact_id = {$employeeContactId})"
+            )->fetchColumn(),
+            'contact et profil salarié incomplet supprimés ensemble'
         );
         $normalVatRateId = (int) $pdo->query(
             "SELECT id FROM tva_taux_legaux WHERE categorie = 'normal'"

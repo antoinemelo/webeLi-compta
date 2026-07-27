@@ -1,7 +1,15 @@
 # Administration Python
 
-Le point d’entrée est `tools/python/compta.py`. Toutes les commandes qui
-modifient un état commencent par une simulation et exigent `--apply`.
+Le point d’entrée est `tools/python/compta.py`. Lancé sans argument, il affiche
+un menu qui donne accès au diagnostic des extensions PHP, à la qualification,
+à la création d’une base, à la publication Git et au déploiement :
+
+```bash
+python3 tools/python/compta.py
+```
+
+Les sous-commandes restent disponibles pour l’automatisation. Toutes celles
+qui modifient un état commencent par une simulation et exigent `--apply`.
 
 ## Créer une base neuve
 

@@ -244,6 +244,29 @@ final class ConfigurationApiController
         });
     }
 
+    public function deleteContact(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'facturation.manage'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $data = $this->validator->contactDeletion($request);
+            $this->managedReferences->deleteContact(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $userId
+            );
+            return ['id' => $data['id'], 'deleted' => true];
+        });
+    }
+
     public function saveVatCode(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');

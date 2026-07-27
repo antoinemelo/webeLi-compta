@@ -149,6 +149,12 @@ final class ApiRouteRegistry
             $this->add(
                 $router,
                 'POST',
+                '/api/v1/configuration/references/contacts/delete',
+                $this->configuration->deleteContact(...)
+            );
+            $this->add(
+                $router,
+                'POST',
                 '/api/v1/configuration/references/currencies',
                 $this->configuration->saveCurrency(...)
             );

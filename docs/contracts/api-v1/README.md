@@ -81,6 +81,7 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/payment-defaults` | nouveau défaut client ou fournisseur |
 | GET | `/api/v1/configuration/references` | contacts, codes/taux TVA et taux salariaux du dossier |
 | POST | `/api/v1/configuration/references/contacts` | création ou édition optimiste d’un contact multi-rôles |
+| POST | `/api/v1/configuration/references/contacts/delete` | suppression optimiste si aucun document, paiement ou élément salarial n’est lié |
 | POST | `/api/v1/configuration/references/vat-codes` | nouveau code TVA daté |
 | POST | `/api/v1/configuration/references/payroll-rates` | taux sociaux annuels en ppm |
 | POST | `/api/v1/configuration/payroll/employer` | heures de référence ; identité employeur reprise de l’entité |

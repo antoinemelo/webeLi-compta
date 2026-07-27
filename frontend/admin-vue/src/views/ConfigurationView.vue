@@ -388,6 +388,38 @@ function editContact(
   });
 }
 
+async function deleteContact(
+  contact: NonNullable<typeof managedReferences.value>['contacts'][number]
+): Promise<void> {
+  if (!window.confirm(
+    `Supprimer définitivement « ${contactName(contact)} » ? `
+    + 'Cette opération sera refusée si des éléments comptables ou salariaux y sont liés.'
+  )) return;
+  await store.deleteContact(contact.id, contact.version);
+  if (contactDraft.id === contact.id) {
+    Object.assign(contactDraft, {
+      id: 0,
+      version: 0,
+      type: 'entreprise',
+      company: '',
+      first_name: '',
+      last_name: '',
+      email: '',
+      phone: '',
+      payment_iban: '',
+      payment_bic: '',
+      language: 'fr',
+      roles: ['client'],
+      address_line1: '',
+      address_line2: '',
+      postal_code: '',
+      city: '',
+      country: 'CH'
+    });
+  }
+  notifications.push('Contact supprimé.', 'success');
+}
+
 function resetVatCode(): void {
   Object.assign(vatDraft, {
     id: 0,
@@ -1281,9 +1313,17 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                     <td>{{ contact.roles.join(', ') }}</td>
                     <td>{{ contact.address_line1 }}, {{ contact.postal_code }} {{ contact.city }}</td>
                     <td>{{ contact.email || '—' }}</td>
-                    <td>
+                    <td class="button-row">
                       <button class="button secondary compact" type="button" @click="editContact(contact)">
                         Modifier
+                      </button>
+                      <button
+                        class="button danger compact"
+                        type="button"
+                        :disabled="store.saving"
+                        @click="deleteContact(contact)"
+                      >
+                        Supprimer
                       </button>
                     </td>
                   </tr>

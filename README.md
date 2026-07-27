@@ -256,7 +256,9 @@ La création sûre d’une base, la publication Git et le déploiement incrémen
 FTPS sont regroupés dans :
 
 ```bash
-python3 tools/python/compta.py --help
+python3 tools/python/compta.py
 ```
 
-Voir [le guide d’administration Python](docs/administration-python.md).
+Le lancement sans argument ouvre le menu interactif. Les sous-commandes
+documentées par `--help` restent utilisables pour l’automatisation. Voir
+[le guide d’administration Python](docs/administration-python.md).

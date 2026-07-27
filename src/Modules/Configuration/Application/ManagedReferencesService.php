@@ -197,6 +197,142 @@ final class ManagedReferencesService
         });
     }
 
+    public function deleteContact(
+        int $organisationId,
+        int $dossierId,
+        int $contactId,
+        int $expectedVersion,
+        int $actorId,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $contactId,
+            $expectedVersion,
+            $actorId
+        ): void {
+            $contact = $this->pdo->prepare(
+                'SELECT type_personne, raison_sociale, prenom, nom, version
+                 FROM contacts
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND actif = 1'
+            );
+            $contact->execute([$contactId, $organisationId, $dossierId]);
+            $row = $contact->fetch();
+            if ($row === false) {
+                throw new ConfigurationException('Contact absent du dossier.');
+            }
+            if ((int) $row['version'] !== $expectedVersion) {
+                throw new ConfigurationException(
+                    'Le contact a été modifié par une autre session. Rechargez la page.'
+                );
+            }
+
+            $dependencies = [
+                'documents_financiers' => 'facture, achat ou vente',
+                'paiements' => 'paiement',
+                'modeles_factures_recurrentes' => 'facture récurrente',
+                'modeles_depenses_recurrentes' => 'dépense récurrente',
+                'ordres_paiement_sortants' => 'ordre de paiement',
+            ];
+            $blockers = [];
+            foreach ($dependencies as $table => $label) {
+                $count = $this->pdo->prepare(
+                    "SELECT COUNT(*) FROM {$table}
+                     WHERE organisation_id = ? AND dossier_id = ? AND contact_id = ?"
+                );
+                $count->execute([$organisationId, $dossierId, $contactId]);
+                $total = (int) $count->fetchColumn();
+                if ($total > 0) {
+                    $blockers[] = "{$total} {$label}" . ($total > 1 ? 's' : '');
+                }
+            }
+
+            $employee = $this->pdo->prepare(
+                'SELECT id FROM employes
+                 WHERE organisation_id = ? AND dossier_id = ? AND contact_id = ?'
+            );
+            $employee->execute([$organisationId, $dossierId, $contactId]);
+            $employeeId = $employee->fetchColumn();
+            if ($employeeId !== false) {
+                foreach ([
+                    'fiches_salaires' => 'fiche de salaire',
+                    'certificats_salaires' => 'certificat de salaire',
+                    'paiements_salaires' => 'paiement salarial',
+                ] as $table => $label) {
+                    $count = $this->pdo->prepare(
+                        "SELECT COUNT(*) FROM {$table}
+                         WHERE organisation_id = ? AND dossier_id = ?
+                           AND employe_id = ?"
+                    );
+                    $count->execute([
+                        $organisationId,
+                        $dossierId,
+                        (int) $employeeId,
+                    ]);
+                    $total = (int) $count->fetchColumn();
+                    if ($total > 0) {
+                        $blockers[] = "{$total} {$label}" . ($total > 1 ? 's' : '');
+                    }
+                }
+            }
+            if ($blockers !== []) {
+                throw new ConfigurationException(
+                    'Suppression impossible : ' . implode(', ', $blockers) . ' lié(s).'
+                );
+            }
+
+            if ($employeeId !== false) {
+                $this->pdo->prepare(
+                    'DELETE FROM contrats_salariaux
+                     WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?'
+                )->execute([
+                    $organisationId,
+                    $dossierId,
+                    (int) $employeeId,
+                ]);
+                $this->pdo->prepare(
+                    'DELETE FROM employes
+                     WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+                )->execute([
+                    (int) $employeeId,
+                    $organisationId,
+                    $dossierId,
+                ]);
+            }
+            $delete = $this->pdo->prepare(
+                'DELETE FROM contacts
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND version = ?'
+            );
+            $delete->execute([
+                $contactId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($delete->rowCount() !== 1) {
+                throw new ConfigurationException(
+                    'Le contact a été modifié par une autre session.'
+                );
+            }
+            $name = trim(
+                (string) $row['raison_sociale'] . ' '
+                . (string) $row['prenom'] . ' '
+                . (string) $row['nom']
+            );
+            $this->audit->log(
+                'configuration.contact_supprime',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'contact',
+                (string) $contactId,
+                ['nom' => $name]
+            );
+        });
+    }
+
     /** @param array<string,mixed> $data */
     public function saveVatCode(
         int $organisationId,

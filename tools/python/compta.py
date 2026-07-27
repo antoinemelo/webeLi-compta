@@ -434,9 +434,119 @@ def deploy(args: argparse.Namespace) -> int:
     return 0
 
 
+def ask(prompt: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    value = input(f"{prompt}{suffix} : ").strip()
+    return value or default
+
+
+def confirm(prompt: str) -> bool:
+    return input(f"{prompt} [o/N] : ").strip().lower() in {"o", "oui", "y", "yes"}
+
+
+def interactive_database() -> int:
+    target = Path(ask(
+        "Chemin de la base",
+        str(ROOT / "storage" / "database" / "app.sqlite"),
+    ))
+    if not target.is_absolute():
+        target = ROOT / target
+    replace = target.exists() and confirm(
+        "La base existe. La sauvegarder puis la remplacer"
+    )
+    if target.exists() and not replace:
+        print("Opération annulée : la base existante est conservée.")
+        return 0
+    without_seeds = not confirm("Charger les seeds comptables")
+    if not confirm("Créer maintenant cette base"):
+        print("Opération annulée.")
+        return 0
+    return database_create(argparse.Namespace(
+        path=target,
+        replace=replace,
+        without_seeds=without_seeds,
+        allow_outside_project=False,
+        apply=True,
+    ))
+
+
+def interactive_publish() -> int:
+    message = ask("Message du commit")
+    if not message:
+        print("Opération annulée : le message du commit est obligatoire.")
+        return 0
+    remote = ask("Dépôt distant", "origin")
+    branch = ask("Branche distante", "main")
+    if not confirm(f"Créer le commit et le pousser vers {remote}/{branch}"):
+        print("Opération annulée.")
+        return 0
+    return git_publish(argparse.Namespace(
+        message=message,
+        remote=remote,
+        branch=branch,
+        apply=True,
+    ))
+
+
+def interactive_deploy() -> int:
+    config = Path(ask("Fichier de configuration", str(DEFAULT_DEPLOY_CONFIG)))
+    if not config.is_absolute():
+        config = ROOT / config
+    commit = ask("Commit à déployer", "HEAD")
+    from_commit = ask("Commit distant de départ (vide = détection automatique)")
+    delete = confirm("Supprimer aussi les fichiers applicatifs devenus obsolètes")
+    if not confirm("Déployer maintenant le delta applicatif"):
+        print("Opération annulée.")
+        return 0
+    return deploy(argparse.Namespace(
+        config=config,
+        commit=commit,
+        from_commit=from_commit or None,
+        delete=delete,
+        apply=True,
+    ))
+
+
+def interactive_menu() -> int:
+    actions = {
+        "1": ("Vérifier l’environnement et les extensions PHP", lambda: run(
+            ["php", "bin/console", "app:doctor"]
+        ).returncode),
+        "2": ("Lancer la qualification complète", lambda: run(
+            ["php", "bin/console", "qualify"]
+        ).returncode),
+        "3": ("Créer une base depuis les migrations et seeds", interactive_database),
+        "4": ("Créer un commit Git puis le pousser", interactive_publish),
+        "5": ("Déployer le delta applicatif versionné", interactive_deploy),
+    }
+    while True:
+        print()
+        print("WebeLi / Compta — administration")
+        print("=" * 42)
+        for key, (title, _) in actions.items():
+            print(f" {key}. {title}")
+        print(" 0. Quitter")
+        try:
+            choice = input("Votre choix : ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if choice == "0":
+            return 0
+        action = actions.get(choice)
+        if action is None:
+            print("Choix invalide.")
+            continue
+        print()
+        print(action[0])
+        result = int(action[1]())
+        if result != 0:
+            return result
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description="Administration WebeLi / Compta")
-    commands = root.add_subparsers(dest="command", required=True)
+    commands = root.add_subparsers(dest="command")
 
     database = commands.add_parser("db-create", help="Créer une base depuis migrations et seeds")
     database.add_argument(
@@ -467,9 +577,11 @@ def parser() -> argparse.ArgumentParser:
     return root
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     try:
-        args = parser().parse_args()
+        args = parser().parse_args(argv)
+        if args.command is None:
+            return interactive_menu()
         return int(args.handler(args))
     except subprocess.CalledProcessError as error:
         detail = ""

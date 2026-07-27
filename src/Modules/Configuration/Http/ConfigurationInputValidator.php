@@ -425,6 +425,20 @@ final class ConfigurationInputValidator
         return (int) $data['id'];
     }
 
+    /** @return array{id:int,version:int} */
+    public function contactDeletion(Request $request): array
+    {
+        $data = $this->only($request, ['id', 'version']);
+        $errors = [];
+        foreach (['id', 'version'] as $field) {
+            if (!is_int($data[$field] ?? null) || $data[$field] < 1) {
+                $errors[$field][] = 'Entier positif requis.';
+            }
+        }
+        $this->fail($errors);
+        return ['id' => (int) $data['id'], 'version' => (int) $data['version']];
+    }
+
     /** @return array<string,mixed> */
     public function payrollRates(Request $request): array
     {

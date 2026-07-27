@@ -2192,6 +2192,14 @@ textarea {
   white-space: nowrap;
 }
 
+.accounting-document-table .table-cell-detail {
+  display: block;
+  margin-top: 0.18rem;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+}
+
 .statement-display-toggle {
   display: inline-flex;
   padding: 0.15rem;

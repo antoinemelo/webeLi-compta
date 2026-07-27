@@ -1326,14 +1326,23 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             </div>
             <div class="table-scroll journal-detail-scroll">
               <table class="accounting-document-table journal-table">
-                <thead><tr><th>Date</th><th>N°</th><th>Journal</th><th>Compte</th><th>Libellé</th><th class="amount">Débit</th><th class="amount">Crédit</th><th>Statut</th></tr></thead>
+                <thead><tr><th>Date</th><th>N°</th><th>Compte</th><th>Libellé</th><th class="amount">Débit</th><th class="amount">Crédit</th><th>Statut</th></tr></thead>
                 <tbody>
                   <tr v-for="line in journalDetails.items" :key="`${line.entry_id}-${line.line_order}`">
                     <td>{{ line.date_comptable }}</td>
                     <td>{{ line.numero || `#${line.entry_id}` }}</td>
-                    <td>{{ line.journal }}</td>
                     <td>{{ line.account_number }} — {{ line.account_label }}</td>
-                    <td>{{ line.line_label }}</td>
+                    <td>
+                      <strong>{{ line.entry_label || '—' }}</strong>
+                      <small v-if="line.line_label && line.line_label !== line.entry_label" class="table-cell-detail">
+                        {{ line.line_label }}
+                      </small>
+                      <small v-if="line.reference || line.piece" class="table-cell-detail">
+                        <template v-if="line.reference">Réf. {{ line.reference }}</template>
+                        <template v-if="line.reference && line.piece"> · </template>
+                        <template v-if="line.piece">Pièce {{ line.piece }}</template>
+                      </small>
+                    </td>
                     <td class="amount">{{ line.debit_centimes ? formatStatementAmount(line.debit_centimes) : '—' }}</td>
                     <td class="amount">{{ line.credit_centimes ? formatStatementAmount(line.credit_centimes) : '—' }}</td>
                     <td><span class="status-chip">{{ line.statut }}</span></td>
