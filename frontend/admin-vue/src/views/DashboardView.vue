@@ -160,7 +160,7 @@ async function refresh(): Promise<void> {
 
   <EmptyState
     v-if="!context.selection"
-    title="Sélectionnez un dossier"
+    title="Sélectionnez un dossier depuis l’icône filtre en haut à droite"
     description="Les indicateurs apparaîtront uniquement dans le périmètre autorisé."
   />
   <EmptyState

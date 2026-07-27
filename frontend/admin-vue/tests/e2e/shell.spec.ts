@@ -52,6 +52,22 @@ async function logout(page: Page): Promise<void> {
 test('connexion, changement de dossier, route profonde et déconnexion', async ({ page }) => {
   await login(page);
 
+  await expect(
+    page.getByRole('link', { name: 'Ouvrir le tableau de bord' })
+  ).toContainText(/WebeLi.*Compta/);
+  const scopeButton = page.getByRole('button', {
+    name: 'Organisation, dossier et configuration'
+  });
+  await expect(scopeButton.locator('path')).toHaveAttribute(
+    'd',
+    /M8 16A8 8 0 1 0/
+  );
+  await openScopeMenu(page);
+  await expect(page.getByRole('link', {
+    name: 'Organisations et dossiers',
+    exact: true
+  })).toBeVisible();
+
   await selectDossier(page, 'Comptabilité principale');
   await expect(
     page.getByRole('link', { name: 'Ouvrir le tableau de bord' })
@@ -313,7 +329,6 @@ test('configuration des modules et référentiels', async ({ page }) => {
 
   const configurationNavigation = page.getByLabel('Navigation Configuration');
   expect(await configurationNavigation.getByRole('link').allTextContents()).toEqual([
-    'Organisations et dossiers',
     'Entité',
     'Modules',
     'Paiements',
@@ -348,7 +363,10 @@ test('configuration des modules et référentiels', async ({ page }) => {
 test('registre des organisations : création, historique et cycle de vie', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 900 });
   await loginAsAdministrator(page);
-  await page.goto('/e2e/app/configuration/structures');
+  await page.goto('/e2e/app/organisations-dossiers');
+  await expect(page.getByRole('button', {
+    name: 'Ouvrir la navigation'
+  })).toHaveCSS('border-radius', '999px');
   await expect(page.getByRole('heading', {
     name: 'Organisations et dossiers',
     exact: true
@@ -369,8 +387,8 @@ test('registre des organisations : création, historique et cycle de vie', async
     name: 'Coopérative E2E',
     exact: true
   })).toBeVisible();
+  await page.getByRole('button', { name: 'Informations', exact: true }).click();
   await expect(page.getByText('Extrait RC E2E', { exact: false })).toBeVisible();
-
   await page.getByLabel('Nom usuel').last().fill('Coopérative E2E Groupe');
   await page.getByRole('button', { name: 'Enregistrer', exact: true }).click();
   await expect(page.getByRole('heading', {
@@ -399,6 +417,7 @@ test('registre des organisations : création, historique et cycle de vie', async
     exact: true
   })).toBeVisible();
 
+  await page.getByRole('button', { name: 'Informations', exact: true }).click();
   await page.getByRole('button', { name: 'Supprimer définitivement' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('organisations vides');
@@ -415,7 +434,7 @@ test('registre des organisations : création, historique et cycle de vie', async
 test('deux dossiers réels sont créés, sélectionnés et archivés depuis Vue', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 900 });
   await loginAsAdministrator(page);
-  await page.goto('/e2e/app/configuration/structures');
+  await page.goto('/e2e/app/organisations-dossiers');
 
   await page.getByRole('button', { name: 'Créer une organisation' }).click();
   const organizationForm = page.locator('form').filter({
@@ -509,12 +528,10 @@ test('gouvernance des accès et révocation multi-session', async ({ browser }) 
     }).click();
 
     await loginAsAdministrator(adminPage);
-    await adminPage.goto('/e2e/app/configuration/structures');
-    const organisationRow = adminPage.getByRole('row').filter({
-      hasText: 'Entreprise Alpha SA'
-    });
-    await organisationRow.getByRole('button', { name: 'Gérer' }).click();
+    await adminPage.goto('/e2e/app/organisations-dossiers');
+    await adminPage.getByRole('button', { name: /Entreprise Alpha SA/ }).click();
     await adminPage.getByRole('button', { name: /Comptabilité principale/ }).click();
+    await adminPage.getByRole('button', { name: 'Accès', exact: true }).click();
     await adminPage.getByRole('button', {
       name: 'Accès du dossier sélectionné'
     }).click();
@@ -541,7 +558,7 @@ test('gouvernance des accès et révocation multi-session', async ({ browser }) 
 
     await readerPage.reload();
     await expect(readerPage.getByRole('heading', {
-      name: 'Sélectionnez un dossier'
+      name: 'Sélectionnez un dossier depuis l’icône filtre en haut à droite'
     })).toBeVisible();
     await openScopeMenu(readerPage);
     await expect(readerPage.getByLabel('Dossier', { exact: true })).not.toContainText(

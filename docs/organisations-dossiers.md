@@ -1,6 +1,7 @@
 # Organisations et dossiers
 
-Le registre Vue est disponible sous `/app/configuration/structures`. Il expose
+Le registre Vue est disponible sous `/app/organisations-dossiers`, depuis
+l’icône de filtre de l’en-tête. Il expose
 une arborescence organisation → dossiers actifs ou archivés et permet de créer
 plusieurs dossiers réellement exploitables dans la même organisation.
 

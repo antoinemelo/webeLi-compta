@@ -36,8 +36,8 @@ const navigation = computed(() => (context.context?.navigation ?? [])
   })));
 const selection = computed(() => context.selection);
 const pageTitle = computed(() => String(route.meta.label || 'Compta'));
-const organizationName = computed(() => selection.value?.organization.name || 'Organisation');
-const dossierName = computed(() => selection.value?.dossier.name || 'Dossier');
+const organizationName = computed(() => selection.value?.organization.name || 'WebeLi');
+const dossierName = computed(() => selection.value?.dossier.name || 'Compta');
 const exerciseAndCurrency = computed(() => {
   if (!selection.value) return '';
   return [
@@ -126,13 +126,16 @@ function confirmLogout(): void {
             @click="toggleScopeMenu"
           >
             <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-              <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5 5.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 .4.8L9 8.333V11a.5.5 0 0 1-.276.447l-1 .5A.5.5 0 0 1 7 11.5V8.333L5.1 5.8a.5.5 0 0 1-.1-.3z" />
+              <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16M3.5 5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1 0-1M5 8.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5m2 3a.5.5 0 0 1 .5-.5h1a.5.5 0 0 1 0 1h-1a.5.5 0 0 1-.5-.5" />
             </svg>
           </button>
           <div v-if="scopeMenuOpen" id="scope-menu" class="header-popover scope-popover">
             <p class="popover-title">Contexte de travail</p>
             <DossierSwitcher @selected="scopeMenuOpen = false" />
             <hr>
+            <RouterLink class="popover-option" to="/organisations-dossiers" @click="closeMenus">
+              Organisations et dossiers
+            </RouterLink>
             <RouterLink class="popover-option" to="/configuration" @click="closeMenus">
               Configuration
             </RouterLink>

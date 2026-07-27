@@ -8,6 +8,7 @@ import LiquidityView from '@/views/LiquidityView.vue';
 import PayrollView from '@/views/PayrollView.vue';
 import BillingView from '@/views/BillingView.vue';
 import LearningView from '@/views/LearningView.vue';
+import OrganisationRegistryView from '@/views/OrganisationRegistryView.vue';
 
 const routes: RouteRecordRaw[] = [
   { path: '/', name: 'dashboard', component: DashboardView, meta: { label: 'Tableau de bord' } },
@@ -48,6 +49,16 @@ const routes: RouteRecordRaw[] = [
     name: 'payroll',
     component: PayrollView,
     meta: { label: 'Salaires', section: 'payroll' }
+  },
+  {
+    path: '/organisations-dossiers',
+    name: 'structures',
+    component: OrganisationRegistryView,
+    meta: { label: 'Organisations et dossiers', section: 'structures' }
+  },
+  {
+    path: '/configuration/structures',
+    redirect: '/organisations-dossiers'
   },
   {
     path: '/configuration/referentiels/plan',

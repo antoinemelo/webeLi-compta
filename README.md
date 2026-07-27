@@ -60,7 +60,8 @@ référentiels existants. Une désactivation est appliquée dans la navigation e
 côté serveur sans supprimer les données. Voir
 [le guide de configuration](docs/configuration.md).
 
-L’espace `/app/configuration/structures` fournit le registre paginé des
+L’espace `/app/organisations-dossiers`, accessible depuis l’icône de filtre,
+fournit le registre paginé des
 organisations, leurs identités juridiques datées et une arborescence de
 dossiers. L’assistant Vue crée un dossier complet (modules, plan, exercice,
 période, journal et références) dans une seule transaction, puis rafraîchit le

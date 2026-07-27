@@ -18,6 +18,7 @@ const canManageDossiers = computed(() =>
 );
 const creating = ref(false);
 const creatingDossier = ref(false);
+const detailSection = ref<'dossiers' | 'information' | 'access'>('dossiers');
 const accessOpen = ref(false);
 const accessScope = ref<'installation' | 'organisation' | 'dossier'>('organisation');
 const accessUserId = ref(0);
@@ -133,6 +134,12 @@ async function applyFilters(): Promise<void> {
   await store.load();
 }
 
+async function selectOrganisation(id: number): Promise<void> {
+  detailSection.value = 'dossiers';
+  creatingDossier.value = false;
+  await store.select(id);
+}
+
 async function createOrganisation(): Promise<void> {
   const identity = createDraft.nature === 'reelle' ? {
     valid_from: createDraft.valid_from,
@@ -155,6 +162,7 @@ async function createOrganisation(): Promise<void> {
       nature: createDraft.nature,
       identity
     });
+    detailSection.value = 'dossiers';
     creating.value = false;
     notifications.push(
       'Organisation créée sans attribution automatique de droits.',
@@ -349,12 +357,14 @@ async function removeDossier(): Promise<void> {
 </script>
 
 <template>
-  <section class="registry-stack" aria-labelledby="registry-title">
-    <div class="panel registry-heading">
+  <section class="registry-stack" aria-label="Gestion des organisations et dossiers">
+    <div class="panel registry-heading registry-intro">
       <div>
-        <p class="eyebrow">Structure de l’installation</p>
-        <h2 id="registry-title">Organisations et dossiers</h2>
-        <p>Le registre conserve les identités juridiques datées et protège les données déjà utilisées.</p>
+        <h2>Choisissez une organisation pour commencer</h2>
+        <p>
+          Sélectionnez une organisation existante, puis gérez séparément ses
+          dossiers, ses informations et ses accès.
+        </p>
       </div>
       <button
         v-if="canAdminister"
@@ -464,38 +474,48 @@ async function removeDossier(): Promise<void> {
       <button type="submit" class="button secondary">Appliquer</button>
     </form>
 
-    <SkeletonBlock v-if="store.loading && !store.payload" :lines="5" />
-    <EmptyState
-      v-else-if="store.payload?.items.length === 0"
-      title="Aucune organisation"
-      description="Aucune organisation ne correspond aux filtres."
-    />
-    <div v-else-if="store.payload" class="panel table-scroll" tabindex="0" aria-label="Registre des organisations">
-      <table class="data-table">
-        <caption>{{ store.payload.pagination.total }} organisation(s)</caption>
-        <thead>
-          <tr><th scope="col">Organisation</th><th scope="col">Nature</th><th scope="col">Dossiers</th><th scope="col">Statut</th><th scope="col">Action</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="organisation in store.payload.items" :key="organisation.id">
-            <td>
-              <strong>{{ organisation.nom }}</strong>
-              <small>{{ organisation.raison_sociale || 'Sans identité juridique' }}</small>
-            </td>
-            <td>{{ organisation.nature === 'reelle' ? 'Réelle' : 'Pédagogique' }}</td>
-            <td>{{ organisation.dossier_count }} ({{ organisation.active_dossier_count }} actif(s))</td>
-            <td>
-              <span class="status-badge" :class="organisation.active ? 'status-ouverte' : 'status-fermee'">
-                {{ organisation.active ? 'Active' : 'Archivée' }}
+    <div class="registry-browser">
+      <aside class="panel registry-directory" aria-label="Liste des organisations">
+        <div class="directory-heading">
+          <h2>Organisations</h2>
+          <span v-if="store.payload">{{ store.payload.pagination.total }}</span>
+        </div>
+        <SkeletonBlock v-if="store.loading && !store.payload" :lines="5" />
+        <EmptyState
+          v-else-if="store.payload?.items.length === 0"
+          title="Aucune organisation"
+          description="Aucune organisation ne correspond aux filtres."
+        />
+        <ul v-else-if="store.payload" class="organisation-list">
+          <li v-for="organisation in store.payload.items" :key="organisation.id">
+            <button
+              type="button"
+              class="organisation-card"
+              :aria-current="store.selected?.id === organisation.id ? 'true' : undefined"
+              @click="selectOrganisation(organisation.id)"
+            >
+              <span class="organisation-card-heading">
+                <strong>{{ organisation.nom }}</strong>
+                <span class="status-badge" :class="organisation.active ? 'status-ouverte' : 'status-fermee'">
+                  {{ organisation.active ? 'Active' : 'Archivée' }}
+                </span>
               </span>
-            </td>
-            <td><button type="button" class="button secondary small" @click="store.select(organisation.id)">Gérer</button></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+              <small>{{ organisation.raison_sociale || 'Sans identité juridique' }}</small>
+              <span>
+                {{ organisation.dossier_count }} dossier(s) ·
+                {{ organisation.active_dossier_count }} actif(s)
+              </span>
+            </button>
+          </li>
+        </ul>
+      </aside>
 
-    <article v-if="store.selected" class="panel registry-detail">
+      <EmptyState
+        v-if="!store.selected"
+        title="Sélectionnez une organisation"
+        description="Ses dossiers et ses paramètres apparaîtront ici."
+      />
+      <article v-else class="panel registry-detail">
       <div class="panel-heading">
         <div>
           <p class="eyebrow">Organisation #{{ store.selected.id }}</p>
@@ -506,16 +526,42 @@ async function removeDossier(): Promise<void> {
         </span>
       </div>
 
-      <form class="inline-editor" @submit.prevent="updateName">
+      <nav class="registry-section-nav" aria-label="Gestion de l’organisation">
+        <button
+          type="button"
+          :class="{ active: detailSection === 'dossiers' }"
+          @click="detailSection = 'dossiers'"
+        >
+          Dossiers
+        </button>
+        <button
+          type="button"
+          :class="{ active: detailSection === 'information' }"
+          @click="detailSection = 'information'"
+        >
+          Informations
+        </button>
+        <button
+          type="button"
+          :class="{ active: detailSection === 'access' }"
+          @click="detailSection = 'access'"
+        >
+          Accès
+        </button>
+      </nav>
+
+      <section v-if="detailSection === 'information'" class="registry-section">
+        <h3>Informations générales</h3>
+        <form class="inline-editor" @submit.prevent="updateName">
         <FormField id="registry-edit-name" label="Nom usuel">
           <template #default="{ describedBy }">
             <input id="registry-edit-name" v-model="editName" required :aria-describedby="describedBy">
           </template>
         </FormField>
         <button type="submit" class="button secondary" :disabled="store.saving">Enregistrer</button>
-      </form>
+        </form>
 
-      <div class="registry-actions">
+        <div class="registry-actions">
         <button type="button" class="button secondary" :disabled="store.saving" @click="toggleStatus">
           {{ store.selected.active ? 'Archiver' : 'Réactiver' }}
         </button>
@@ -528,17 +574,22 @@ async function removeDossier(): Promise<void> {
         >
           Supprimer définitivement
         </button>
-      </div>
-      <p v-if="store.selected.active_dossier_count > 0" class="help-text">
-        L’archivage sera possible après archivage des dossiers actifs.
-      </p>
-      <div v-if="dependencies.length" class="dependency-note" role="status">
-        <strong>Suppression protégée</strong>
-        <p>Dépendances détectées :</p>
-        <ul><li v-for="[table, count] in dependencies" :key="table">{{ table }} : {{ count }}</li></ul>
-      </div>
+        </div>
+        <p v-if="store.selected.active_dossier_count > 0" class="help-text">
+          L’archivage sera possible après archivage des dossiers actifs.
+        </p>
+        <div v-if="dependencies.length" class="dependency-note" role="status">
+          <strong>Suppression protégée</strong>
+          <p>Dépendances détectées :</p>
+          <ul><li v-for="[table, count] in dependencies" :key="table">{{ table }} : {{ count }}</li></ul>
+        </div>
+      </section>
 
-      <section class="dossier-tree" aria-labelledby="dossier-tree-title">
+      <section
+        v-if="detailSection === 'dossiers'"
+        class="dossier-tree"
+        aria-labelledby="dossier-tree-title"
+      >
         <div class="panel-heading">
           <div>
             <p class="eyebrow">Arborescence</p>
@@ -747,7 +798,13 @@ async function removeDossier(): Promise<void> {
           </div>
         </article>
 
-        <section class="structure-access" aria-labelledby="structure-access-title">
+      </section>
+
+      <section
+        v-if="detailSection === 'access'"
+        class="structure-access"
+        aria-labelledby="structure-access-title"
+      >
           <div class="panel-heading">
             <div>
               <p class="eyebrow">Gouvernance</p>
@@ -886,10 +943,10 @@ async function removeDossier(): Promise<void> {
               </button>
             </div>
           </div>
-        </section>
       </section>
 
-      <form class="registry-form" @submit.prevent="saveLegalIdentity">
+      <section v-if="detailSection === 'information'" class="registry-section legal-section">
+        <form class="registry-form" @submit.prevent="saveLegalIdentity">
         <div class="panel-heading">
           <div><p class="eyebrow">Historique immuable</p><h3>Ajouter une identité juridique datée</h3></div>
         </div>
@@ -926,24 +983,26 @@ async function removeDossier(): Promise<void> {
           </FormField>
         </div>
         <button type="submit" class="button secondary" :disabled="store.saving">Ajouter à l’historique</button>
-      </form>
+        </form>
 
-      <div>
-        <h3>Historique juridique</h3>
-        <EmptyState
-          v-if="store.selected.legal_history.length === 0"
-          title="Aucune identité datée"
-          description="Ajoutez la première identité juridique documentée."
-        />
-        <ol v-else class="history-list">
-          <li v-for="identity in store.selected.legal_history" :key="identity.id">
-            <strong>{{ identity.raison_sociale }}</strong>
-            <span>{{ identity.date_debut }} → {{ identity.date_fin || 'actuelle' }}</span>
-            <small>{{ identity.forme_juridique }} · {{ identity.numero_ide || 'sans IDE' }} · source : {{ identity.source }}</small>
-          </li>
-        </ol>
-      </div>
-    </article>
+        <div>
+          <h3>Historique juridique</h3>
+          <EmptyState
+            v-if="store.selected.legal_history.length === 0"
+            title="Aucune identité datée"
+            description="Ajoutez la première identité juridique documentée."
+          />
+          <ol v-else class="history-list">
+            <li v-for="identity in store.selected.legal_history" :key="identity.id">
+              <strong>{{ identity.raison_sociale }}</strong>
+              <span>{{ identity.date_debut }} → {{ identity.date_fin || 'actuelle' }}</span>
+              <small>{{ identity.forme_juridique }} · {{ identity.numero_ide || 'sans IDE' }} · source : {{ identity.source }}</small>
+            </li>
+          </ol>
+        </div>
+      </section>
+      </article>
+    </div>
 
     <ConfirmDialog
       ref="deleteDialog"
@@ -971,41 +1030,137 @@ async function removeDossier(): Promise<void> {
 .registry-heading, .panel-heading, .registry-actions, .inline-editor, .registry-filters {
   display: flex; gap: 1rem; align-items: end; justify-content: space-between;
 }
+.registry-intro h2, .directory-heading h2, .registry-section h3 { margin: 0; }
 .registry-form, .registry-detail { display: grid; gap: 1rem; }
 .registry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .registry-filters { justify-content: flex-start; }
 .registry-filters > :first-child { flex: 1; }
+.registry-browser {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.registry-directory {
+  position: sticky;
+  top: 5.25rem;
+  display: grid;
+  gap: .85rem;
+  max-height: calc(100vh - 6.5rem);
+  overflow-y: auto;
+}
+.directory-heading, .organisation-card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.directory-heading > span {
+  min-width: 2rem;
+  padding: .2rem .5rem;
+  color: white;
+  background: var(--ink);
+  border-radius: 999px;
+  text-align: center;
+}
+.organisation-list {
+  display: grid;
+  gap: .55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.organisation-card {
+  display: grid;
+  width: 100%;
+  gap: .35rem;
+  padding: .85rem;
+  color: inherit;
+  background: #f8f8fb;
+  border: 1px solid var(--border);
+  border-radius: .65rem;
+  text-align: left;
+  cursor: pointer;
+}
+.organisation-card:hover { border-color: var(--ink-soft); }
+.organisation-card[aria-current="true"] {
+  background: #f0f0f8;
+  border-color: var(--accent);
+  box-shadow: inset .25rem 0 0 var(--accent);
+}
+.organisation-card small, .organisation-card > span:last-child {
+  color: var(--muted);
+  font-size: .78rem;
+}
+.registry-section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem;
+  padding: .35rem;
+  background: #f0f1f6;
+  border-radius: .7rem;
+}
+.registry-section-nav button {
+  flex: 1 1 8rem;
+  min-height: 2.6rem;
+  padding: .55rem .85rem;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: .5rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+.registry-section-nav button.active {
+  color: white;
+  background: var(--ink);
+  box-shadow: 0 4px 12px rgba(32, 33, 78, .18);
+}
+.registry-section { display: grid; gap: 1rem; }
+.legal-section {
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
 .data-table td:first-child { display: grid; gap: .25rem; }
-.data-table small, .history-list small { color: var(--color-text-muted); }
+.data-table small, .history-list small { color: var(--muted); }
 .history-list { display: grid; gap: .75rem; padding: 0; list-style: none; }
-.history-list li { display: grid; gap: .2rem; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; }
-.dependency-note { padding: .75rem; border-left: .25rem solid var(--color-warning, #9b6a00); background: var(--color-surface-muted); }
-.help-text { color: var(--color-text-muted); }
-.dossier-tree, .dossier-detail { display: grid; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.history-list li { display: grid; gap: .2rem; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+.dependency-note { padding: .75rem; border-left: .25rem solid #9b6a00; background: #f8f8fb; }
+.help-text { color: var(--muted); }
+.dossier-tree, .dossier-detail { display: grid; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .structure-access, .access-workspace, .access-editor, .permission-preview {
   display: grid; gap: 1rem;
 }
-.structure-access { padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.structure-access { padding-top: 1rem; border-top: 1px solid var(--border); }
 .access-version { display: flex; justify-content: space-between; gap: 1rem; }
 .access-table td:first-child { min-width: 13rem; }
 .access-table td:first-child small { display: block; }
 .permission-preview, .copy-preview {
-  padding: .75rem; border: 1px solid var(--color-border);
-  border-radius: .5rem; background: var(--color-surface-muted);
+  padding: .75rem; border: 1px solid var(--border);
+  border-radius: .5rem; background: #f8f8fb;
 }
 .permission-preview > div { display: grid; gap: .25rem; }
 .permission-preview p, .copy-preview ul { margin: 0; }
 .access-copy-field { align-content: start; }
 .dossier-list { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
-.dossier-node { width: 100%; display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; background: var(--color-surface); color: inherit; text-align: left; }
-.dossier-node[aria-current="true"] { border-color: var(--color-primary); }
+.dossier-node { width: 100%; display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--surface); color: inherit; text-align: left; }
+.dossier-node[aria-current="true"] { border-color: var(--accent); box-shadow: inset .25rem 0 0 var(--accent); }
 .dossier-node span:first-child { display: grid; gap: .2rem; }
-.choice-field { display: grid; gap: .45rem; padding: .75rem; border: 1px solid var(--color-border); border-radius: .5rem; }
-.initialization-summary { display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding: .75rem; border-radius: .5rem; background: var(--color-surface-muted); }
+.choice-field { display: grid; gap: .45rem; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+.initialization-summary { display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding: .75rem; border-radius: .5rem; background: #f8f8fb; }
+@media (max-width: 1050px) {
+  .registry-browser { grid-template-columns: 1fr; }
+  .registry-directory {
+    position: static;
+    max-height: none;
+  }
+  .organisation-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 720px) {
-  .registry-grid { grid-template-columns: 1fr; }
+  .registry-grid, .organisation-list { grid-template-columns: 1fr; }
   .registry-heading, .panel-heading, .registry-actions, .inline-editor, .registry-filters {
     align-items: stretch; flex-direction: column;
   }
+  .registry-section-nav button { flex-basis: auto; }
 }
 </style>

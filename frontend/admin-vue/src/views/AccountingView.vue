@@ -668,7 +668,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
 
   <EmptyState
     v-if="!context.selection"
-    title="Sélectionnez un dossier"
+    title="Sélectionnez un dossier depuis l’icône filtre en haut à droite"
     description="Le plan et les écritures sont toujours limités au dossier actif."
   />
   <section v-else-if="!allowed" class="access-message denied" role="alert">

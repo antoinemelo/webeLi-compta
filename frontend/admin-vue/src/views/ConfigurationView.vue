@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
-import OrganisationRegistryPanel from '@/components/configuration/OrganisationRegistryPanel.vue';
 import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
@@ -27,9 +26,6 @@ const activeTab = computed(() => (
 const configuration = computed(() => store.configuration);
 const managedReferences = computed(() => store.managedReferences);
 const canManage = computed(() => context.can('dossier.manage'));
-const canManageRegistry = computed(() => (
-  context.can('installation.admin') || context.can('organisation.manage')
-));
 const today = new Date().toISOString().slice(0, 10);
 type ReferenceSection =
   | 'treasury'
@@ -709,23 +705,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
   </header>
 
   <CompactTabs
-    v-if="(context.selection && canManage) || canManageRegistry"
+    v-if="context.selection && canManage"
     :items="tabs"
     label="Navigation Configuration"
   />
 
-  <OrganisationRegistryPanel
-    v-if="activeTab === 'structures' && canManageRegistry"
-  />
-  <section
-    v-else-if="activeTab === 'structures'"
-    class="access-message denied"
-    role="alert"
-  >
-    <strong>Accès refusé</strong>
-    <p>La gestion d’une organisation ou de l’installation est requise.</p>
-  </section>
-  <section v-else-if="!context.selection" class="access-message" role="status">
+  <section v-if="!context.selection" class="access-message" role="status">
     <strong>Contexte requis</strong>
     <p>Sélectionnez un dossier avant d’ouvrir sa configuration.</p>
   </section>
@@ -753,7 +738,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </div>
         <p class="help-text">
           La raison sociale, la forme, l’IDE et l’adresse sont pilotés par
-          <RouterLink to="/configuration/structures">
+          <RouterLink to="/organisations-dossiers">
             l’historique daté du registre des organisations
           </RouterLink>.
         </p>
@@ -1885,7 +1870,8 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
           </div>
           <p>
             La gestion des rôles se fait désormais dans l’arborescence
-            « Organisations et dossiers » ci-dessus. Elle impose une
+            <RouterLink to="/organisations-dossiers">Organisations et dossiers</RouterLink>.
+            Cette gestion impose une
             prévisualisation, un contrôle de version et protège le dernier
             administrateur.
           </p>
