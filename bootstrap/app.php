@@ -15,6 +15,7 @@ use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Security\NativeSessionStore;
 use Compta\Modules\Compta\ChartOfAccountsService;
+use Compta\Modules\Compta\AccountingCsvService;
 use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Compta\AccountingInputValidator;
 use Compta\Modules\Compta\AccountingSetupService;
@@ -210,7 +211,8 @@ $apiRoutes = new ApiRouteRegistry(
             $financialReports,
             $vatWorkspace,
             $closingAndTax,
-            new ExchangeRevaluationService($pdo, $audit, $entries)
+            new ExchangeRevaluationService($pdo, $audit, $entries),
+            new AccountingCsvService($pdo, $chart, $entries)
         ),
         new AccountingInputValidator(),
         $audit

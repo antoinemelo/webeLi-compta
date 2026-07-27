@@ -33,6 +33,54 @@ final class EntryService
     }
 
     /**
+     * Importe un lot indivisible de brouillons et/ou d'écritures validées.
+     * La source identifie le fichier complet et interdit tout rejeu.
+     *
+     * @param list<array{command:array<string,mixed>,validate:bool}> $items
+     * @return list<int>
+     */
+    public function importBatch(
+        int $organisationId,
+        int $dossierId,
+        string $sourceId,
+        array $items,
+        ?int $actorId = null,
+    ): array {
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $sourceId,
+            $items,
+            $actorId
+        ): array {
+            $existing = $this->pdo->prepare(
+                "SELECT 1 FROM ecritures
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND source_type = 'import_journal' AND source_id = ?
+                 LIMIT 1"
+            );
+            $existing->execute([$organisationId, $dossierId, $sourceId]);
+            if ($existing->fetchColumn() !== false) {
+                throw new AccountingException('Ce fichier journal a déjà été importé.');
+            }
+            $ids = [];
+            foreach ($items as $item) {
+                $id = $this->insertDraft($item['command'], $actorId);
+                if ($item['validate']) {
+                    $this->validateInside(
+                        $organisationId,
+                        $dossierId,
+                        $id,
+                        $actorId
+                    );
+                }
+                $ids[] = $id;
+            }
+            return $ids;
+        });
+    }
+
+    /**
      * Données strictement limitées au dossier pour l’écran de saisie manuelle.
      *
      * @return array{

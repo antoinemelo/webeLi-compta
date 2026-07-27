@@ -138,39 +138,10 @@ final class ManagedReferencesService
         array $data,
         int $actorId,
     ): int {
-        if ($data['id'] > 0) {
-            $this->contacts->update(
-                $organisationId,
-                $dossierId,
-                $data['id'],
-                $data['version'],
-                [
-                    'type_personne' => $data['type'],
-                    'raison_sociale' => $data['company'],
-                    'prenom' => $data['first_name'],
-                    'nom' => $data['last_name'],
-                    'email' => $data['email'],
-                    'telephone' => $data['phone'],
-                    'iban_paiement' => $data['payment_iban'],
-                    'bic_paiement' => $data['payment_bic'],
-                    'langue' => $data['language'],
-                ],
-                $data['roles'],
-                [
-                    'ligne1' => $data['address_line1'],
-                    'ligne2' => $data['address_line2'],
-                    'code_postal' => $data['postal_code'],
-                    'localite' => $data['city'],
-                    'pays' => $data['country'],
-                ],
-                $actorId
-            );
-            return $data['id'];
-        }
-        return $this->contacts->create(
-            $organisationId,
-            $dossierId,
-            [
+        return $this->transaction(function () use (
+            $organisationId, $dossierId, $data, $actorId
+        ): int {
+            $identity = [
                 'type_personne' => $data['type'],
                 'raison_sociale' => $data['company'],
                 'prenom' => $data['first_name'],
@@ -180,18 +151,50 @@ final class ManagedReferencesService
                 'iban_paiement' => $data['payment_iban'],
                 'bic_paiement' => $data['payment_bic'],
                 'langue' => $data['language'],
-            ],
-            $data['roles'],
-            [
+            ];
+            $address = [
                 'ligne1' => $data['address_line1'],
                 'ligne2' => $data['address_line2'],
                 'code_postal' => $data['postal_code'],
                 'localite' => $data['city'],
                 'pays' => $data['country'],
-                'type' => 'facturation',
-            ],
-            $actorId
-        );
+            ];
+            if ($data['id'] > 0) {
+                $contactId = (int) $data['id'];
+                $this->contacts->update(
+                    $organisationId,
+                    $dossierId,
+                    $contactId,
+                    $data['version'],
+                    $identity,
+                    $data['roles'],
+                    $address,
+                    $actorId
+                );
+            } else {
+                $contactId = $this->contacts->create(
+                    $organisationId,
+                    $dossierId,
+                    $identity,
+                    $data['roles'],
+                    $address + ['type' => 'facturation'],
+                    $actorId
+                );
+            }
+            $this->payroll->syncContactEmployee(
+                $organisationId,
+                $dossierId,
+                $contactId,
+                $identity + [
+                    'rue' => $address['ligne1'],
+                    'npa' => $address['code_postal'],
+                    'localite' => $address['localite'],
+                ],
+                in_array('employe', $data['roles'], true),
+                $actorId
+            );
+            return $contactId;
+        });
     }
 
     /** @param array<string,mixed> $data */
@@ -706,15 +709,20 @@ final class ManagedReferencesService
         ], $stmt->fetchAll());
     }
 
-    /** @param callable():void $callback */
-    private function transaction(callable $callback): void
+    private function transaction(callable $callback): mixed
     {
-        $this->pdo->beginTransaction();
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) {
+            $this->pdo->beginTransaction();
+        }
         try {
-            $callback();
-            $this->pdo->commit();
+            $result = $callback();
+            if ($ownsTransaction) {
+                $this->pdo->commit();
+            }
+            return $result;
         } catch (Throwable $exception) {
-            if ($this->pdo->inTransaction()) {
+            if ($ownsTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
             throw $exception;

@@ -56,6 +56,51 @@ type ChartResetPreview = {
   blockers: Array<{ source: string; label: string; count: number }>;
 };
 
+type OpeningImportPreview = {
+  fingerprint: string;
+  summary: {
+    accounts: number;
+    non_zero: number;
+    debit_cents: number;
+    credit_cents: number;
+  };
+  balances: Record<string, number>;
+};
+
+type JournalImportPreview = {
+  fingerprint: string;
+  summary: {
+    entries: number;
+    lines: number;
+    drafts: number;
+    validated: number;
+    total_cents: number;
+  };
+};
+
+type JournalDetails = {
+  items: Array<{
+    entry_id: number;
+    numero: string;
+    date_comptable: string;
+    journal: string;
+    reference: string;
+    piece: string;
+    entry_label: string;
+    statut: string;
+    line_order: number;
+    account_number: string;
+    account_label: string;
+    line_label: string;
+    debit_centimes: number;
+    credit_centimes: number;
+  }>;
+  total_lines: number;
+  total_entries: number;
+  total_debit_cents: number;
+  total_credit_cents: number;
+};
+
 const route = useRoute();
 const context = useContextStore();
 const accounting = useAccountingStore();
@@ -113,6 +158,24 @@ const chartResetPreview = ref<ChartResetPreview | null>(null);
 const chartResetConfirmation = ref('');
 const chartResetError = ref('');
 const chartResetBusy = ref(false);
+const openingFileInput = ref<HTMLInputElement | null>(null);
+const openingImportDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const openingImportName = ref('');
+const openingImportCsv = ref('');
+const openingImportPreview = ref<OpeningImportPreview | null>(null);
+const openingImportError = ref('');
+const openingImportBusy = ref(false);
+const journalFileInput = ref<HTMLInputElement | null>(null);
+const journalImportDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const journalImportName = ref('');
+const journalImportCsv = ref('');
+const journalImportPreview = ref<JournalImportPreview | null>(null);
+const journalImportError = ref('');
+const journalImportBusy = ref(false);
+const journalDetailsDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const journalDetails = ref<JournalDetails | null>(null);
+const journalDetailsError = ref('');
+const journalDetailsBusy = ref(false);
 const newRubric = reactive({
   code: '',
   label: '',
@@ -732,6 +795,130 @@ function exportChart(): void {
   download('/accounting/chart/export', {});
 }
 
+function exportOpening(): void {
+  download('/accounting/opening/export', { exercise_id: exerciseId.value });
+}
+
+function chooseOpeningImport(): void {
+  openingFileInput.value?.click();
+}
+
+async function openingCsvSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  openingImportName.value = file.name;
+  openingImportError.value = '';
+  openingImportPreview.value = null;
+  openingImportBusy.value = true;
+  openingImportDialog.value?.open();
+  try {
+    openingImportCsv.value = await file.text();
+    openingImportPreview.value = (
+      await api.post<OpeningImportPreview>(
+        '/accounting/opening/import/preview',
+        { exercise_id: exerciseId.value, csv: openingImportCsv.value }
+      )
+    ).data;
+  } catch (error) {
+    openingImportError.value = errorMessage(error);
+  } finally {
+    openingImportBusy.value = false;
+  }
+}
+
+async function applyOpeningImport(): Promise<void> {
+  if (!openingImportPreview.value) return;
+  openingImportBusy.value = true;
+  openingImportError.value = '';
+  try {
+    await api.post('/accounting/opening/import', {
+      exercise_id: exerciseId.value,
+      csv: openingImportCsv.value,
+      fingerprint: openingImportPreview.value.fingerprint
+    });
+    await reload();
+    accounting.notice = 'Soldes d’ouverture importés dans le brouillon.';
+    openingImportDialog.value?.close();
+  } catch (error) {
+    openingImportError.value = errorMessage(error);
+  } finally {
+    openingImportBusy.value = false;
+  }
+}
+
+async function showJournalDetails(): Promise<void> {
+  journalDetails.value = null;
+  journalDetailsError.value = '';
+  journalDetailsBusy.value = true;
+  journalDetailsDialog.value?.open();
+  try {
+    journalDetails.value = (
+      await api.get<JournalDetails>('/accounting/journal/details', {
+        exercise_id: exerciseId.value
+      })
+    ).data;
+  } catch (error) {
+    journalDetailsError.value = errorMessage(error);
+  } finally {
+    journalDetailsBusy.value = false;
+  }
+}
+
+function exportJournal(): void {
+  download('/accounting/journal/export', { exercise_id: exerciseId.value });
+}
+
+function chooseJournalImport(): void {
+  journalFileInput.value?.click();
+}
+
+async function journalCsvSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  journalImportName.value = file.name;
+  journalImportError.value = '';
+  journalImportPreview.value = null;
+  journalImportBusy.value = true;
+  journalImportDialog.value?.open();
+  try {
+    journalImportCsv.value = await file.text();
+    journalImportPreview.value = (
+      await api.post<JournalImportPreview>(
+        '/accounting/journal/import/preview',
+        { exercise_id: exerciseId.value, csv: journalImportCsv.value }
+      )
+    ).data;
+  } catch (error) {
+    journalImportError.value = errorMessage(error);
+  } finally {
+    journalImportBusy.value = false;
+  }
+}
+
+async function applyJournalImport(): Promise<void> {
+  if (!journalImportPreview.value) return;
+  journalImportBusy.value = true;
+  journalImportError.value = '';
+  try {
+    await api.post('/accounting/journal/import', {
+      exercise_id: exerciseId.value,
+      csv: journalImportCsv.value,
+      fingerprint: journalImportPreview.value.fingerprint
+    });
+    await reload();
+    accounting.notice = 'Écritures du journal importées.';
+    journalImportDialog.value?.close();
+  } catch (error) {
+    journalImportError.value = errorMessage(error);
+  } finally {
+    journalImportBusy.value = false;
+  }
+}
+
 function chooseChartImport(): void {
   chartFileInput.value?.click();
 }
@@ -1092,7 +1279,19 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         <section class="panel">
           <div class="section-heading">
             <div><p class="eyebrow">Grand livre</p><h2>Écritures récentes</h2></div>
-            <span>{{ workspace.journal.total }} écriture(s)</span>
+            <div class="button-row">
+              <span>{{ workspace.journal.total }} écriture(s)</span>
+              <button class="button secondary small" type="button" @click="showJournalDetails">Voir tout le journal</button>
+              <button v-if="workspace.capabilities.export" class="button secondary small" type="button" @click="exportJournal">Exporter CSV</button>
+              <button v-if="canEdit" class="button primary small" type="button" @click="chooseJournalImport">Importer CSV</button>
+              <input
+                ref="journalFileInput"
+                class="visually-hidden"
+                type="file"
+                accept=".csv,text/csv"
+                @change="journalCsvSelected"
+              >
+            </div>
           </div>
           <div class="table-scroll">
             <table class="accounting-document-table journal-table">
@@ -1109,6 +1308,62 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             </table>
           </div>
         </section>
+
+        <ModalDialog
+          ref="journalDetailsDialog"
+          title="Journal détaillé de l’exercice"
+          description="Toutes les écritures et toutes leurs lignes, dans l’ordre comptable."
+          wide
+        >
+          <p v-if="journalDetailsBusy">Chargement du journal…</p>
+          <ErrorSummary v-if="journalDetailsError" :message="journalDetailsError" />
+          <template v-if="journalDetails">
+            <div class="metric-strip">
+              <span><small>Écritures</small><strong>{{ journalDetails.total_entries }}</strong></span>
+              <span><small>Lignes</small><strong>{{ journalDetails.total_lines }}</strong></span>
+              <span><small>Débit</small><strong>{{ formatStatementAmount(journalDetails.total_debit_cents) }}</strong></span>
+              <span><small>Crédit</small><strong>{{ formatStatementAmount(journalDetails.total_credit_cents) }}</strong></span>
+            </div>
+            <div class="table-scroll journal-detail-scroll">
+              <table class="accounting-document-table journal-table">
+                <thead><tr><th>Date</th><th>N°</th><th>Journal</th><th>Compte</th><th>Libellé</th><th class="amount">Débit</th><th class="amount">Crédit</th><th>Statut</th></tr></thead>
+                <tbody>
+                  <tr v-for="line in journalDetails.items" :key="`${line.entry_id}-${line.line_order}`">
+                    <td>{{ line.date_comptable }}</td>
+                    <td>{{ line.numero || `#${line.entry_id}` }}</td>
+                    <td>{{ line.journal }}</td>
+                    <td>{{ line.account_number }} — {{ line.account_label }}</td>
+                    <td>{{ line.line_label }}</td>
+                    <td class="amount">{{ line.debit_centimes ? formatStatementAmount(line.debit_centimes) : '—' }}</td>
+                    <td class="amount">{{ line.credit_centimes ? formatStatementAmount(line.credit_centimes) : '—' }}</td>
+                    <td><span class="status-chip">{{ line.statut }}</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+        </ModalDialog>
+
+        <ModalDialog
+          ref="journalImportDialog"
+          title="Importer des écritures de journal"
+          description="Le CSV détaillé est contrôlé ligne par ligne et appliqué dans une seule transaction. Les écritures peuvent rester en brouillon ou être validées selon la colonne statut."
+        >
+          <p><strong>{{ journalImportName || 'Fichier CSV' }}</strong></p>
+          <p v-if="journalImportBusy">Contrôle du fichier en cours…</p>
+          <ErrorSummary v-if="journalImportError" :message="journalImportError" />
+          <template v-if="journalImportPreview">
+            <div class="metric-strip">
+              <span><small>Écritures</small><strong>{{ journalImportPreview.summary.entries }}</strong></span>
+              <span><small>Lignes</small><strong>{{ journalImportPreview.summary.lines }}</strong></span>
+              <span><small>Brouillons</small><strong>{{ journalImportPreview.summary.drafts }}</strong></span>
+              <span><small>À valider</small><strong>{{ journalImportPreview.summary.validated }}</strong></span>
+            </div>
+            <div class="button-row">
+              <button class="button primary" type="button" :disabled="journalImportBusy" @click="applyJournalImport">Confirmer l’import</button>
+            </div>
+          </template>
+        </ModalDialog>
       </section>
 
       <section v-else-if="currentTab === 'extraits'" class="panel">
@@ -1157,34 +1412,38 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
       <section v-else-if="currentTab === 'plan'" class="panel plan-workspace">
         <div class="section-heading">
           <div><p class="eyebrow">Référentiel unique</p><h2>Plan comptable</h2></div>
-          <span v-if="!canSetup" class="status-chip warning">Lecture seule</span>
-        </div>
-        <nav class="subtabs secondary-tabs plan-tabs" aria-label="Sections du plan comptable">
-          <button v-for="item in [
-            ['types', 'Types'], ['sense', 'Sens'], ['rubrics', 'Rubriques'],
-            ['accounts', 'Comptes'], ['opening', 'Ouverture']
-          ]" :key="item[0]" :class="{ active: planSection === item[0] }" type="button" @click="selectPlanSection(item[0])">
-            {{ item[1] }}
-          </button>
-          <span class="plan-tab-actions">
+          <div class="button-row">
+            <span v-if="!canSetup" class="status-chip warning">Lecture seule</span>
             <button
               v-if="workspace.capabilities.export"
               class="button secondary small"
               type="button"
               @click="exportChart"
-            >Exporter CSV</button>
+            >Exporter le plan</button>
             <button
               v-if="canSetup"
               class="button secondary small"
               type="button"
               @click="chooseChartImport"
-            >Importer CSV</button>
+            >Importer un plan</button>
             <button
               v-if="canSetup"
               class="button danger small"
               type="button"
               @click="previewChartReset"
             >Effacer le plan</button>
+          </div>
+        </div>
+        <nav class="subtabs secondary-tabs plan-tabs" aria-label="Sections du plan comptable">
+          <span class="plan-tab-list">
+            <button v-for="item in [
+              ['types', 'Types'], ['sense', 'Sens'], ['rubrics', 'Rubriques'],
+              ['accounts', 'Comptes'], ['opening', 'Ouverture']
+            ]" :key="item[0]" :class="{ active: planSection === item[0] }" type="button" @click="selectPlanSection(item[0])">
+              {{ item[1] }}
+            </button>
+          </span>
+          <span class="plan-tab-actions">
             <input
               ref="chartFileInput"
               class="visually-hidden"
@@ -1195,9 +1454,10 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             <button
               class="button primary small"
               type="button"
+              :aria-label="planSaveLabel"
               :disabled="planSaveDisabled"
               @click="savePlanSection"
-            >{{ planSaveLabel }}</button>
+            >{{ planSaveLabel }} — {{ planSection === 'types' ? 'Types' : planSection === 'sense' ? 'Sens' : planSection === 'rubrics' ? 'Rubriques' : planSection === 'accounts' ? 'Comptes' : 'Ouverture' }}</button>
           </span>
         </nav>
 
@@ -1268,12 +1528,47 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         </template>
 
         <template v-else>
-          <div class="section-heading"><div><h3>Soldes d’ouverture</h3><p>{{ workspace.opening.status === 'absent' ? 'Aucun brouillon' : `État : ${workspace.opening.status}` }}</p></div><span v-if="workspace.opening.number">{{ workspace.opening.number }}</span></div>
+          <div class="section-heading">
+            <div><h3>Soldes d’ouverture</h3><p>{{ workspace.opening.status === 'absent' ? 'Aucun brouillon' : `État : ${workspace.opening.status}` }}</p></div>
+            <div class="button-row">
+              <span v-if="workspace.opening.number">{{ workspace.opening.number }}</span>
+              <button v-if="workspace.capabilities.export" class="button secondary small" type="button" @click="exportOpening">Exporter l’ouverture</button>
+              <button v-if="canSetup && workspace.opening.status !== 'validee'" class="button secondary small" type="button" @click="chooseOpeningImport">Importer l’ouverture</button>
+              <input
+                ref="openingFileInput"
+                class="visually-hidden"
+                type="file"
+                accept=".csv,text/csv"
+                @change="openingCsvSelected"
+              >
+            </div>
+          </div>
           <div class="table-scroll"><table class="editable-table"><thead><tr><th>Compte</th><th>Type</th><th>Sens</th><th>Solde initial</th></tr></thead>
             <tbody><tr v-for="account in openingAccounts" :key="account.id"><td>{{ account.number }} — {{ account.label }}</td><td>{{ account.type }}</td><td>{{ senseLabel(account.normal_side) }}</td><td><input v-model="openingDrafts[account.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00"></td></tr></tbody>
           </table></div>
           <div class="button-row"><button class="button primary" type="button" :disabled="!canValidate || workspace.opening.status === 'validee'" @click="saveOpening(true)">Valider l’ouverture</button></div>
         </template>
+
+        <ModalDialog
+          ref="openingImportDialog"
+          title="Importer les soldes d’ouverture"
+          description="Ce format est distinct du plan comptable. L’import remplace uniquement le brouillon d’ouverture de l’exercice sélectionné et ne le valide jamais automatiquement."
+        >
+          <p><strong>{{ openingImportName || 'Fichier CSV' }}</strong></p>
+          <p v-if="openingImportBusy">Contrôle des soldes en cours…</p>
+          <ErrorSummary v-if="openingImportError" :message="openingImportError" />
+          <template v-if="openingImportPreview">
+            <div class="metric-strip">
+              <span><small>Comptes</small><strong>{{ openingImportPreview.summary.accounts }}</strong></span>
+              <span><small>Soldes non nuls</small><strong>{{ openingImportPreview.summary.non_zero }}</strong></span>
+              <span><small>Débit</small><strong>{{ formatStatementAmount(openingImportPreview.summary.debit_cents) }}</strong></span>
+              <span><small>Crédit</small><strong>{{ formatStatementAmount(openingImportPreview.summary.credit_cents) }}</strong></span>
+            </div>
+            <div class="button-row">
+              <button class="button primary" type="button" :disabled="openingImportBusy" @click="applyOpeningImport">Importer dans le brouillon</button>
+            </div>
+          </template>
+        </ModalDialog>
 
         <ModalDialog
           ref="chartImportDialog"

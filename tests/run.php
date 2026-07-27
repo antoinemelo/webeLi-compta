@@ -22,6 +22,7 @@ use Compta\Core\Security\ArraySessionStore;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Support\Html;
 use Compta\Modules\Compta\AccountingSetupService;
+use Compta\Modules\Compta\AccountingCsvService;
 use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Compta\AccountingInputValidator;
 use Compta\Modules\Compta\AccountingWorkspaceService;
@@ -472,9 +473,9 @@ final class Tests
         [$pdo, $runner, $databasePath] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            ['001', '002'],
+            ['001', '002', '003'],
             $applied,
-            'base initiale et gouvernance de consolidation appliquées'
+            'base initiale, gouvernance et lien contact-employé appliqués'
         );
         $this->same([], $runner->apply(), 'rejeu idempotent');
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité SQLite');
@@ -498,11 +499,11 @@ final class Tests
         $this->true(true, 'écriture concurrente possible après libération du verrou');
 
         $this->same(
-            2,
+            3,
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM schema_migrations"
             )->fetchColumn(),
-            'base initiale canonique et migration additive présentes'
+            'base initiale canonique et migrations additives présentes'
         );
         $this->same(
             5,
@@ -2528,12 +2529,14 @@ final class Tests
                 $httpAuth,
                 $httpAccess,
                 new AccountingWorkspaceService(
-                    new ChartOfAccountsService($pdo, $httpAudit),
+                    $httpChart = new ChartOfAccountsService($pdo, $httpAudit),
                     $httpEntries,
                     $httpReports,
                     $httpFinancial,
                     $httpVatWorkspace,
-                    $httpClosing
+                    $httpClosing,
+                    null,
+                    new AccountingCsvService($pdo, $httpChart, $httpEntries)
                 ),
                 new AccountingInputValidator(),
                 $httpAudit
@@ -3620,6 +3623,44 @@ final class Tests
                  FROM contacts WHERE id = {$createdContactId}"
             )->fetchColumn(),
             'édition optimiste du contact persistée'
+        );
+        $employeeContact = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/contacts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'type' => 'personne',
+                'company' => '',
+                'first_name' => 'Jeanne',
+                'last_name' => 'Salariée',
+                'email' => 'jeanne.salariee@example.test',
+                'phone' => '+41 22 000 00 02',
+                'language' => 'fr',
+                'roles' => ['employe'],
+                'address_line1' => 'Rue du Travail 3',
+                'address_line2' => '',
+                'postal_code' => '1202',
+                'city' => 'Genève',
+                'country' => 'CH',
+            ]]
+        ));
+        $employeeContactId = (int) (
+            $this->responseJson($employeeContact)['data']['id'] ?? 0
+        );
+        $this->same(
+            200,
+            $employeeContact->status,
+            'contact employé créé depuis Configuration'
+        );
+        $this->same(
+            'Jeanne Salariée|1',
+            (string) $pdo->query(
+                "SELECT prenom || ' ' || nom || '|' || profil_incomplet
+                 FROM employes WHERE contact_id = {$employeeContactId}"
+            )->fetchColumn(),
+            'contact employé immédiatement visible dans Salaires et à compléter'
         );
         $normalVatRateId = (int) $pdo->query(
             "SELECT id FROM tva_taux_legaux WHERE categorie = 'normal'"
@@ -6346,6 +6387,39 @@ final class Tests
             [$bank => 175000, $capital => 175000]
         );
         $this->same($openingDraft, $editedDraft, 'brouillon d’ouverture édité sans doublon');
+        $accountingCsv = new AccountingCsvService($pdo, $chart, $entries);
+        $openingExport = $accountingCsv->exportOpening(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise
+        );
+        $this->true(
+            str_starts_with($openingExport['content'], "\xEF\xBB\xBFnumero;libelle;sens;solde"),
+            'soldes d’ouverture exportés dans leur format CSV propre'
+        );
+        $openingPreview = $accountingCsv->previewOpening(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            $openingExport['content']
+        );
+        $this->same(
+            2,
+            $openingPreview['summary']['non_zero'],
+            'réimport des soldes d’ouverture prévisualisé et équilibré'
+        );
+        $this->same(
+            $openingDraft,
+            $accountingCsv->importOpening(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $nextExercise,
+                $openingExport['content'],
+                $openingPreview['fingerprint'],
+                $reportActorId
+            )['id'],
+            'import d’ouverture remplace atomiquement le même brouillon'
+        );
         $openingNumber = $entries->validateOpeningDraft(
             $ids['organisation_a'],
             $ids['dossier_a'],
@@ -6364,6 +6438,71 @@ final class Tests
         );
 
         $reports = new ReportingService($pdo);
+        $journalDetails = $accountingCsv->journalDetails(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseA
+        );
+        $this->true(
+            $journalDetails['total_lines'] >= 2
+            && $journalDetails['total_entries'] >= 1,
+            'journal détaillé expose toutes les écritures et leurs lignes'
+        );
+        $this->true(
+            str_starts_with(
+                $accountingCsv->exportJournal(
+                    $ids['organisation_a'],
+                    $ids['dossier_a'],
+                    $exerciseA
+                )['content'],
+                "\xEF\xBB\xBFecriture;date;journal;reference;piece;"
+            ),
+            'journal détaillé exporté dans un CSV réimportable'
+        );
+        $journalCode = (string) $pdo->query(
+            "SELECT code FROM journaux WHERE id = {$journalA}"
+        )->fetchColumn();
+        $journalImportCsv = "\xEF\xBB\xBF"
+            . "ecriture;date;journal;reference;piece;libelle_ecriture;"
+            . "compte;libelle_ligne;debit;credit;statut\n"
+            . "IMPORT-1;2027-04-01;{$journalCode};IMP-1;;Import contrôlé;"
+            . "6500;Charge importée;12.50;0.00;validee\n"
+            . "IMPORT-1;2027-04-01;{$journalCode};IMP-1;;Import contrôlé;"
+            . "3400;Produit importé;0.00;12.50;validee\n";
+        $journalImportPreview = $accountingCsv->previewJournalImport(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            $journalImportCsv
+        );
+        $this->same(
+            1,
+            $journalImportPreview['summary']['entries'],
+            'import du journal prévisualisé par écriture'
+        );
+        $this->same(
+            2,
+            $accountingCsv->importJournal(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $nextExercise,
+                $journalImportCsv,
+                $journalImportPreview['fingerprint'],
+                $reportActorId
+            )['lines'],
+            'écriture de journal importée atomiquement avec ses détails'
+        );
+        $this->throws(
+            fn () => $accountingCsv->importJournal(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $nextExercise,
+                $journalImportCsv,
+                $journalImportPreview['fingerprint'],
+                $reportActorId
+            ),
+            'réimport du même journal refusé sans doublon'
+        );
         $generalLedger2027 = $reports->generalLedger(
             $ids['organisation_a'],
             $ids['dossier_a'],

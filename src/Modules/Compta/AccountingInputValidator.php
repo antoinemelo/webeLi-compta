@@ -592,6 +592,37 @@ final class AccountingInputValidator
         return ['csv' => $csv, 'fingerprint' => $fingerprint];
     }
 
+    /** @return array{exercise_id:int,csv:string,fingerprint:string} */
+    public function accountingCsvImport(
+        Request $request,
+        bool $requiresFingerprint,
+    ): array {
+        $data = $this->only($request, ['exercise_id', 'csv', 'fingerprint']);
+        $csv = $data['csv'] ?? null;
+        if (!is_string($csv) || trim($csv) === '' || strlen($csv) > 5_000_000) {
+            throw ApiException::validation([
+                'csv' => ['Le fichier CSV est vide ou dépasse 5 Mo.'],
+            ]);
+        }
+        $fingerprint = (string) ($data['fingerprint'] ?? '');
+        if (
+            $requiresFingerprint
+            && preg_match('/^[a-f0-9]{64}$/', $fingerprint) !== 1
+        ) {
+            throw ApiException::validation([
+                'fingerprint' => ['Prévisualisation absente ou périmée.'],
+            ]);
+        }
+        return [
+            'exercise_id' => $this->positiveInteger(
+                $data['exercise_id'] ?? null,
+                'exercise_id'
+            ),
+            'csv' => $csv,
+            'fingerprint' => $fingerprint,
+        ];
+    }
+
     /** @return array{fingerprint:string,confirmation:string} */
     public function chartReset(Request $request): array
     {

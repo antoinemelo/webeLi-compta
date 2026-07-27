@@ -473,12 +473,18 @@ final class PayrollConfigurationService
         ];
         $id = (int) ($data['id'] ?? 0);
         if ($id > 0) {
+            $link = $this->pdo->prepare(
+                'SELECT contact_id FROM employes
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+            );
+            $link->execute([$id, $organisationId, $dossierId]);
+            $contactId = $link->fetchColumn();
             $stmt = $this->pdo->prepare(
                 "UPDATE employes SET prenom = ?, nom = ?, email = ?, rue = ?,
                     npa = ?, localite = ?, numero_avs = ?,
                     numero_avs_normalise = ?, date_naissance = ?,
                     procedure = ?, supplement_vacances_ppm = ?,
-                    impot_source_ppm = ?, actif = ?,
+                    impot_source_ppm = ?, actif = ?, profil_incomplet = 0,
                     modifie_le = datetime('now'), version = version + 1
                  WHERE id = ? AND organisation_id = ? AND dossier_id = ?
                    AND version = ?"
@@ -523,6 +529,89 @@ final class PayrollConfigurationService
         return $id;
     }
 
+    /**
+     * Rend immédiatement disponible dans Salaires un contact portant le rôle
+     * « employé ». Le profil reste explicitement incomplet jusqu'à la saisie
+     * d'un véritable numéro AVS depuis l'écran Salaires.
+     *
+     * @param array<string,mixed> $contact
+     */
+    public function syncContactEmployee(
+        int $organisationId,
+        int $dossierId,
+        int $contactId,
+        array $contact,
+        bool $hasEmployeeRole,
+        ?int $actorId = null,
+    ): void {
+        $existing = $this->pdo->prepare(
+            'SELECT id, profil_incomplet FROM employes
+             WHERE organisation_id = ? AND dossier_id = ? AND contact_id = ?'
+        );
+        $existing->execute([$organisationId, $dossierId, $contactId]);
+        $employee = $existing->fetch();
+        if (!$hasEmployeeRole) {
+            if ($employee !== false) {
+                $this->pdo->prepare(
+                    "UPDATE employes SET actif = 0, modifie_le = datetime('now'),
+                            version = version + 1
+                     WHERE id = ?"
+                )->execute([(int) $employee['id']]);
+            }
+            return;
+        }
+        if (($contact['type_personne'] ?? '') !== 'personne') {
+            throw new PayrollException(
+                'Le rôle employé ne peut être attribué qu’à une personne.'
+            );
+        }
+        $firstName = trim((string) ($contact['prenom'] ?? ''));
+        $lastName = trim((string) ($contact['nom'] ?? ''));
+        if ($firstName === '' || $lastName === '') {
+            throw new PayrollException(
+                'Le prénom et le nom sont requis pour créer le profil salarié.'
+            );
+        }
+        if ($employee === false) {
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO employes
+                 (organisation_id, dossier_id, contact_id, prenom, nom, email,
+                  rue, npa, localite, numero_avs, numero_avs_normalise,
+                  canton, actif, profil_incomplet, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, \'\', ?, \'GE\', 1, 1, ?)'
+            );
+            $stmt->execute([
+                $organisationId,
+                $dossierId,
+                $contactId,
+                $firstName,
+                $lastName,
+                trim((string) ($contact['email'] ?? '')),
+                trim((string) ($contact['rue'] ?? '')),
+                trim((string) ($contact['npa'] ?? '')),
+                trim((string) ($contact['localite'] ?? '')),
+                'contact:' . $contactId,
+                $actorId,
+            ]);
+            return;
+        }
+        $stmt = $this->pdo->prepare(
+            "UPDATE employes
+             SET prenom = ?, nom = ?, email = ?, rue = ?, npa = ?, localite = ?,
+                 actif = 1, modifie_le = datetime('now'), version = version + 1
+             WHERE id = ?"
+        );
+        $stmt->execute([
+            $firstName,
+            $lastName,
+            trim((string) ($contact['email'] ?? '')),
+            trim((string) ($contact['rue'] ?? '')),
+            trim((string) ($contact['npa'] ?? '')),
+            trim((string) ($contact['localite'] ?? '')),
+            (int) $employee['id'],
+        ]);
+    }
+
     public function deleteEmployee(
         int $organisationId,
         int $dossierId,
@@ -538,7 +627,7 @@ final class PayrollConfigurationService
             $actorId
         ): void {
             $stmt = $this->pdo->prepare(
-                'SELECT prenom, nom, version FROM employes
+                'SELECT prenom, nom, version, contact_id FROM employes
                  WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
             );
             $stmt->execute([$employeeId, $organisationId, $dossierId]);
@@ -548,6 +637,12 @@ final class PayrollConfigurationService
             }
             if ((int) $employee['version'] !== $expectedVersion) {
                 throw new PayrollException('Employé modifié simultanément.');
+            }
+            if ($employee['contact_id'] !== null) {
+                throw new PayrollException(
+                    'Cet employé provient des référentiels. Retirez son rôle '
+                    . '« employé » dans Configuration → Débiteurs et créanciers.'
+                );
             }
             $used = $this->pdo->prepare(
                 'SELECT 1 FROM fiches_salaires

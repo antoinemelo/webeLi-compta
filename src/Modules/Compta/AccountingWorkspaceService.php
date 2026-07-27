@@ -17,6 +17,7 @@ final class AccountingWorkspaceService
         private readonly VatWorkspaceService $vat,
         private readonly ClosingAndTaxService $closing,
         private readonly ?ExchangeRevaluationService $revaluations = null,
+        private readonly ?AccountingCsvService $csv = null,
     ) {
     }
 
@@ -918,5 +919,120 @@ final class AccountingWorkspaceService
             );
         }
         return ['id' => $entryId, 'number' => $number];
+    }
+
+    /** @return array{filename:string,content:string} */
+    public function exportOpening(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+    ): array {
+        return $this->csv()->exportOpening(
+            $organisationId,
+            $dossierId,
+            $exerciseId
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function previewOpeningImport(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $csv,
+    ): array {
+        return $this->csv()->previewOpening(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $csv
+        );
+    }
+
+    /** @return array{id:int,number:string} */
+    public function importOpening(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $csv,
+        string $fingerprint,
+        int $actorId,
+    ): array {
+        return $this->csv()->importOpening(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $csv,
+            $fingerprint,
+            $actorId
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function journalDetails(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+    ): array {
+        return $this->csv()->journalDetails(
+            $organisationId,
+            $dossierId,
+            $exerciseId
+        );
+    }
+
+    /** @return array{filename:string,content:string} */
+    public function exportJournal(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+    ): array {
+        return $this->csv()->exportJournal(
+            $organisationId,
+            $dossierId,
+            $exerciseId
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function previewJournalImport(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $csv,
+    ): array {
+        return $this->csv()->previewJournalImport(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $csv
+        );
+    }
+
+    /** @return array{entries:int,lines:int} */
+    public function importJournal(
+        int $organisationId,
+        int $dossierId,
+        int $exerciseId,
+        string $csv,
+        string $fingerprint,
+        int $actorId,
+    ): array {
+        return $this->csv()->importJournal(
+            $organisationId,
+            $dossierId,
+            $exerciseId,
+            $csv,
+            $fingerprint,
+            $actorId
+        );
+    }
+
+    private function csv(): AccountingCsvService
+    {
+        if ($this->csv === null) {
+            throw new AccountingException('Service CSV comptable indisponible.');
+        }
+        return $this->csv;
     }
 }

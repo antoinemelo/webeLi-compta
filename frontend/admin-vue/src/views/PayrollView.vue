@@ -63,7 +63,9 @@ const payment = reactive({
 const allocation = reactive({ payment_id: 0, liability_id: 0, amount: '' });
 const ocasVerifiedOn = ref(today);
 const activeEmployees = computed(() => (
-  workspace.value?.employees.filter((row) => n(row, 'actif') === 1) || []
+  workspace.value?.employees.filter((row) =>
+    n(row, 'actif') === 1 && n(row, 'profil_incomplet') !== 1
+  ) || []
 ));
 const periodPayrolls = computed(() => (
   workspace.value?.payrolls.filter((row) => n(row, 'annee') === year.value) || []
@@ -689,13 +691,22 @@ onMounted(() => reload());
             <tbody>
               <tr v-for="row in workspace.employees" :key="n(row,'id')">
                 <td>{{ employeeName(n(row,'id')) }}</td>
-                <td>{{ s(row,'numero_avs') }}</td>
+                <td>{{ n(row,'profil_incomplet') === 1 ? 'À compléter' : s(row,'numero_avs') }}</td>
                 <td>{{ s(row,'email') || '—' }}</td>
                 <td>{{ s(row,'procedure') }}</td>
-                <td><span :class="['status-chip', n(row,'actif') === 1 ? 'ok' : 'warning']">{{ n(row,'actif') === 1 ? 'Actif' : 'Inactif' }}</span></td>
+                <td>
+                  <span
+                    :class="['status-chip', n(row,'profil_incomplet') === 1 || n(row,'actif') !== 1 ? 'warning' : 'ok']"
+                  >{{ n(row,'profil_incomplet') === 1 ? 'À compléter' : (n(row,'actif') === 1 ? 'Actif' : 'Inactif') }}</span>
+                </td>
                 <td class="button-row">
                   <button class="button small" :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving" @click="editEmployee(row)">Modifier</button>
-                  <button class="button danger small" :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving" @click="deleteEmployee(row)">Supprimer</button>
+                  <button
+                    class="button danger small"
+                    :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving || n(row,'contact_id') > 0"
+                    :title="n(row,'contact_id') > 0 ? 'Retirez le rôle employé depuis Configuration → Débiteurs et créanciers.' : ''"
+                    @click="deleteEmployee(row)"
+                  >Supprimer</button>
                 </td>
               </tr>
             </tbody>

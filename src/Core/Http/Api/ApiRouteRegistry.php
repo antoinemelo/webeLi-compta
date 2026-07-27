@@ -304,6 +304,13 @@ final class ApiRouteRegistry
                 '/api/v1/accounting/opening',
                 $this->accounting->saveOpening(...)
             );
+            $this->add($router, 'GET', '/api/v1/accounting/opening/export', $this->accounting->exportOpening(...));
+            $this->add($router, 'POST', '/api/v1/accounting/opening/import/preview', $this->accounting->previewOpeningImport(...));
+            $this->add($router, 'POST', '/api/v1/accounting/opening/import', $this->accounting->importOpening(...));
+            $this->add($router, 'GET', '/api/v1/accounting/journal/details', $this->accounting->journalDetails(...));
+            $this->add($router, 'GET', '/api/v1/accounting/journal/export', $this->accounting->exportJournal(...));
+            $this->add($router, 'POST', '/api/v1/accounting/journal/import/preview', $this->accounting->previewJournalImport(...));
+            $this->add($router, 'POST', '/api/v1/accounting/journal/import', $this->accounting->importJournal(...));
             $this->add($router, 'GET', '/api/v1/accounting/reports/export', $this->accounting->exportReport(...));
             $this->add($router, 'POST', '/api/v1/accounting/vat/periods', $this->accounting->createVatPeriod(...));
             $this->add($router, 'POST', '/api/v1/accounting/vat/statements/prepare', $this->accounting->prepareVatStatement(...));

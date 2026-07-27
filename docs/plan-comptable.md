@@ -139,3 +139,11 @@ Le bouton **Effacer le plan** remet à zéro comptes, rubriques, règles de sens
 et types dans une transaction. L’opération exige la confirmation `EFFACER` et
 est refusée si une écriture ou toute autre donnée métier référence encore un
 compte. Le panneau détaille alors chaque dépendance à traiter.
+
+## Soldes d’ouverture
+
+Le sous-menu **Ouverture** possède son propre export/import CSV
+(`numero;libelle;sens;solde`). Ce fichier ne peut pas être confondu avec celui
+du plan comptable. L’import contrôle l’existence des comptes, les doublons, les
+montants et l’égalité débit/crédit, puis remplace uniquement le brouillon de
+l’exercice sélectionné. Il ne valide jamais l’ouverture automatiquement.

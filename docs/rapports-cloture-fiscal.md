@@ -38,6 +38,20 @@ Les contrôles bloquants vérifient :
 Les exports CSV portent leur période et l’empreinte SHA-256 du grand livre afin
 de rendre le calcul identifiable.
 
+## Journal détaillé et import
+
+La journalisation conserve une liste récente légère, complétée par **Voir tout
+le journal** pour afficher chaque ligne de chaque écriture. L’export détaillé
+reprend les colonnes `ecriture`, `date`, `journal`, `reference`, `piece`,
+`libelle_ecriture`, `compte`, `libelle_ligne`, `debit`, `credit` et `statut`.
+
+Le même format peut être réimporté après prévisualisation. Les lignes sont
+groupées par la colonne `ecriture`; chaque groupe doit contenir au moins deux
+lignes, appartenir à l’exercice, utiliser des journaux et comptes actifs et
+être équilibré au centime. Le lot entier est transactionnel et son empreinte
+empêche un double import. Un statut `brouillon` conserve l’écriture à
+contrôler; un statut `validee` la numérote dans la même transaction.
+
 ## TVA
 
 L’onglet TVA réutilise les régimes, codes, comptes, lignes sources, décomptes et

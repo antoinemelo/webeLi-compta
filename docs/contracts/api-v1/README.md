@@ -111,6 +111,13 @@ Les exemples versionnés sont :
 | POST | `/api/v1/accounting/chart/rubrics` | création, édition, ordre ou retrait d’une rubrique |
 | POST | `/api/v1/accounting/chart/accounts` | création, édition, ordre ou désactivation d’un compte |
 | POST | `/api/v1/accounting/opening` | enregistrement ou validation des soldes d’ouverture |
+| GET | `/api/v1/accounting/opening/export` | export CSV propre aux soldes d’ouverture |
+| POST | `/api/v1/accounting/opening/import/preview` | contrôle d’un CSV d’ouverture sans mutation |
+| POST | `/api/v1/accounting/opening/import` | remplacement atomique du brouillon d’ouverture |
+| GET | `/api/v1/accounting/journal/details` | toutes les lignes détaillées du journal de l’exercice |
+| GET | `/api/v1/accounting/journal/export` | export CSV détaillé et réimportable du journal |
+| POST | `/api/v1/accounting/journal/import/preview` | contrôle d’écritures CSV groupées et équilibrées |
+| POST | `/api/v1/accounting/journal/import` | import atomique et anti-rejeu des écritures du journal |
 | GET | `/api/v1/accounting/reports/export` | export CSV paramétré et empreinte du grand livre |
 | POST | `/api/v1/accounting/vat/periods` | création d’une période TVA |
 | POST | `/api/v1/accounting/vat/statements/prepare` | préparation ou rectification depuis les sources |

@@ -175,6 +175,144 @@ final class AccountingApiController
         });
     }
 
+    public function exportOpening(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.export');
+        $exerciseId = $this->validator->queryId($request, 'exercise_id');
+        return $this->raw(function () use (
+            $userId, $organisationId, $dossierId, $exerciseId, $request
+        ): Response {
+            $export = $this->workspace->exportOpening(
+                $organisationId,
+                $dossierId,
+                $exerciseId
+            );
+            $this->audit->log(
+                'compta.ouverture_csv_exportee',
+                $userId,
+                $organisationId,
+                $dossierId,
+                'exercice',
+                (string) $exerciseId,
+                [],
+                $request->ip()
+            );
+            return new Response($export['content'], 200, [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' => 'attachment; filename="' . $export['filename'] . '"',
+                'X-Content-Type-Options' => 'nosniff',
+            ]);
+        });
+    }
+
+    public function previewOpeningImport(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->accountingCsvImport($request, false);
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->previewOpeningImport(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['csv']
+            )
+        );
+    }
+
+    public function importOpening(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->accountingCsvImport($request, true);
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->importOpening(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['csv'],
+                $data['fingerprint'],
+                $userId
+            )
+        );
+    }
+
+    public function journalDetails(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('compta.view');
+        $exerciseId = $this->validator->queryId($request, 'exercise_id');
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->journalDetails(
+                $organisationId,
+                $dossierId,
+                $exerciseId
+            )
+        );
+    }
+
+    public function exportJournal(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.export');
+        $exerciseId = $this->validator->queryId($request, 'exercise_id');
+        return $this->raw(function () use (
+            $userId, $organisationId, $dossierId, $exerciseId, $request
+        ): Response {
+            $export = $this->workspace->exportJournal(
+                $organisationId,
+                $dossierId,
+                $exerciseId
+            );
+            $this->audit->log(
+                'compta.journal_csv_exporte',
+                $userId,
+                $organisationId,
+                $dossierId,
+                'exercice',
+                (string) $exerciseId,
+                [],
+                $request->ip()
+            );
+            return new Response($export['content'], 200, [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' => 'attachment; filename="' . $export['filename'] . '"',
+                'X-Content-Type-Options' => 'nosniff',
+            ]);
+        });
+    }
+
+    public function previewJournalImport(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('compta.edit');
+        $data = $this->validator->accountingCsvImport($request, false);
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->previewJournalImport(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['csv']
+            )
+        );
+    }
+
+    public function importJournal(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.edit');
+        $data = $this->validator->accountingCsvImport($request, true);
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->importJournal(
+                $organisationId,
+                $dossierId,
+                $data['exercise_id'],
+                $data['csv'],
+                $data['fingerprint'],
+                $userId
+            )
+        );
+    }
+
     public function previewChartImport(Request $request): Response
     {
         [, $organisationId, $dossierId] = $this->scope('compta.setup');

@@ -680,15 +680,32 @@ h3,
 
 .plan-tabs {
   align-items: center;
+  flex-wrap: nowrap;
   padding: 0.35rem 0;
   border-bottom: 1px solid var(--line);
 }
 
+.plan-tab-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.plan-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
 .plan-tab-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 0.45rem;
   margin-left: auto;
+  padding-left: 0.5rem;
+  background: rgba(248, 249, 253, 0.98);
+  box-shadow: -0.75rem 0 1rem rgba(248, 249, 253, 0.98);
 }
 
 .plan-tabs .plan-tab-actions .button {
@@ -1941,16 +1958,16 @@ textarea {
   .plan-tabs {
     position: sticky;
     top: 6.75rem;
-    align-items: stretch;
+    align-items: center;
   }
 
   .plan-tab-actions {
-    width: 100%;
-    margin-left: 0;
+    width: auto;
+    margin-left: auto;
   }
 
   .plan-tab-actions .button {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     justify-content: center;
   }
 }
