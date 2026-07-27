@@ -695,7 +695,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   const savePlan = page.getByRole('button', { name: 'Enregistrer', exact: true });
   await expect(savePlan).toHaveCount(1);
   await expect(savePlan).toBeVisible();
-  await expect(savePlan).toBeDisabled();
+  await expect(savePlan).toBeEnabled();
   const planTabs = page.getByLabel('Sections du plan comptable');
   await expect(planTabs.getByRole('button', { name: 'Exporter le plan' })).toBeVisible();
   await expect(planTabs.getByRole('button', { name: 'Importer un plan' })).toBeVisible();
@@ -708,6 +708,12 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   expect(tabsBox).not.toBeNull();
   expect(saveBox).not.toBeNull();
   expect(saveBox!.x).toBeGreaterThan(tabsBox!.x + tabsBox!.width / 2);
+  expect(await savePlan.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe('rgb(32, 33, 78)');
+  expect(await savePlan.evaluate((element) => getComputedStyle(element).color))
+    .toBe('rgb(255, 255, 255)');
+  await savePlan.click();
+  await expect(page.getByText('Aucune modification à enregistrer pour « Types ».')).toBeVisible();
   await page.setViewportSize({ width: 360, height: 720 });
   expect(await planTabs.evaluate((element) => getComputedStyle(element).position)).toBe('sticky');
   await expect(savePlan).toBeVisible();
@@ -743,7 +749,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   ]);
   const saveAccounts = savePlan;
   await expect(saveAccounts).toHaveCount(1);
-  await expect(saveAccounts).toBeDisabled();
+  await expect(saveAccounts).toBeEnabled();
   const accountLabel = accountRow.locator('input').nth(1);
   const originalLabel = await accountLabel.inputValue();
   await accountLabel.fill(`${originalLabel} E2E`);
@@ -790,7 +796,14 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await expect(page.getByRole('button', {
     name: 'Enregistrer le brouillon',
     exact: true
-  })).toHaveCount(1);
+  })).toBeEnabled();
+  const validateOpening = planTabs.getByRole('button', {
+    name: 'Valider l’ouverture',
+    exact: true
+  });
+  await expect(validateOpening).toBeEnabled();
+  expect(await validateOpening.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe('rgb(32, 33, 78)');
 
   const legacy = await page.request.get('/e2e/compta/plan', { maxRedirects: 0 });
   expect(legacy.status()).toBe(303);

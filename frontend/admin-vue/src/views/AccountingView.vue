@@ -376,17 +376,21 @@ const planSectionLabel = computed(() => {
 const planSaveLabel = computed(() =>
   planSection.value === 'opening' ? 'Enregistrer le brouillon' : 'Enregistrer'
 );
-const planSaveDisabled = computed(() => {
-  if (!canSetup.value || accounting.saving) return true;
-  if (planSection.value === 'types') return dirtyTypes.value.length === 0;
-  if (planSection.value === 'sense') return !senseDirty.value;
+const planSectionDirty = computed(() => {
+  if (planSection.value === 'types') return dirtyTypes.value.length > 0;
+  if (planSection.value === 'sense') return senseDirty.value;
   if (planSection.value === 'rubrics') {
-    return dirtyRubrics.value.length === 0 && !rubricOrderDirty.value;
+    return dirtyRubrics.value.length > 0 || rubricOrderDirty.value;
   }
   if (planSection.value === 'accounts') {
-    return dirtyAccounts.value.length === 0 && !accountOrderDirty.value;
+    return dirtyAccounts.value.length > 0 || accountOrderDirty.value;
   }
-  return workspace.value?.opening.status === 'validee' || !openingDirty.value;
+  return openingDirty.value;
+});
+const planSaveDisabled = computed(() => {
+  if (!canSetup.value || accounting.saving) return true;
+  return planSection.value === 'opening'
+    && workspace.value?.opening.status === 'validee';
 });
 const openingAccounts = computed(() =>
   (workspace.value?.chart.accounts ?? []).filter(
@@ -806,6 +810,11 @@ function selectPlanSection(value: string): void {
 }
 
 async function savePlanSection(): Promise<void> {
+  if (!planSectionDirty.value) {
+    accounting.error = '';
+    accounting.notice = `Aucune modification à enregistrer pour « ${planSectionLabel.value} ».`;
+    return;
+  }
   if (planSection.value === 'types') return saveTypes();
   if (planSection.value === 'sense') return saveSense();
   if (planSection.value === 'rubrics') return saveRubrics();
