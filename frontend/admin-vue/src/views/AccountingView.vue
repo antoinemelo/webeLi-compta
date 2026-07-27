@@ -360,6 +360,19 @@ const openingDirty = computed(() =>
       !== (workspace.value?.opening.soldes[String(account.id)] ?? 0)
   )
 );
+const rubricLevelLabel = computed(() => ({
+  classe: 'Classes',
+  groupe_principal: 'Groupes principaux',
+  groupe: 'Groupes',
+  sous_groupe: 'Sous-groupes'
+})[rubricLevel.value]);
+const planSectionLabel = computed(() => {
+  if (planSection.value === 'types') return 'Types';
+  if (planSection.value === 'sense') return 'Sens';
+  if (planSection.value === 'rubrics') return rubricLevelLabel.value;
+  if (planSection.value === 'accounts') return 'Comptes';
+  return 'Soldes d’ouverture';
+});
 const planSaveLabel = computed(() =>
   planSection.value === 'opening' ? 'Enregistrer le brouillon' : 'Enregistrer'
 );
@@ -694,7 +707,6 @@ async function moveRubric(id: number, direction: -1 | 1): Promise<void> {
 }
 
 async function saveAccounts(): Promise<void> {
-  if (!dirtyAccounts.value.length) return;
   const accounts = dirtyAccounts.value.map((account) => ({
     id: account.id,
     number: accountDrafts[account.id].number,
@@ -761,6 +773,16 @@ async function saveOpening(validate: boolean): Promise<void> {
     validate,
     balances
   }, validate ? 'Soldes d’ouverture validés.' : 'Brouillon d’ouverture enregistré.');
+}
+
+async function clearOpening(): Promise<void> {
+  if (!window.confirm(
+    'Effacer tous les soldes du brouillon d’ouverture de cet exercice ?'
+  )) return;
+  openingAccounts.value.forEach((account) => {
+    openingDrafts[account.id] = '';
+  });
+  await saveOpening(false);
 }
 
 async function mutateAndReload(
@@ -1421,27 +1443,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
       <section v-else-if="currentTab === 'plan'" class="panel plan-workspace">
         <div class="section-heading">
           <div><p class="eyebrow">Référentiel unique</p><h2>Plan comptable</h2></div>
-          <div class="button-row">
-            <span v-if="!canSetup" class="status-chip warning">Lecture seule</span>
-            <button
-              v-if="workspace.capabilities.export"
-              class="button secondary small"
-              type="button"
-              @click="exportChart"
-            >Exporter le plan</button>
-            <button
-              v-if="canSetup"
-              class="button secondary small"
-              type="button"
-              @click="chooseChartImport"
-            >Importer un plan</button>
-            <button
-              v-if="canSetup"
-              class="button danger small"
-              type="button"
-              @click="previewChartReset"
-            >Effacer le plan</button>
-          </div>
+          <span v-if="!canSetup" class="status-chip warning">Lecture seule</span>
         </div>
         <nav class="subtabs secondary-tabs plan-tabs" aria-label="Sections du plan comptable">
           <span class="plan-tab-list">
@@ -1452,21 +1454,60 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
               {{ item[1] }}
             </button>
           </span>
-          <span class="plan-tab-actions">
+          <span class="plan-tab-actions" :aria-label="`Actions — ${planSectionLabel}`">
             <input
               ref="chartFileInput"
               class="visually-hidden"
               type="file"
+              aria-label="Fichier du plan comptable"
               accept=".csv,text/csv"
               @change="chartCsvSelected"
             >
+            <input
+              ref="openingFileInput"
+              class="visually-hidden"
+              type="file"
+              aria-label="Fichier des soldes d’ouverture"
+              accept=".csv,text/csv"
+              @change="openingCsvSelected"
+            >
+            <button
+              v-if="workspace.capabilities.export"
+              class="button secondary small"
+              type="button"
+              :aria-label="planSection === 'opening' ? 'Exporter les soldes d’ouverture' : 'Exporter le plan'"
+              @click="planSection === 'opening' ? exportOpening() : exportChart()"
+            >Exporter</button>
+            <button
+              v-if="canSetup"
+              class="button secondary small"
+              type="button"
+              :disabled="planSection === 'opening' && workspace.opening.status === 'validee'"
+              :aria-label="planSection === 'opening' ? 'Importer les soldes d’ouverture' : 'Importer un plan'"
+              @click="planSection === 'opening' ? chooseOpeningImport() : chooseChartImport()"
+            >Importer</button>
+            <button
+              v-if="canSetup"
+              class="button danger small"
+              type="button"
+              :disabled="planSection === 'opening' && workspace.opening.status === 'validee'"
+              :aria-label="planSection === 'opening' ? 'Effacer les soldes d’ouverture' : 'Effacer le plan'"
+              @click="planSection === 'opening' ? clearOpening() : previewChartReset()"
+            >Effacer</button>
             <button
               class="button primary small"
               type="button"
               :aria-label="planSaveLabel"
               :disabled="planSaveDisabled"
               @click="savePlanSection"
-            >{{ planSaveLabel }} — {{ planSection === 'types' ? 'Types' : planSection === 'sense' ? 'Sens' : planSection === 'rubrics' ? 'Rubriques' : planSection === 'accounts' ? 'Comptes' : 'Ouverture' }}</button>
+            >{{ planSaveLabel }} — {{ planSectionLabel }}</button>
+            <button
+              v-if="planSection === 'opening'"
+              class="button primary small"
+              type="button"
+              :disabled="!canValidate || workspace.opening.status === 'validee'"
+              @click="saveOpening(true)"
+            >Valider l’ouverture</button>
           </span>
         </nav>
 
@@ -1539,23 +1580,11 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         <template v-else>
           <div class="section-heading">
             <div><h3>Soldes d’ouverture</h3><p>{{ workspace.opening.status === 'absent' ? 'Aucun brouillon' : `État : ${workspace.opening.status}` }}</p></div>
-            <div class="button-row">
-              <span v-if="workspace.opening.number">{{ workspace.opening.number }}</span>
-              <button v-if="workspace.capabilities.export" class="button secondary small" type="button" @click="exportOpening">Exporter l’ouverture</button>
-              <button v-if="canSetup && workspace.opening.status !== 'validee'" class="button secondary small" type="button" @click="chooseOpeningImport">Importer l’ouverture</button>
-              <input
-                ref="openingFileInput"
-                class="visually-hidden"
-                type="file"
-                accept=".csv,text/csv"
-                @change="openingCsvSelected"
-              >
-            </div>
+            <span v-if="workspace.opening.number">{{ workspace.opening.number }}</span>
           </div>
           <div class="table-scroll"><table class="editable-table"><thead><tr><th>Compte</th><th>Type</th><th>Sens</th><th>Solde initial</th></tr></thead>
             <tbody><tr v-for="account in openingAccounts" :key="account.id"><td>{{ account.number }} — {{ account.label }}</td><td>{{ account.type }}</td><td>{{ senseLabel(account.normal_side) }}</td><td><input v-model="openingDrafts[account.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00"></td></tr></tbody>
           </table></div>
-          <div class="button-row"><button class="button primary" type="button" :disabled="!canValidate || workspace.opening.status === 'validee'" @click="saveOpening(true)">Valider l’ouverture</button></div>
         </template>
 
         <ModalDialog

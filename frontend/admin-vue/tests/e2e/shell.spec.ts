@@ -697,6 +697,9 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await expect(savePlan).toBeVisible();
   await expect(savePlan).toBeDisabled();
   const planTabs = page.getByLabel('Sections du plan comptable');
+  await expect(planTabs.getByRole('button', { name: 'Exporter le plan' })).toBeVisible();
+  await expect(planTabs.getByRole('button', { name: 'Importer un plan' })).toBeVisible();
+  await expect(planTabs.getByRole('button', { name: 'Effacer le plan' })).toBeVisible();
   expect(await planTabs.evaluate((element) => getComputedStyle(element).position)).toBe('sticky');
   const [tabsBox, saveBox] = await Promise.all([
     planTabs.boundingBox(),
@@ -708,11 +711,15 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await page.setViewportSize({ width: 360, height: 720 });
   expect(await planTabs.evaluate((element) => getComputedStyle(element).position)).toBe('sticky');
   await expect(savePlan).toBeVisible();
+  await expect(planTabs.getByRole('button', { name: 'Exporter le plan' })).toBeVisible();
+  await expect(planTabs.getByRole('button', { name: 'Importer un plan' })).toBeVisible();
+  await expect(planTabs.getByRole('button', { name: 'Effacer le plan' })).toBeVisible();
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'Sens', exact: true }).click();
   await expect(savePlan).toBeVisible();
 
   await page.getByRole('button', { name: 'Rubriques', exact: true }).click();
+  await expect(savePlan).toContainText('Classes');
   const rubricRow = page.locator('.plan-workspace table tbody tr').first();
   const rubricLabel = rubricRow.locator('input').nth(1);
   const originalRubricLabel = await rubricLabel.inputValue();
@@ -749,7 +756,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   expect(chartCsvResponse.status()).toBe(200);
   expect(chartCsvResponse.headers()['content-type']).toContain('text/csv');
   const chartCsv = await chartCsvResponse.body();
-  await page.locator('.plan-tabs input[type="file"]').setInputFiles({
+  await page.getByLabel('Fichier du plan comptable').setInputFiles({
     name: 'plan-comptable.csv',
     mimeType: 'text/csv',
     buffer: chartCsv
@@ -771,6 +778,15 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await page.getByRole('button', { name: 'Ouverture', exact: true }).click();
   await expect(page.getByRole('columnheader', { name: 'Sens', exact: true })).toBeVisible();
   await expect(page.getByRole('cell', { name: '+/-', exact: true }).first()).toBeVisible();
+  await expect(planTabs.getByRole('button', {
+    name: 'Exporter les soldes d’ouverture'
+  })).toBeVisible();
+  await expect(planTabs.getByRole('button', {
+    name: 'Importer les soldes d’ouverture'
+  })).toBeVisible();
+  await expect(planTabs.getByRole('button', {
+    name: 'Effacer les soldes d’ouverture'
+  })).toBeVisible();
   await expect(page.getByRole('button', {
     name: 'Enregistrer le brouillon',
     exact: true

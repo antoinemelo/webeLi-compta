@@ -680,14 +680,14 @@ h3,
 
 .plan-tabs {
   align-items: center;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   padding: 0.35rem 0;
   border-bottom: 1px solid var(--line);
 }
 
 .plan-tab-list {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 28rem;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -699,8 +699,10 @@ h3,
 
 .plan-tab-actions {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.45rem;
   margin-left: auto;
   padding-left: 0.5rem;
@@ -721,9 +723,21 @@ h3,
   background: var(--primary);
 }
 
+.plan-tabs .plan-tab-actions .button.secondary {
+  color: var(--ink);
+  border-color: var(--line);
+  background: white;
+}
+
+.plan-tabs .plan-tab-actions .button.danger {
+  color: #8e222b;
+  border-color: #a73b42;
+  background: #fff7f7;
+}
+
 .plan-tabs .plan-tab-actions .button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.65;
 }
 
 .chart-import-summary {
@@ -1958,17 +1972,27 @@ textarea {
   .plan-tabs {
     position: sticky;
     top: 6.75rem;
-    align-items: center;
+    align-items: stretch;
+  }
+
+  .plan-tab-list {
+    flex: 1 0 100%;
   }
 
   .plan-tab-actions {
-    width: auto;
-    margin-left: auto;
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-left: 0;
+    padding: 0.4rem 0 0;
+    box-shadow: none;
   }
 
   .plan-tab-actions .button {
-    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
     justify-content: center;
+    white-space: normal;
   }
 }
 
