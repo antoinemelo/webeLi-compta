@@ -118,6 +118,11 @@ déploiement produit par une ancienne version du script — il réexpédie
 automatiquement l’inventaire applicatif complet afin de réparer une installation
 partielle.
 
+Une installation applicative initiale ne crée volontairement aucune base SQLite
+et ne transfère aucun secret. Le script le rappelle avant confirmation : la
+base et la configuration persistantes doivent être provisionnées séparément,
+sans jamais être écrasées par un déploiement de code.
+
 Les fichiers envoyés proviennent directement des objets Git du commit, jamais
 du répertoire de travail. Les suppressions distantes restent désactivées par
 défaut et exigent en plus `--delete`. Chaque fichier envoyé est relu et comparé

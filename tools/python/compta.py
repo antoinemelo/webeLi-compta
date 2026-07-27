@@ -1014,6 +1014,11 @@ def deploy(args: argparse.Namespace) -> int:
             "Resynchronisation complète : "
             f"{resync_reason}; tous les fichiers applicatifs seront envoyés."
         )
+    if baseline is None:
+        print(
+            "IMPORTANT : ce transfert installe le code et ses dépendances, "
+            "mais n’écrase ni ne crée la base SQLite ou les secrets persistants."
+        )
     print(f"Fichiers applicatifs à envoyer : {len(uploads)}")
     for path in uploads:
         print(f"  + {path}")
@@ -1033,7 +1038,7 @@ def deploy(args: argparse.Namespace) -> int:
     else:
         deploy_ftp(config, target, uploads, deletions, manifest, args.delete)
     print(
-        "Déploiement terminé et vérifié. "
+        "Transfert applicatif terminé et vérifié. "
         f"Marqueur distant : {REMOTE_MANIFEST}"
     )
     return 0
