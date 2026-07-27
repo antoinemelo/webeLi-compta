@@ -705,6 +705,10 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   expect(tabsBox).not.toBeNull();
   expect(saveBox).not.toBeNull();
   expect(saveBox!.x).toBeGreaterThan(tabsBox!.x + tabsBox!.width / 2);
+  await page.setViewportSize({ width: 360, height: 720 });
+  expect(await planTabs.evaluate((element) => getComputedStyle(element).position)).toBe('sticky');
+  await expect(savePlan).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 720 });
   await page.getByRole('button', { name: 'Sens', exact: true }).click();
   await expect(savePlan).toBeVisible();
 

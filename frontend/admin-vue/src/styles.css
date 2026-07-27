@@ -1939,6 +1939,8 @@ textarea {
   }
 
   .plan-tabs {
+    position: sticky;
+    top: 6.75rem;
     align-items: stretch;
   }
 
