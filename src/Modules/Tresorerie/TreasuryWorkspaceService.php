@@ -112,9 +112,15 @@ final class TreasuryWorkspaceService
                              trim(c.prenom || ' ' || c.nom)) AS contact
              FROM documents_financiers d
              JOIN contacts c ON c.id = d.contact_id
+             JOIN comptes collectif ON collectif.id = d.compte_collectif_id
              WHERE d.organisation_id = ? AND d.dossier_id = ?
                AND d.type IN ('facture_client', 'facture_fournisseur')
                AND d.statut IN ('emis', 'comptabilise')
+               AND (
+                 (d.type = 'facture_client' AND collectif.type = 'actif')
+                 OR
+                 (d.type = 'facture_fournisseur' AND collectif.type = 'passif')
+               )
              ORDER BY d.date_echeance, d.id",
             [$organisationId, $dossierId]
         );

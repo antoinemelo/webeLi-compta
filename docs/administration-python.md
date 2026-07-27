@@ -111,13 +111,17 @@ Le script lit le marqueur `storage/deployments/current.json` du site, calcule le
 delta entre le commit déjà déployé et `HEAD`, puis ne transfère que les fichiers
 utiles au runtime : PHP, build public, migrations, seeds, ressources et
 templates. Les sources Vue, tests, livrables, bases, caches et secrets sont
-exclus.
+exclus. Sans marqueur complet et récent — notamment après un déploiement produit
+par une ancienne version du script — il réexpédie automatiquement l’inventaire
+applicatif complet afin de réparer une installation partielle.
 
 Les fichiers envoyés proviennent directement des objets Git du commit, jamais
 du répertoire de travail. Les suppressions distantes restent désactivées par
-défaut et exigent en plus `--delete`. Le marqueur distant, écrit en dernier,
-conserve le commit précédent, le nouveau commit, la version, les empreintes et
-la liste du delta. Une copie immuable est aussi écrite sous
+défaut et exigent en plus `--delete`. Chaque fichier envoyé est relu et comparé
+à son contenu Git avant que le déploiement soit déclaré terminé. Le marqueur
+distant, lui aussi relu après écriture, est écrit en dernier et conserve le
+commit précédent, le nouveau commit, la version, l’inventaire complet avec ses
+empreintes ainsi que la liste du delta. Une copie immuable est aussi écrite sous
 `storage/deployments/releases/<commit>.json`.
 
 Pour une cible montée localement, le même protocole se teste avec :

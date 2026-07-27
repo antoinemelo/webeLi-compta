@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
 import MarketLineChart from '@/components/ui/MarketLineChart.vue';
+import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { subNavigation } from '@/router/navigation';
 import { useContextStore } from '@/stores/context';
@@ -30,8 +31,8 @@ const matchingSection = ref<'payment' | 'allocation'>('payment');
 const ratesSection = ref<'exchange' | 'interest'>('exchange');
 const today = new Date().toISOString().slice(0, 10);
 const selectedId = ref(0);
-const showExpenseForm = ref(false);
-const showRecurrenceForm = ref(false);
+const expenseDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const recurrenceDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const attachment = ref<{ name: string; content_base64: string } | null>(null);
 const statement = ref<{ name: string; content_base64: string } | null>(null);
 const importPreview = ref<Record<string, unknown> | null>(null);
@@ -111,6 +112,43 @@ const recurrence = reactive({
   external_prefix: 'REC',
   lines: [newLine()] as DraftLine[]
 });
+
+function resetExpenseDraft(): void {
+  Object.assign(expense, {
+    contact_id: 0,
+    document_date: today,
+    due_date: today,
+    external_number: '',
+    collective_account_id: 0,
+    lines: [newLine()]
+  });
+  attachment.value = null;
+}
+
+function resetRecurrenceDraft(): void {
+  Object.assign(recurrence, {
+    contact_id: 0,
+    label: '',
+    frequency: 'mensuelle',
+    interval: 1,
+    next_date: today,
+    end_date: '',
+    due_days: 30,
+    collective_account_id: 0,
+    external_prefix: 'REC',
+    lines: [newLine()]
+  });
+}
+
+function openExpenseDialog(): void {
+  resetExpenseDraft();
+  expenseDialog.value?.open();
+}
+
+function openRecurrenceDialog(): void {
+  resetRecurrenceDraft();
+  recurrenceDialog.value?.open();
+}
 
 const expenseRows = computed(() => (workspace.value?.expenses ?? []).map((item) => ({
   ...item,
@@ -572,7 +610,7 @@ async function saveExpense(): Promise<void> {
       lines: apiLines(expense.lines, expense.document_date),
       attachment: attachment.value
     });
-    showExpenseForm.value = false;
+    expenseDialog.value?.close();
     attachment.value = null;
     notifications.push('Dépense enregistrée comme brouillon, sans comptabilisation.', 'success');
   } catch {
@@ -636,7 +674,7 @@ async function saveRecurrence(): Promise<void> {
       external_prefix: recurrence.external_prefix,
       lines: apiLines(recurrence.lines, recurrence.next_date)
     });
-    showRecurrenceForm.value = false;
+    recurrenceDialog.value?.close();
     notifications.push('Récurrence enregistrée.', 'success');
   } catch {
     notifications.push(store.error, 'warning');
@@ -693,19 +731,25 @@ async function toggleRecurrence(item: {
             v-if="workspace.capabilities.manage"
             class="button secondary"
             type="button"
-            @click="showRecurrenceForm = !showRecurrenceForm"
+            @click="openRecurrenceDialog"
           >Nouvelle récurrence</button>
           <button
             v-if="workspace.capabilities.manage"
             class="button primary"
             type="button"
-            @click="showExpenseForm = !showExpenseForm"
+            @click="openExpenseDialog"
           >Nouvelle dépense</button>
         </div>
       </div>
 
-      <form v-if="showExpenseForm" class="editor-card" @submit.prevent="saveExpense">
-        <h3>Nouvelle dépense ponctuelle</h3>
+      <ModalDialog
+        ref="expenseDialog"
+        title="Nouvelle dépense ponctuelle"
+        description="Renseignez le fournisseur puis répartissez la dépense entre ses contreparties."
+        wide
+        @closed="resetExpenseDraft"
+      >
+      <form class="modal-editor" @submit.prevent="saveExpense">
         <div class="form-grid">
           <FormField id="expense-supplier" label="Fournisseur">
             <template #default="{ describedBy }">
@@ -742,7 +786,7 @@ async function toggleRecurrence(item: {
           </FormField>
         </div>
         <fieldset v-for="(line, index) in expense.lines" :key="index" class="line-editor">
-          <legend>Ligne {{ index + 1 }}</legend>
+          <legend>Contrepartie {{ index + 1 }}</legend>
           <input v-model="line.libelle" aria-label="Libellé" placeholder="Libellé" required>
           <input v-model="line.prix" aria-label="Montant" inputmode="decimal" placeholder="Montant" required>
           <AccountCombobox
@@ -763,10 +807,11 @@ async function toggleRecurrence(item: {
           <button v-if="expense.lines.length > 1" type="button" class="button ghost" @click="expense.lines.splice(index, 1)">Retirer</button>
         </fieldset>
         <div class="button-row">
-          <button type="button" class="button ghost" @click="expense.lines.push(newLine())">Ajouter une ligne</button>
+          <button type="button" class="button ghost" @click="expense.lines.push(newLine())">Ajouter une contrepartie</button>
           <button class="button primary" :disabled="store.saving">Enregistrer le brouillon</button>
         </div>
       </form>
+      </ModalDialog>
 
       <DataTable
         v-if="expenseRows.length"
@@ -910,7 +955,14 @@ async function toggleRecurrence(item: {
           <div><h2>Dépenses récurrentes</h2><p>Chaque échéance crée uniquement un brouillon à compléter et approuver.</p></div>
           <button v-if="workspace.capabilities.manage" class="button secondary" type="button" @click="generateDue">Générer jusqu’à aujourd’hui</button>
         </div>
-        <form v-if="showRecurrenceForm" class="editor-card" @submit.prevent="saveRecurrence">
+        <ModalDialog
+          ref="recurrenceDialog"
+          title="Nouvelle récurrence"
+          description="Définissez la cadence et les contreparties qui seront reprises dans chaque brouillon."
+          wide
+          @closed="resetRecurrenceDraft"
+        >
+        <form class="modal-editor" @submit.prevent="saveRecurrence">
           <div class="form-grid">
             <FormField id="rec-label" label="Nom du modèle"><template #default="{ describedBy }"><input id="rec-label" v-model="recurrence.label" :aria-describedby="describedBy" required></template></FormField>
             <FormField id="rec-supplier" label="Fournisseur"><template #default="{ describedBy }"><select id="rec-supplier" v-model.number="recurrence.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in workspace.catalog.suppliers" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
@@ -921,15 +973,16 @@ async function toggleRecurrence(item: {
             <FormField id="rec-collective" label="Paiement fournisseur"><template #default="{ describedBy }"><AccountCombobox id="rec-collective" v-model="recurrence.collective_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
           </div>
           <fieldset v-for="(line, index) in recurrence.lines" :key="index" class="line-editor">
-            <legend>Ligne {{ index + 1 }}</legend>
+            <legend>Contrepartie {{ index + 1 }}</legend>
             <input v-model="line.libelle" aria-label="Libellé récurrent" placeholder="Libellé" required>
             <input v-model="line.prix" aria-label="Montant récurrent" inputmode="decimal" placeholder="Montant" required>
             <AccountCombobox v-model="line.compte_id" :options="workspace.catalog.accounts" aria-label="Compte récurrent" placeholder="Compte" required />
             <select v-model.number="line.code_tva_id" aria-label="TVA récurrente" required><option :value="0" disabled>TVA</option><option v-for="item in workspace.catalog.vat_codes" :key="item.id" :value="item.id">{{ item.code }} · {{ item.label }}</option></select>
             <select v-model="line.mode_saisie" aria-label="Mode récurrent"><option value="net">Net</option><option value="brut">Brut</option></select>
           </fieldset>
-          <div class="button-row"><button type="button" class="button ghost" @click="recurrence.lines.push(newLine())">Ajouter une ligne</button><button class="button primary" :disabled="store.saving">Enregistrer la récurrence</button></div>
+          <div class="button-row"><button type="button" class="button ghost" @click="recurrence.lines.push(newLine())">Ajouter une contrepartie</button><button class="button primary" :disabled="store.saving">Enregistrer la récurrence</button></div>
         </form>
+        </ModalDialog>
         <DataTable
           v-if="recurrenceRows.length"
           caption="Modèles de dépenses récurrentes"
@@ -1483,6 +1536,7 @@ async function toggleRecurrence(item: {
 .eyebrow { margin: 0; color: var(--accent); font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
 .editor-card, .detail-card, .recurrence-section { padding: 1.1rem; background: var(--surface); border: 1px solid var(--border); border-radius: .75rem; box-shadow: var(--shadow); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.modal-editor { display: grid; gap: 1rem; }
 .line-editor { display: grid; grid-template-columns: 1.5fr .7fr 1.2fr 1fr .8fr auto; gap: .6rem; margin: 1rem 0; padding: .9rem; border: 1px solid var(--border); border-radius: .5rem; }
 .line-editor input, .line-editor select, .form-grid input, .form-grid select { width: 100%; min-height: 2.7rem; }
 .table-link { color: var(--ink); background: none; border: 0; text-decoration: underline; cursor: pointer; }

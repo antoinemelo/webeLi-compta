@@ -11613,11 +11613,15 @@ CSV;
             $expenseAccount,
         ]);
         $nonLiabilityDocument = (int) $pdo->lastInsertId();
+        $treasuryProjection = (new TreasuryWorkspaceService(
+            $pdo,
+            $payments,
+            $entries
+        ))->read($organisationId, $dossierId);
         $payableDebtIds = array_map(
             'intval',
             array_column(
-                (new TreasuryWorkspaceService($pdo, $payments, $entries))
-                    ->read($organisationId, $dossierId)['payable_debts'],
+                $treasuryProjection['payable_debts'],
                 'id'
             )
         );
@@ -11626,6 +11630,16 @@ CSV;
             && in_array($secondExpenseId, $payableDebtIds, true)
             && !in_array($nonLiabilityDocument, $payableDebtIds, true),
             'paiements sortants limités aux passifs fournisseurs en suspens'
+        );
+        $openDocumentIds = array_map(
+            'intval',
+            array_column($treasuryProjection['open_documents'], 'id')
+        );
+        $this->true(
+            in_array($expenseId, $openDocumentIds, true)
+            && in_array($secondExpenseId, $openDocumentIds, true)
+            && !in_array($nonLiabilityDocument, $openDocumentIds, true),
+            'lettrage limité aux créances et dettes encore ouvertes'
         );
         $this->throws(
             fn () => $payments->create(

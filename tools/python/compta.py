@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEPLOY_CONFIG = ROOT / "ops" / "compta.deploy.json"
 REMOTE_MANIFEST = "storage/deployments/current.json"
 REMOTE_RELEASES = "storage/deployments/releases"
+DEPLOY_MANIFEST_SCHEMA = 2
 
 RUNTIME_FILES = {
     ".htaccess",
@@ -619,7 +620,21 @@ def commit_exists(commit: str) -> bool:
     return result.returncode == 0
 
 
+def runtime_files_at(commit: str) -> list[str]:
+    fields = run(
+        ["git", "ls-tree", "-r", "--name-only", "-z", commit],
+        capture=True,
+    ).stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    return sorted({
+        path
+        for path in fields
+        if path and is_runtime_path(path)
+    })
+
+
 def changed_runtime_files(baseline: str | None, target: str) -> tuple[list[str], list[str]]:
+    if baseline is None:
+        return runtime_files_at(target), []
     if baseline:
         if not commit_exists(baseline):
             raise AdminError(f"Commit de référence absent localement : {baseline}")
@@ -630,11 +645,6 @@ def changed_runtime_files(baseline: str | None, target: str) -> tuple[list[str],
         if ancestor.returncode != 0:
             raise AdminError("Le commit distant n’est pas un ancêtre du commit à déployer.")
         command = ["git", "diff", "--name-status", "--no-renames", "-z", baseline, target]
-    else:
-        command = [
-            "git", "diff-tree", "--root", "--no-commit-id", "--name-status",
-            "--no-renames", "-r", "-z", target,
-        ]
     fields = run(command, capture=True).stdout.decode(
         "utf-8", errors="surrogateescape"
     ).split("\0")
@@ -660,25 +670,29 @@ def release_manifest(
     uploads: list[str],
     deletions: list[str],
 ) -> dict[str, Any]:
+    inventory = runtime_files_at(target)
     files = []
-    for path in uploads:
+    for path in inventory:
         content = git_bytes(target, path)
         files.append({
             "path": path,
             "size": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
         })
-    version = git_bytes(target, "VERSION").decode("utf-8").strip() if "VERSION" in git(
-        "ls-tree", "-r", "--name-only", target
-    ).splitlines() else ""
+    version = (
+        git_bytes(target, "VERSION").decode("utf-8").strip()
+        if "VERSION" in inventory
+        else ""
+    )
     return {
-        "schema": 1,
+        "schema": DEPLOY_MANIFEST_SCHEMA,
         "application": "webeli-compta",
         "commit": target,
         "previous_commit": baseline,
         "version": version,
         "deployed_at": datetime.now(timezone.utc).isoformat(),
         "files": files,
+        "uploads": uploads,
         "deletions": deletions,
     }
 
@@ -696,7 +710,12 @@ def load_config(path: Path) -> dict[str, Any]:
 
 def local_remote_manifest(config: dict[str, Any]) -> dict[str, Any] | None:
     path = Path(config["target"]).expanduser().resolve() / REMOTE_MANIFEST
-    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise AdminError(f"Marqueur de déploiement local invalide : {path}") from error
 
 
 def ftp_connect(config: dict[str, Any]) -> ftplib.FTP:
@@ -711,12 +730,29 @@ def ftp_connect(config: dict[str, Any]) -> ftplib.FTP:
 
 
 def ftp_read_json(client: ftplib.FTP, path: str) -> dict[str, Any] | None:
+    content = ftp_read_bytes(client, path, missing_ok=True)
+    if content is None:
+        return None
+    try:
+        return json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AdminError(f"Marqueur de déploiement distant invalide : {path}") from error
+
+
+def ftp_read_bytes(
+    client: ftplib.FTP,
+    path: str,
+    *,
+    missing_ok: bool = False,
+) -> bytes | None:
     chunks: list[bytes] = []
     try:
         client.retrbinary(f"RETR {path}", chunks.append)
-    except ftplib.all_errors:
-        return None
-    return json.loads(b"".join(chunks).decode("utf-8"))
+    except ftplib.error_perm as error:
+        if missing_ok and str(error).startswith("550"):
+            return None
+        raise
+    return b"".join(chunks)
 
 
 def ftp_mkdirs(client: ftplib.FTP, directory: str) -> None:
@@ -730,6 +766,44 @@ def ftp_mkdirs(client: ftplib.FTP, directory: str) -> None:
         except ftplib.error_perm as error:
             if not str(error).startswith("550"):
                 raise
+
+
+def manifest_has_complete_inventory(manifest: dict[str, Any] | None) -> bool:
+    if not manifest:
+        return False
+    files = manifest.get("files")
+    commit = manifest.get("commit")
+    structurally_valid = (
+        manifest.get("application") == "webeli-compta"
+        and manifest.get("schema") == DEPLOY_MANIFEST_SCHEMA
+        and isinstance(commit, str)
+        and commit_exists(commit)
+        and isinstance(files, list)
+        and bool(files)
+        and all(
+            isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and isinstance(item.get("sha256"), str)
+            for item in files
+        )
+    )
+    if not structurally_valid:
+        return False
+    recorded_paths = sorted({
+        str(item["path"])
+        for item in files
+    })
+    return recorded_paths == runtime_files_at(commit)
+
+
+def verify_local_uploads(root: Path, target: str, uploads: list[str]) -> None:
+    for path in uploads:
+        destination = root / path
+        if not destination.is_file():
+            raise AdminError(f"Fichier déployé introuvable : {destination}")
+        expected = git_bytes(target, path)
+        if destination.read_bytes() != expected:
+            raise AdminError(f"Fichier déployé altéré : {destination}")
 
 
 def deploy_local(
@@ -751,6 +825,7 @@ def deploy_local(
             destination = root / path
             if destination.is_file():
                 destination.unlink()
+    verify_local_uploads(root, target, uploads)
     current = root / REMOTE_MANIFEST
     current.parent.mkdir(parents=True, exist_ok=True)
     current.write_text(
@@ -763,6 +838,12 @@ def deploy_local(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    stored = local_remote_manifest(config)
+    if (
+        not manifest_has_complete_inventory(stored)
+        or stored.get("commit") != target
+    ):
+        raise AdminError("Le marqueur local n’a pas pu être vérifié.")
 
 
 def deploy_ftp(
@@ -775,10 +856,13 @@ def deploy_ftp(
 ) -> None:
     root = str(config["remote_root"]).rstrip("/")
     with ftp_connect(config) as client:
+        expected_uploads: dict[str, bytes] = {}
         for path in uploads:
             remote = posixpath.join(root, path)
             ftp_mkdirs(client, posixpath.dirname(remote))
-            client.storbinary(f"STOR {remote}", io.BytesIO(git_bytes(target, path)))
+            content = git_bytes(target, path)
+            expected_uploads[path] = content
+            client.storbinary(f"STOR {remote}", io.BytesIO(content))
         if delete:
             for path in deletions:
                 try:
@@ -786,6 +870,13 @@ def deploy_ftp(
                 except ftplib.error_perm as error:
                     if not str(error).startswith("550"):
                         raise
+        for path, expected in expected_uploads.items():
+            remote = posixpath.join(root, path)
+            deployed = ftp_read_bytes(client, remote)
+            if deployed != expected:
+                raise AdminError(
+                    f"Le contrôle après transfert a échoué pour {path}."
+                )
         payload = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8") + b"\n"
         release_path = posixpath.join(root, REMOTE_RELEASES, f"{target}.json")
         ftp_mkdirs(client, posixpath.dirname(release_path))
@@ -795,12 +886,20 @@ def deploy_ftp(
             f"STOR {posixpath.join(root, REMOTE_MANIFEST)}",
             io.BytesIO(payload),
         )
+        stored = ftp_read_json(client, posixpath.join(root, REMOTE_MANIFEST))
+        if (
+            not manifest_has_complete_inventory(stored)
+            or stored.get("commit") != target
+        ):
+            raise AdminError("Le marqueur distant n’a pas pu être vérifié.")
 
 
 def deploy(args: argparse.Namespace) -> int:
     config = load_config(args.config.resolve())
     target = git("rev-parse", args.commit)
     baseline = args.from_commit
+    complete_resync = False
+    resync_reason = ""
     client: ftplib.FTP | None = None
     try:
         if baseline is None:
@@ -811,12 +910,28 @@ def deploy(args: argparse.Namespace) -> int:
                 root = str(config["remote_root"]).rstrip("/")
                 current = ftp_read_json(client, posixpath.join(root, REMOTE_MANIFEST))
             baseline = str(current["commit"]) if current and current.get("commit") else None
+            complete_resync = not manifest_has_complete_inventory(current)
+            if current is None:
+                resync_reason = "aucun inventaire distant fiable"
+            elif complete_resync:
+                resync_reason = "ancien marqueur incomplet"
     finally:
         if client is not None:
             client.quit()
+    if baseline and not commit_exists(baseline):
+        complete_resync = True
+        resync_reason = "commit distant absent du dépôt local"
+        baseline = None
     uploads, deletions = changed_runtime_files(baseline, target)
+    if complete_resync:
+        uploads = runtime_files_at(target)
     manifest = release_manifest(target, baseline, uploads, deletions)
     print(f"Déploiement : {baseline or 'installation initiale'} -> {target}")
+    if complete_resync:
+        print(
+            "Resynchronisation complète : "
+            f"{resync_reason}; tous les fichiers applicatifs seront envoyés."
+        )
     print(f"Fichiers applicatifs à envoyer : {len(uploads)}")
     for path in uploads:
         print(f"  + {path}")
@@ -825,12 +940,20 @@ def deploy(args: argparse.Namespace) -> int:
         print(f"  - {path}{'' if args.delete else ' (conservé sans --delete)'}")
     if not uploads and not (args.delete and deletions):
         print("Le site est déjà aligné sur les fichiers applicatifs de ce commit.")
+    if getattr(args, "interactive_confirmation", False):
+        if not confirm("Déployer maintenant les fichiers affichés ci-dessus"):
+            print("Opération annulée.")
+            return 0
+        args.apply = True
     ensure_apply(args, "aucun fichier distant n’a été modifié")
     if config["transport"] == "local":
         deploy_local(config, target, uploads, deletions, manifest, args.delete)
     else:
         deploy_ftp(config, target, uploads, deletions, manifest, args.delete)
-    print(f"Déploiement terminé. Marqueur distant : {REMOTE_MANIFEST}")
+    print(
+        "Déploiement terminé et vérifié. "
+        f"Marqueur distant : {REMOTE_MANIFEST}"
+    )
     return 0
 
 
@@ -916,7 +1039,7 @@ def interactive_create_database(initialize: bool) -> int:
             f"{values['exercise']}-12-31",
         )
         values["association"] = confirm(
-            "Ajouter l’overlay du plan comptable pour associations"
+            "Ajouter l’overlay du plan comptable"
         )
     if not confirm("Créer maintenant cette base"):
         print("Opération annulée.")
@@ -1039,15 +1162,13 @@ def interactive_deploy() -> int:
     commit = ask("Commit à déployer", "HEAD")
     from_commit = ask("Commit distant de départ (vide = détection automatique)")
     delete = confirm("Supprimer aussi les fichiers applicatifs devenus obsolètes")
-    if not confirm("Déployer maintenant le delta applicatif"):
-        print("Opération annulée.")
-        return 0
     return deploy(argparse.Namespace(
         config=config,
         commit=commit,
         from_commit=from_commit or None,
         delete=delete,
-        apply=True,
+        apply=False,
+        interactive_confirmation=True,
     ))
 
 

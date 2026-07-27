@@ -30,6 +30,41 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertFalse(ADMIN.is_runtime_path("config/local.php"))
         self.assertFalse(ADMIN.is_runtime_path("livrables/SPECS_V02/README.md"))
 
+    def test_initial_deployment_contains_the_complete_runtime_tree(self) -> None:
+        commit = ADMIN.git("rev-parse", "HEAD")
+        inventory = ADMIN.runtime_files_at(commit)
+        uploads, deletions = ADMIN.changed_runtime_files(None, commit)
+        self.assertEqual(inventory, uploads)
+        self.assertEqual([], deletions)
+        self.assertIn("public/index.php", uploads)
+        self.assertIn("src/Core/Http/WebApplication.php", uploads)
+        self.assertIn("public/app/index.html", uploads)
+        self.assertGreater(len(uploads), 100)
+
+    def test_only_complete_v2_manifests_are_trusted_for_deltas(self) -> None:
+        commit = ADMIN.git("rev-parse", "HEAD")
+        legacy = {
+            "schema": 1,
+            "application": "webeli-compta",
+            "commit": commit,
+            "files": [{"path": "index.php", "sha256": "digest"}],
+        }
+        complete = {
+            **legacy,
+            "schema": ADMIN.DEPLOY_MANIFEST_SCHEMA,
+            "files": [
+                {"path": path, "sha256": "digest"}
+                for path in ADMIN.runtime_files_at(commit)
+            ],
+        }
+        self.assertFalse(ADMIN.manifest_has_complete_inventory(None))
+        self.assertFalse(ADMIN.manifest_has_complete_inventory(legacy))
+        self.assertFalse(ADMIN.manifest_has_complete_inventory({
+            **complete,
+            "files": complete["files"][:-1],
+        }))
+        self.assertTrue(ADMIN.manifest_has_complete_inventory(complete))
+
     def test_database_modes_are_explicit(self) -> None:
         technical = ADMIN.parser().parse_args(["db-create"])
         initialized = ADMIN.parser().parse_args(["db-create", "--initialize"])
@@ -116,6 +151,43 @@ class ComptaAdminTests(unittest.TestCase):
             )
             self.assertEqual(commit, stored["commit"])
             self.assertEqual("webeli-compta", stored["application"])
+            self.assertEqual(ADMIN.DEPLOY_MANIFEST_SCHEMA, stored["schema"])
+            self.assertGreater(len(stored["files"]), 100)
+
+    def test_legacy_marker_forces_a_complete_repair_deployment(self) -> None:
+        commit = ADMIN.git("rev-parse", "HEAD")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "site"
+            marker = target / ADMIN.REMOTE_MANIFEST
+            marker.parent.mkdir(parents=True)
+            marker.write_text(json.dumps({
+                "schema": 1,
+                "application": "webeli-compta",
+                "commit": commit,
+                "files": [{"path": "VERSION", "sha256": "legacy"}],
+            }), encoding="utf-8")
+            config_path = root / "deploy.json"
+            config_path.write_text(json.dumps({
+                "transport": "local",
+                "target": str(target),
+            }), encoding="utf-8")
+            arguments = ADMIN.argparse.Namespace(
+                config=config_path,
+                commit="HEAD",
+                from_commit=None,
+                delete=False,
+                apply=True,
+            )
+            with patch("builtins.print"):
+                self.assertEqual(0, ADMIN.deploy(arguments))
+            self.assertTrue((target / "public/index.php").is_file())
+            self.assertTrue(
+                (target / "src/Core/Http/WebApplication.php").is_file()
+            )
+            stored = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertEqual(ADMIN.DEPLOY_MANIFEST_SCHEMA, stored["schema"])
+            self.assertGreater(len(stored["uploads"]), 100)
 
 
 if __name__ == "__main__":

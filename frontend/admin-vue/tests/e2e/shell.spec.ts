@@ -1208,22 +1208,30 @@ test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page
   await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Liquidités', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Utilisation des liquidités' })).toBeVisible();
+  await page.getByRole('button', { name: 'Nouvelle récurrence' }).click();
+  const recurrenceDialog = page.getByRole('dialog', { name: 'Nouvelle récurrence' });
+  await expect(recurrenceDialog).toBeVisible();
+  await expect(recurrenceDialog.getByText('Contrepartie 1')).toBeVisible();
+  await recurrenceDialog.getByRole('button', { name: 'Fermer' }).click();
   await page.getByRole('button', { name: 'Nouvelle dépense' }).click();
-  await page.getByLabel('Fournisseur', { exact: true }).selectOption({
+  const expenseDialog = page.getByRole('dialog', { name: 'Nouvelle dépense ponctuelle' });
+  await expect(expenseDialog).toBeVisible();
+  await expect(expenseDialog.getByText('Contrepartie 1')).toBeVisible();
+  await expenseDialog.getByLabel('Fournisseur', { exact: true }).selectOption({
     label: 'Fournitures E2E SA'
   });
-  await page.getByLabel('Référence fournisseur').fill('E2E-DEP-001');
-  await page.getByLabel('Date du document').fill('2026-07-20');
-  await page.getByLabel('Échéance').fill('2026-08-19');
-  const payable = page.getByLabel('Paiement fournisseur');
+  await expenseDialog.getByLabel('Référence fournisseur').fill('E2E-DEP-001');
+  await expenseDialog.getByLabel('Date du document').fill('2026-07-20');
+  await expenseDialog.getByLabel('Échéance').fill('2026-08-19');
+  const payable = expenseDialog.getByLabel('Paiement fournisseur');
   await chooseAccount(payable, '2000');
-  await expect(page.getByLabel('Justificatif facultatif')).toBeVisible();
-  await page.getByLabel('Libellé', { exact: true }).fill('Fournitures de bureau');
-  await page.getByLabel('Montant', { exact: true }).fill('100.00');
-  const expenseAccount = page.getByLabel('Compte de charge');
+  await expect(expenseDialog.getByLabel('Justificatif facultatif')).toBeVisible();
+  await expenseDialog.getByLabel('Libellé', { exact: true }).fill('Fournitures de bureau');
+  await expenseDialog.getByLabel('Montant', { exact: true }).fill('100.00');
+  const expenseAccount = expenseDialog.getByLabel('Compte de charge');
   await chooseAccount(expenseAccount, '6500', 'Tab');
-  await page.getByLabel('Code TVA').selectOption({ label: 'AM81 · Achats 8,1 %' });
-  await page.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
+  await expenseDialog.getByLabel('Code TVA').selectOption({ label: 'AM81 · Achats 8,1 %' });
+  await expenseDialog.getByRole('button', { name: 'Enregistrer le brouillon' }).click();
   const row = page.getByRole('row').filter({ hasText: 'Fournitures E2E SA' });
   await expect(row).toContainText('108.10 CHF');
   await expect(row).toContainText('Brouillon');
