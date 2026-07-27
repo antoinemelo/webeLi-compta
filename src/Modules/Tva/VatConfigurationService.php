@@ -59,7 +59,10 @@ final class VatConfigurationService
                 $this->assertAccount($organisationId, $dossierId, (int) $data[$field]);
             }
         }
-        $this->pdo->beginTransaction();
+        $ownsTransaction = !$this->pdo->inTransaction();
+        if ($ownsTransaction) {
+            $this->pdo->beginTransaction();
+        }
         try {
             if (($data['fermer_precedent'] ?? false) === true) {
                 $previousDay = (new DateTimeImmutable($start))->modify('-1 day')->format('Y-m-d');
@@ -100,10 +103,12 @@ final class VatConfigurationService
                 (string) $id,
                 ['statut' => $status, 'methode' => $method, 'date_debut' => $start]
             );
-            $this->pdo->commit();
+            if ($ownsTransaction) {
+                $this->pdo->commit();
+            }
             return $id;
         } catch (Throwable $exception) {
-            if ($this->pdo->inTransaction()) {
+            if ($ownsTransaction && $this->pdo->inTransaction()) {
                 $this->pdo->rollBack();
             }
             throw $exception;

@@ -1075,6 +1075,37 @@ final class Tests
         $this->same(1, $first['summary']['exercise_count'], 'premier exercice créé');
         $this->same(1, $first['summary']['period_count'], 'première période créée');
         $this->same(1, $first['summary']['journal_count'], 'journal général créé');
+        $this->true(
+            (int) ($first['summary']['vat_regime_id'] ?? 0) > 0,
+            'régime TVA initial créé par le seed du dossier'
+        );
+        $seededVatRegime = $pdo->query(
+            "SELECT statut, methode, mode_decompte, periodicite, date_debut
+             FROM tva_regimes WHERE dossier_id = {$firstId}"
+        )->fetch();
+        $this->same(
+            [
+                'statut' => 'non_assujetti',
+                'methode' => 'effective',
+                'mode_decompte' => 'convenues',
+                'periodicite' => 'annuelle',
+                'date_debut' => '2026-01-01',
+            ],
+            $seededVatRegime,
+            'seed TVA prudent, daté et immédiatement utilisable'
+        );
+        $seededVatRegimeId = (new DefaultVatCodeInstaller($pdo, $audit))
+            ->installDefaultRegime(
+                $organisationId,
+                $firstId,
+                '2026-01-01',
+                $actorId
+            );
+        $this->same(
+            (int) $first['summary']['vat_regime_id'],
+            $seededVatRegimeId,
+            'seed du régime TVA idempotent'
+        );
         $this->same(
             ['facturation', 'comptabilite'],
             $first['summary']['modules'],

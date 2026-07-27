@@ -15,10 +15,15 @@ qui modifient un état commencent par une simulation et exigent `--apply`.
 
 Dans le menu, l’option recommandée crée une instance immédiatement utilisable :
 administrateur, organisation, dossier, exercice, période, journal, plan
-comptable, modules et codes TVA. Elle propose par défaut une seconde organisation
-pédagogique avec son dossier de démonstration et les sept parcours WebeLi, sans
-question supplémentaire. Le mot de passe est demandé sans être affiché ni placé
-dans la ligne de commande.
+comptable, modules, codes TVA et régime TVA initial. Ce régime prudent est
+configuré comme **non assujetti**, sans inventer de numéro TVA, et prend effet
+au premier jour de l’exercice. Il doit être remplacé dans
+`Comptabilité > Clôture > TVA` lorsque l’organisation est assujettie.
+
+L’initialisation propose par défaut une seconde organisation pédagogique avec
+son dossier de démonstration et les sept parcours WebeLi, sans question
+supplémentaire. Le mot de passe est demandé sans être affiché ni placé dans la
+ligne de commande.
 
 La sous-commande équivalente utilise la variable d’environnement
 `COMPTA_ADMIN_PASSWORD` :

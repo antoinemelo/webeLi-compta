@@ -90,6 +90,51 @@ final class DefaultVatCodeInstaller
         return $inserted;
     }
 
+    public function installDefaultRegime(
+        int $organisationId,
+        int $dossierId,
+        string $validFrom,
+        ?int $actorId = null,
+    ): int {
+        $this->assertScope($organisationId, $dossierId);
+        $existing = $this->pdo->prepare(
+            'SELECT id FROM tva_regimes
+             WHERE organisation_id = ? AND dossier_id = ?
+             ORDER BY date_debut LIMIT 1'
+        );
+        $existing->execute([$organisationId, $dossierId]);
+        $existingId = $existing->fetchColumn();
+        if ($existingId !== false) {
+            return (int) $existingId;
+        }
+        $accounts = [
+            'compte_impot_prealable_materiel_id' => '1170',
+            'compte_impot_prealable_investissements_id' => '1171',
+            'compte_tva_due_id' => '2200',
+            'compte_decompte_tva_id' => '2201',
+            'compte_corrections_id' => '6500',
+        ];
+        $configuration = [
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'statut' => 'non_assujetti',
+            'numero_tva' => '',
+            'methode' => 'effective',
+            'mode_decompte' => 'convenues',
+            'periodicite' => 'annuelle',
+            'date_debut' => $validFrom,
+        ];
+        foreach ($accounts as $field => $number) {
+            $configuration[$field] = $this->account(
+                $organisationId,
+                $dossierId,
+                $number
+            );
+        }
+        return (new VatConfigurationService($this->pdo, $this->audit))
+            ->addRegime($configuration, $actorId);
+    }
+
     private function assertScope(int $organisationId, int $dossierId): void
     {
         $stmt = $this->pdo->prepare(

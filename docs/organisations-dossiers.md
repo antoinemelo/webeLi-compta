@@ -60,9 +60,12 @@ modification de la source oblige à refaire l’aperçu ; les rôles hérités e
 groupes de consolidation ne sont jamais copiés.
 
 Une seule transaction crée le dossier et initialise les modules, le plan
-comptable, l’exercice, sa période, le journal général et les codes TVA lorsque
-Comptabilité est activée. Une panne à n’importe quelle étape annule l’ensemble :
-aucun dossier partiel ne reste visible.
+comptable, l’exercice, sa période, le journal général, les codes TVA et un
+régime TVA initial lorsque Comptabilité est activée. Par prudence, ce régime
+est `non_assujetti`, sans numéro TVA, et commence au premier jour de l’exercice ;
+il reste modifiable depuis `Comptabilité > Clôture > TVA`. Une panne à
+n’importe quelle étape annule l’ensemble : aucun dossier partiel ne reste
+visible.
 
 Le résumé final indique les nombres de comptes, exercices, périodes et
 journaux, la devise et les modules actifs. Le sélecteur global est rechargé
@@ -111,10 +114,10 @@ organisation active.
 
 Un dossier initialisé mais sans donnée métier peut être supprimé. Ses seules
 lignes techniques (plan, rubriques, exercice, période, journal, modules et
-codes TVA) sont retirées dans la même transaction. Toute écriture, document,
-contact, consolidation ou autre donnée métier bloque la suppression et impose
-l’archivage. Un dossier utilisé n’est jamais déplacé : un dossier vide doit
-être recréé dans la bonne organisation.
+codes/régimes TVA) sont retirées dans la même transaction. Toute écriture,
+document, contact, consolidation ou autre donnée métier bloque la suppression
+et impose l’archivage. Un dossier utilisé n’est jamais déplacé : un dossier
+vide doit être recréé dans la bonne organisation.
 
 ## API et preuves
 

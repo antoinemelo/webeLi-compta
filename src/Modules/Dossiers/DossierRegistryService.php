@@ -28,6 +28,7 @@ final class DossierRegistryService
         'regles_sens_comptes',
         'rubriques_comptables',
         'tva_codes',
+        'tva_regimes',
         'types_comptes',
         'utilisateur_roles_dossier',
     ];
@@ -200,6 +201,14 @@ final class DossierRegistryService
             $vatCount = in_array('comptabilite', $moduleCodes, true)
                 ? $this->vat->install($organisationId, $dossierId, $actorId)
                 : 0;
+            $vatRegimeId = in_array('comptabilite', $moduleCodes, true)
+                ? $this->vat->installDefaultRegime(
+                    $organisationId,
+                    $dossierId,
+                    $exerciseStart,
+                    $actorId
+                )
+                : null;
             $this->mark('references');
             $copiedAccessCount = 0;
             if ($accessCopy !== null) {
@@ -226,6 +235,7 @@ final class DossierRegistryService
             $summary['period_id'] = $periodId;
             $summary['journal_id'] = $journalId;
             $summary['vat_code_count'] = $vatCount;
+            $summary['vat_regime_id'] = $vatRegimeId;
             $summary['copied_access_count'] = $copiedAccessCount;
             $this->audit->log(
                 'dossier.initialise',
@@ -494,7 +504,7 @@ final class DossierRegistryService
     private function deleteTechnicalRows(int $dossierId): void
     {
         $simple = [
-            'tva_codes', 'periodes', 'journaux', 'types_comptes',
+            'tva_regimes', 'tva_codes', 'periodes', 'journaux', 'types_comptes',
             'regles_sens_comptes',
         ];
         foreach ($simple as $table) {
