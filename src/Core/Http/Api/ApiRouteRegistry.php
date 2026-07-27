@@ -292,12 +292,19 @@ final class ApiRouteRegistry
             $this->add($router, 'GET', '/api/v1/consolidation', $this->consolidation->show(...));
             $this->add($router, 'GET', '/api/v1/consolidation/export', $this->consolidation->export(...));
             $this->add($router, 'POST', '/api/v1/consolidation/groups', $this->consolidation->createGroup(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/groups/update', $this->consolidation->updateGroup(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/groups/activate', $this->consolidation->activateGroup(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/groups/archive', $this->consolidation->archiveGroup(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/groups/reactivate', $this->consolidation->reactivateGroup(...));
             $this->add($router, 'POST', '/api/v1/consolidation/groups/members', $this->consolidation->addMember(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/groups/members/remove', $this->consolidation->removeMember(...));
             $this->add($router, 'POST', '/api/v1/consolidation/legal-attributes', $this->consolidation->saveLegalAttributes(...));
             $this->add($router, 'POST', '/api/v1/consolidation/periods', $this->consolidation->createPeriod(...));
             $this->add($router, 'POST', '/api/v1/consolidation/periods/close', $this->consolidation->closePeriod(...));
             $this->add($router, 'POST', '/api/v1/consolidation/mappings', $this->consolidation->saveMapping(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/mappings/disable', $this->consolidation->disableMapping(...));
             $this->add($router, 'POST', '/api/v1/consolidation/intercompany-pairs', $this->consolidation->savePair(...));
+            $this->add($router, 'POST', '/api/v1/consolidation/intercompany-pairs/disable', $this->consolidation->disablePair(...));
             $this->add($router, 'POST', '/api/v1/consolidation/eliminations', $this->consolidation->createElimination(...));
         }
         if ($this->assets !== null) {

@@ -47,15 +47,32 @@ $dossierA = $scopes->createDossier(
     'comptabilite-principale',
     'reel'
 );
+$dossierASecondary = $scopes->createDossier(
+    $organisationA,
+    'Reporting analytique',
+    'reporting-analytique',
+    'reel'
+);
 $exerciseA = $scopes->createExercise(
     $dossierA,
     '2026',
     '2026-01-01',
     '2026-12-31'
 );
+$exerciseASecondary = $scopes->createExercise(
+    $dossierASecondary,
+    '2026 analytique',
+    '2026-01-01',
+    '2026-12-31'
+);
 (new PlanSeeder($pdo, $root . '/database/seeds'))->installForDossier(
     $organisationA,
     $dossierA,
+    'personne_morale'
+);
+(new PlanSeeder($pdo, $root . '/database/seeds'))->installForDossier(
+    $organisationA,
+    $dossierASecondary,
     'personne_morale'
 );
 $setup = new AccountingSetupService($pdo, $audit);
@@ -72,6 +89,20 @@ $journalA = $setup->createJournal(
     $dossierA,
     'TDB',
     'Tableau de bord'
+);
+$setup->createPeriod(
+    $organisationA,
+    $dossierASecondary,
+    $exerciseASecondary,
+    'Année analytique 2026',
+    '2026-01-01',
+    '2026-12-31'
+);
+$setup->createJournal(
+    $organisationA,
+    $dossierASecondary,
+    'OD',
+    'Opérations diverses'
 );
 $accountId = static function (string $number) use ($pdo, $dossierA): int {
     $stmt = $pdo->prepare(
@@ -126,6 +157,15 @@ $groupId = $consolidation->createGroup(
     'Groupe Alpha',
     'CHF',
     '2026-01-01',
+    $administratorId,
+    'agregation_interne'
+);
+$secondaryMemberId = $consolidation->addMember(
+    $groupId,
+    $organisationA,
+    $dossierASecondary,
+    '2026-01-01',
+    null,
     $administratorId
 );
 $memberId = (int) $pdo->query(
@@ -139,6 +179,12 @@ $periodId = $consolidation->createPeriod(
     '2026-12-31',
     [[
         'member_id' => $memberId,
+        'numerator' => 1,
+        'denominator' => 1,
+        'rate_date' => '2026-12-31',
+        'source' => 'Devise de consolidation',
+    ], [
+        'member_id' => $secondaryMemberId,
         'numerator' => 1,
         'denominator' => 1,
         'rate_date' => '2026-12-31',
@@ -165,6 +211,7 @@ foreach ([
         $administratorId
     );
 }
+$consolidation->activateGroup($groupId, 1, $administratorId);
 $consolidation->saveLegalAttributes(
     $organisationA,
     '2026-01-01',

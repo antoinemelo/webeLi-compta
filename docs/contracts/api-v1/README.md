@@ -131,15 +131,22 @@ Les exemples versionnés sont :
 | POST | `/api/v1/accounting/assets/depreciations/reverse` | contre-passation d’une dotation |
 | POST | `/api/v1/accounting/assets/disposals` | cession ou mise au rebut comptabilisée |
 | POST | `/api/v1/accounting/assets/disposals/reverse` | contre-passation d’une sortie |
-| GET | `/api/v1/consolidation` | groupes autorisés, membres, mappings, balance, réconciliation et éliminations |
-| GET | `/api/v1/consolidation/export` | piste JSON autonome avec balances sources, taux et empreinte SHA-256 |
-| POST | `/api/v1/consolidation/groups` | création d’un groupe sans attribution implicite de droits |
+| GET | `/api/v1/consolidation` | groupes autorisés, candidats visibles, modes, membres, mappings, balance, réconciliation et éliminations |
+| GET | `/api/v1/consolidation/export` | piste JSON autonome qualifiée comme agrégation interne ou consolidation légale |
+| POST | `/api/v1/consolidation/groups` | création d’un brouillon avec mode obligatoire, sans attribution implicite de droits |
+| POST | `/api/v1/consolidation/groups/update` | modification optimiste du libellé et des paramètres non figés |
+| POST | `/api/v1/consolidation/groups/activate` | activation après prévisualisation et contrôles de composition/mapping |
+| POST | `/api/v1/consolidation/groups/archive` | archivage versionné du groupe |
+| POST | `/api/v1/consolidation/groups/reactivate` | réactivation versionnée après contrôle de composition |
 | POST | `/api/v1/consolidation/groups/members` | ajout daté d’un membre après contrôle de son droit propre |
+| POST | `/api/v1/consolidation/groups/members/remove` | suppression avant données, sinon sortie datée |
 | POST | `/api/v1/consolidation/legal-attributes` | nouvelle version datée et sourcée de l’identité juridique |
 | POST | `/api/v1/consolidation/periods` | période et ratios de conversion figés par membre |
 | POST | `/api/v1/consolidation/periods/close` | clôture après mapping exhaustif des comptes mouvementés |
 | POST | `/api/v1/consolidation/mappings` | correspondance compte source vers compte consolidé |
+| POST | `/api/v1/consolidation/mappings/disable` | désactivation ou nouvelle version datée d’un mapping figé |
 | POST | `/api/v1/consolidation/intercompany-pairs` | paire de comptes réciproques à réconcilier |
+| POST | `/api/v1/consolidation/intercompany-pairs/disable` | désactivation ou nouvelle version datée d’une paire figée |
 | POST | `/api/v1/consolidation/eliminations` | écriture équilibrée, justifiée et immuable hors grand livre |
 | GET | `/api/v1/liquidites` | dépenses, récurrences, pièces et catalogues du dossier |
 | POST | `/api/v1/liquidites/depenses` | création d’une dépense en brouillon |
@@ -313,7 +320,8 @@ générique sans nom ni métadonnée de la ressource visée.
 
 ## Retour arrière
 
-La base de développement est reconstruite depuis `001_initial.sql`. Après le
-gel de production, tout retour arrière de schéma se fera par restauration de la
-sauvegarde SQLite créée avant migration. Voir
+La base est construite par `001_initial.sql`, puis enrichie par les migrations
+additives immuables telles que `002_consolidation_governance.sql`. Tout retour
+arrière de schéma se fait par restauration de la sauvegarde SQLite créée avant
+migration. Voir
 [`../../configuration.md`](../../configuration.md).

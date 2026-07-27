@@ -30,17 +30,18 @@ export const useConsolidationStore = defineStore('consolidation', {
         this.loading = false;
       }
     },
-    async mutate(
+    async mutate<T = unknown>(
       path: string,
       data: Record<string, unknown>,
       notice: string
-    ): Promise<void> {
+    ): Promise<T> {
       this.saving = true;
       this.error = '';
       this.notice = '';
       try {
-        await api.post<unknown>(path, data);
+        const response = await api.post<T>(path, data);
         this.notice = notice;
+        return response.data;
       } catch (error) {
         this.error = errorMessage(error);
         throw error;

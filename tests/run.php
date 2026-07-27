@@ -494,9 +494,9 @@ final class Tests
         [$pdo, $runner] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            ['001'],
+            ['001', '002'],
             $applied,
-            'migrations initiales appliquées'
+            'base initiale et gouvernance de consolidation appliquées'
         );
         $this->same([], $runner->apply(), 'rejeu idempotent');
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité SQLite');
@@ -505,11 +505,11 @@ final class Tests
         $this->same('wal', mb_strtolower((string) $pdo->query('PRAGMA journal_mode')->fetchColumn()), 'WAL actif');
 
         $this->same(
-            1,
+            2,
             (int) $pdo->query(
-                "SELECT COUNT(*) FROM schema_migrations WHERE version = '001'"
+                "SELECT COUNT(*) FROM schema_migrations"
             )->fetchColumn(),
-            'une seule base initiale canonique'
+            'base initiale canonique et migration additive présentes'
         );
         $this->same(
             5,
@@ -3037,6 +3037,78 @@ final class Tests
             [],
             $this->responseJson($apiConsolidation)['data']['groups'] ?? null,
             'contrat consolidation explicite sans groupe'
+        );
+        $consolidationWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/consolidation/groups',
+            json: ['data' => [
+                'mode' => 'agregation_interne',
+                'code' => 'HTTP-AGG',
+                'label' => 'Agrégation HTTP',
+                'currency' => 'CHF',
+                'valid_from' => '2026-01-01',
+            ]]
+        ));
+        $this->same(
+            403,
+            $consolidationWithoutCsrf->status,
+            'assistant d’agrégation protégé par CSRF'
+        );
+        $consolidationWithoutMode = $app->handle(new Request(
+            'POST',
+            '/api/v1/consolidation/groups',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'code' => 'HTTP-SANS-MODE',
+                'label' => 'Mode absent',
+                'currency' => 'CHF',
+                'valid_from' => '2026-01-01',
+            ]]
+        ));
+        $this->same(
+            422,
+            $consolidationWithoutMode->status,
+            'mode obligatoire contrôlé par le contrat HTTP'
+        );
+        $consolidationCreated = $app->handle(new Request(
+            'POST',
+            '/api/v1/consolidation/groups',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'mode' => 'agregation_interne',
+                'code' => 'HTTP-AGG',
+                'label' => 'Agrégation HTTP',
+                'currency' => 'CHF',
+                'valid_from' => '2026-01-01',
+            ]]
+        ));
+        $consolidationCreatedJson = $this->responseJson($consolidationCreated);
+        $this->same(
+            200,
+            $consolidationCreated->status,
+            'brouillon d’agrégation créé par l’API versionnée'
+        );
+        $consolidationGroupId = (int) (
+            $consolidationCreatedJson['data']['id'] ?? 0
+        );
+        $consolidationWorkspace = $app->handle(new Request(
+            'GET',
+            '/api/v1/consolidation',
+            query: ['group_id' => (string) $consolidationGroupId]
+        ));
+        $consolidationWorkspaceJson = $this->responseJson(
+            $consolidationWorkspace
+        );
+        $this->same(
+            'agregation_interne',
+            $consolidationWorkspaceJson['data']['selected_group']['mode'] ?? '',
+            'mode distinct exposé sans ambiguïté'
+        );
+        $this->true(
+            count(
+                $consolidationWorkspaceJson['data']['available_members'] ?? []
+            ) >= 1,
+            'assistant propose uniquement des dossiers effectivement visibles'
         );
         $this->false(
             array_key_exists('references', $apiConfigurationJson['data'] ?? []),
@@ -8120,7 +8192,15 @@ final class Tests
             'Groupe de test',
             'CHF',
             '2026-01-01',
-            1
+            1,
+            'consolidation_legale'
+        );
+        $this->same(
+            'brouillon',
+            (string) $pdo->query(
+                "SELECT statut FROM groupes_consolidation WHERE id = {$group}"
+            )->fetchColumn(),
+            'groupe légal créé en brouillon sans prétendre être activé'
         );
         $memberA = (int) $pdo->query(
             "SELECT id FROM membres_groupe_consolidation
@@ -8157,17 +8237,18 @@ final class Tests
             ],
             1
         );
+        $mappingIds = [];
         foreach ([
             [$memberA, $receivableA, '1300', 'Créances inter-entités', 'actif'],
             [$memberA, $salesA, '3000', 'Produits consolidés', 'produit'],
             [$memberB, $payableB, '2300', 'Dettes inter-entités', 'passif'],
             [$memberB, $expenseB, '4000', 'Charges consolidées', 'charge'],
         ] as [$member, $account, $target, $label, $type]) {
-            $service->saveMapping(
+            $mappingIds[] = $service->saveMapping(
                 $group, $member, $account, $target, $label, $type, 0, 1
             );
         }
-        $service->saveIntercompanyPair(
+        $pairId = $service->saveIntercompanyPair(
             $group,
             'Créance / dette réciproque',
             $memberA,
@@ -8175,6 +8256,21 @@ final class Tests
             $memberB,
             $payableB,
             1
+        );
+        $preview = $service->activationPreview($group);
+        $this->true($preview['ready'], 'prévisualisation légale prête et réconciliée');
+        $this->same(
+            'balances sources converties + éliminations = résultat du groupe',
+            $preview['formula'],
+            'formule d’activation rendue explicite'
+        );
+        $service->activateGroup($group, 1, 1);
+        $this->same(
+            'actif',
+            (string) $pdo->query(
+                "SELECT statut FROM groupes_consolidation WHERE id = {$group}"
+            )->fetchColumn(),
+            'consolidation légale activée explicitement'
         );
         $statutoryEntries = (int) $pdo->query(
             'SELECT COUNT(*) FROM ecritures'
@@ -8239,12 +8335,107 @@ final class Tests
             'export autonome muni de son empreinte SHA-256'
         );
         $this->same(2, count($exported['members']), 'export contient les deux entités sources');
+        $this->same(
+            'consolidation_legale',
+            $exported['report_kind'],
+            'export qualifie explicitement la consolidation légale'
+        );
+        $this->true(
+            str_contains($exported['legal_notice'], 'livres statutaires'),
+            'export rappelle la séparation des livres statutaires'
+        );
+        $this->true(
+            str_contains(
+                (string) $workspace['mappings'][0]['member_label'],
+                '—'
+            ),
+            'mapping libellé avec organisation et dossier'
+        );
         $this->throws(
             fn () => $pdo->exec(
                 "UPDATE lignes_elimination_consolidation
                  SET debit_centimes = 1 WHERE elimination_id = {$elimination}"
             ),
             'élimination validée immuable'
+        );
+        $service->closePeriod($group, $period, 1);
+        $balanceBeforeVersion = $service->read([$group], $group, $period)['balance'];
+        $mappingVersion = (int) $pdo->query(
+            "SELECT version FROM mappings_comptes_consolidation
+             WHERE id = {$mappingIds[1]}"
+        )->fetchColumn();
+        $service->disableMapping(
+            $group,
+            $mappingIds[1],
+            $mappingVersion,
+            '2027-01-01',
+            1
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM versions_mappings_consolidation
+                 WHERE mapping_id = {$mappingIds[1]}"
+            )->fetchColumn(),
+            'mapping figé conservé dans une version datée'
+        );
+        $service->disableIntercompanyPair(
+            $group,
+            $pairId,
+            1,
+            '2027-01-01',
+            1
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM versions_paires_interentites
+                 WHERE paire_id = {$pairId}"
+            )->fetchColumn(),
+            'paire figée conservée dans une version datée'
+        );
+        $afterVersion = $service->read([$group], $group, $period);
+        $this->same(
+            $balanceBeforeVersion['consolidated_total_cents'],
+            $afterVersion['balance']['consolidated_total_cents'],
+            'nouvelle version sans effet sur la période clôturée'
+        );
+        $this->same(
+            0,
+            $afterVersion['reconciliation'][0]['difference_cents'],
+            'paire historique inchangée après désactivation datée'
+        );
+        $this->throws(
+            fn () => $service->updateGroup(
+                $group,
+                'Mode interdit',
+                'CHF',
+                'agregation_interne',
+                2,
+                1
+            ),
+            'mode immuable après la première période'
+        );
+        $memberBVersion = (int) $pdo->query(
+            "SELECT version FROM membres_groupe_consolidation
+             WHERE id = {$memberB}"
+        )->fetchColumn();
+        $memberExit = $service->removeMember(
+            $group,
+            $memberB,
+            $memberBVersion,
+            '2027-12-31',
+            1
+        );
+        $this->false($memberExit['deleted'], 'membre utilisé sorti par date de fin');
+        $service->archiveGroup($group, 2, 1);
+        $service->reactivateGroup($group, 3, 1);
+        $this->same(
+            'actif',
+            (string) $pdo->query(
+                "SELECT statut FROM groupes_consolidation WHERE id = {$group}"
+            )->fetchColumn(),
+            'groupe archivé puis réactivé avec versions optimistes'
         );
 
         $pdo->prepare(
@@ -8300,6 +8491,270 @@ final class Tests
             ]
         ));
         $this->same(200, $visible->status, 'lecture autorisée après droit explicite sur chaque entité');
+
+        $sibling = $scope->createDossier(
+            $ids['organisation_a'],
+            'Comptabilité A secondaire',
+            'comptabilite-a-secondaire',
+            'reel',
+            1
+        );
+        $siblingExercise = $scope->createExercise(
+            $sibling,
+            'Exercice secondaire 2026',
+            '2026-01-01',
+            '2026-12-31',
+            1
+        );
+        $setup->createPeriod(
+            $ids['organisation_a'],
+            $sibling,
+            $siblingExercise,
+            '2026',
+            '2026-01-01',
+            '2026-12-31',
+            1
+        );
+        $siblingJournal = $setup->createJournal(
+            $ids['organisation_a'],
+            $sibling,
+            'OD',
+            'Opérations diverses',
+            'general',
+            1
+        );
+        $seeder->installForDossier(
+            $ids['organisation_a'],
+            $sibling,
+            'personne_morale'
+        );
+        $siblingReceivable = $this->accountId($pdo, $sibling, '1100');
+        $siblingSales = $this->accountId($pdo, $sibling, '3000');
+        $entries->postGenerated([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $sibling,
+            'exercice_id' => $siblingExercise,
+            'journal_id' => $siblingJournal,
+            'date_comptable' => '2026-06-30',
+            'libelle' => 'Activité du dossier secondaire',
+            'source_type' => 'test',
+            'source_id' => 'aggregation-sibling',
+            'source_action' => 'vente',
+            'lignes' => [
+                ['compte_id' => $siblingReceivable, 'debit_centimes' => 2500],
+                ['compte_id' => $siblingSales, 'credit_centimes' => 2500],
+            ],
+        ], 'test-aggregation:sibling');
+        $aggregation = $service->createGroup(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'AGREGATION',
+            'Agrégation interne A',
+            'CHF',
+            '2026-01-01',
+            1,
+            'agregation_interne'
+        );
+        $aggregationPilot = (int) $pdo->query(
+            "SELECT id FROM membres_groupe_consolidation
+             WHERE groupe_id = {$aggregation}
+               AND dossier_id = {$ids['dossier_a']}"
+        )->fetchColumn();
+        $aggregationSibling = $service->addMember(
+            $aggregation,
+            $ids['organisation_a'],
+            $sibling,
+            '2026-01-01',
+            null,
+            1
+        );
+        $this->throws(
+            fn () => $service->addMember(
+                $aggregation,
+                $ids['organisation_b'],
+                $ids['dossier_b'],
+                '2026-01-01',
+                null,
+                1
+            ),
+            'agrégation interne refuse un dossier d’une autre organisation'
+        );
+        $aggregationPeriod = $service->createPeriod(
+            $aggregation,
+            'Année 2026',
+            '2026-01-01',
+            '2026-12-31',
+            [
+                [
+                    'member_id' => $aggregationPilot,
+                    'numerator' => 1,
+                    'denominator' => 1,
+                    'rate_date' => '2026-12-31',
+                    'source' => 'Même devise',
+                ],
+                [
+                    'member_id' => $aggregationSibling,
+                    'numerator' => 1,
+                    'denominator' => 1,
+                    'rate_date' => '2026-12-31',
+                    'source' => 'Même devise',
+                ],
+            ],
+            1
+        );
+        foreach ([
+            [$aggregationPilot, $receivableA, '1100', 'Créances', 'actif'],
+            [$aggregationPilot, $salesA, '3000', 'Produits', 'produit'],
+            [$aggregationSibling, $siblingReceivable, '1100', 'Créances', 'actif'],
+            [$aggregationSibling, $siblingSales, '3000', 'Produits', 'produit'],
+        ] as [$member, $account, $target, $label, $type]) {
+            $service->saveMapping(
+                $aggregation,
+                $member,
+                $account,
+                $target,
+                $label,
+                $type,
+                0,
+                1
+            );
+        }
+        $aggregationPreview = $service->activationPreview($aggregation);
+        $this->true(
+            $aggregationPreview['ready'],
+            'deux dossiers de la même organisation produisent une agrégation prête'
+        );
+        $service->activateGroup($aggregation, 1, 1);
+        $aggregationWorkspace = $service->read(
+            [$aggregation],
+            $aggregation,
+            $aggregationPeriod
+        );
+        $this->true(
+            $aggregationWorkspace['balance']['formula_verified'],
+            'agrégation interne réconciliée au centime'
+        );
+        $this->same(
+            2,
+            count($aggregationWorkspace['balance']['rows'][0]['sources']),
+            'agrégation drillable vers ses deux dossiers membres'
+        );
+        $aggregationExport = json_decode(
+            $service->export($aggregation, $aggregationPeriod)['content'],
+            true,
+            512,
+            JSON_THROW_ON_ERROR
+        );
+        $this->same(
+            'agregation_interne',
+            $aggregationExport['report_kind'],
+            'export autonome qualifié comme agrégation interne'
+        );
+        $this->true(
+            str_contains(
+                $aggregationExport['legal_notice'],
+                'ne constitue pas une consolidation légale'
+            ),
+            'agrégation jamais présentée comme consolidation légale'
+        );
+
+        $temporaryGroup = $service->createGroup(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'TEMPORAIRE',
+            'Groupe sans donnée',
+            'CHF',
+            '2026-01-01',
+            1,
+            'agregation_interne'
+        );
+        $temporaryMember = $service->addMember(
+            $temporaryGroup,
+            $ids['organisation_a'],
+            $sibling,
+            '2026-01-01',
+            null,
+            1
+        );
+        $removed = $service->removeMember(
+            $temporaryGroup,
+            $temporaryMember,
+            1,
+            null,
+            1
+        );
+        $this->true($removed['deleted'], 'membre sans période ni donnée supprimé physiquement');
+
+        $illegalLegalGroup = $service->createGroup(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            'LEGAL-INVALIDE',
+            'Consolidation mono-organisation invalide',
+            'CHF',
+            '2026-01-01',
+            1,
+            'consolidation_legale'
+        );
+        $illegalPilot = (int) $pdo->query(
+            "SELECT id FROM membres_groupe_consolidation
+             WHERE groupe_id = {$illegalLegalGroup}
+               AND dossier_id = {$ids['dossier_a']}"
+        )->fetchColumn();
+        $illegalSibling = $service->addMember(
+            $illegalLegalGroup,
+            $ids['organisation_a'],
+            $sibling,
+            '2026-01-01',
+            null,
+            1
+        );
+        $this->throws(
+            fn () => $service->createPeriod(
+                $illegalLegalGroup,
+                'Période interdite',
+                '2026-01-01',
+                '2026-12-31',
+                [
+                    [
+                        'member_id' => $illegalPilot,
+                        'numerator' => 1,
+                        'denominator' => 1,
+                        'rate_date' => '2026-12-31',
+                        'source' => 'Même devise',
+                    ],
+                    [
+                        'member_id' => $illegalSibling,
+                        'numerator' => 1,
+                        'denominator' => 1,
+                        'rate_date' => '2026-12-31',
+                        'source' => 'Même devise',
+                    ],
+                ],
+                1
+            ),
+            'consolidation légale mono-organisation refusée'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM periodes_consolidation
+                 WHERE groupe_id = {$illegalLegalGroup}"
+            )->fetchColumn(),
+            'composition incompatible refusée sans période partielle'
+        );
+        $this->true(
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE action IN (
+                   'consolidation.groupe_archive',
+                   'consolidation.groupe_reactive',
+                   'consolidation.membre_sorti',
+                   'consolidation.mapping_desactive',
+                   'consolidation.paire_interentites_desactivee'
+                 )"
+            )->fetchColumn() >= 5,
+            'cycles de vie et versions 14e audités'
+        );
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après consolidation');
     }
 

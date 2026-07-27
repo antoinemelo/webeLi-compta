@@ -23,13 +23,47 @@ final class ConsolidationInputValidator
     public function group(Request $request): array
     {
         $data = $this->only($request, [
-            'code', 'label', 'currency', 'valid_from',
+            'code', 'label', 'currency', 'mode', 'valid_from',
         ]);
         return [
             'code' => $this->text($data, 'code'),
             'label' => $this->text($data, 'label'),
             'currency' => $this->text($data, 'currency'),
+            'mode' => $this->choice(
+                $data,
+                'mode',
+                ['agregation_interne', 'consolidation_legale']
+            ),
             'valid_from' => $this->date($data, 'valid_from'),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function groupUpdate(Request $request): array
+    {
+        $data = $this->only($request, [
+            'group_id', 'label', 'currency', 'mode', 'version',
+        ]);
+        return [
+            'group_id' => $this->id($data, 'group_id'),
+            'label' => $this->text($data, 'label'),
+            'currency' => $this->text($data, 'currency'),
+            'mode' => $this->choice(
+                $data,
+                'mode',
+                ['agregation_interne', 'consolidation_legale']
+            ),
+            'version' => $this->id($data, 'version'),
+        ];
+    }
+
+    /** @return array{group_id:int,version:int} */
+    public function groupAction(Request $request): array
+    {
+        $data = $this->only($request, ['group_id', 'version']);
+        return [
+            'group_id' => $this->id($data, 'group_id'),
+            'version' => $this->id($data, 'version'),
         ];
     }
 
@@ -45,6 +79,20 @@ final class ConsolidationInputValidator
             'organisation_id' => $this->id($data, 'organisation_id'),
             'dossier_id' => $this->id($data, 'dossier_id'),
             'valid_from' => $this->date($data, 'valid_from'),
+            'valid_until' => $this->optionalDate($data, 'valid_until'),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function memberRemoval(Request $request): array
+    {
+        $data = $this->only($request, [
+            'group_id', 'member_id', 'version', 'valid_until',
+        ]);
+        return [
+            'group_id' => $this->id($data, 'group_id'),
+            'member_id' => $this->id($data, 'member_id'),
+            'version' => $this->id($data, 'version'),
             'valid_until' => $this->optionalDate($data, 'valid_until'),
         ];
     }
@@ -122,7 +170,7 @@ final class ConsolidationInputValidator
     {
         $data = $this->only($request, [
             'group_id', 'member_id', 'source_account_id', 'target_account',
-            'target_label', 'target_type', 'version',
+            'target_label', 'target_type', 'version', 'effective_from',
         ]);
         return [
             'group_id' => $this->id($data, 'group_id'),
@@ -132,6 +180,7 @@ final class ConsolidationInputValidator
             'target_label' => $this->text($data, 'target_label'),
             'target_type' => $this->text($data, 'target_type'),
             'version' => $this->nonNegativeInt($data, 'version'),
+            'effective_from' => $this->optionalDate($data, 'effective_from'),
         ];
     }
 
@@ -140,7 +189,7 @@ final class ConsolidationInputValidator
     {
         $data = $this->only($request, [
             'group_id', 'label', 'left_member_id', 'left_account_id',
-            'right_member_id', 'right_account_id',
+            'right_member_id', 'right_account_id', 'effective_from',
         ]);
         return [
             'group_id' => $this->id($data, 'group_id'),
@@ -149,6 +198,21 @@ final class ConsolidationInputValidator
             'left_account_id' => $this->id($data, 'left_account_id'),
             'right_member_id' => $this->id($data, 'right_member_id'),
             'right_account_id' => $this->id($data, 'right_account_id'),
+            'effective_from' => $this->optionalDate($data, 'effective_from'),
+        ];
+    }
+
+    /** @return array{group_id:int,resource_id:int,version:int,effective_from:?string} */
+    public function versionedDisable(Request $request, string $resourceKey): array
+    {
+        $data = $this->only($request, [
+            'group_id', $resourceKey, 'version', 'effective_from',
+        ]);
+        return [
+            'group_id' => $this->id($data, 'group_id'),
+            'resource_id' => $this->id($data, $resourceKey),
+            'version' => $this->id($data, 'version'),
+            'effective_from' => $this->optionalDate($data, 'effective_from'),
         ];
     }
 
@@ -238,6 +302,19 @@ final class ConsolidationInputValidator
             throw ApiException::validation([$field => ['Texte requis.']]);
         }
         return trim($data[$field]);
+    }
+
+    /**
+     * @param array<string,mixed> $data
+     * @param list<string> $allowed
+     */
+    private function choice(array $data, string $field, array $allowed): string
+    {
+        $value = $this->text($data, $field);
+        if (!in_array($value, $allowed, true)) {
+            throw ApiException::validation([$field => ['Valeur invalide.']]);
+        }
+        return $value;
     }
 
     /** @param array<string,mixed> $data */

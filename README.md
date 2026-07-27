@@ -216,10 +216,12 @@ Le périmètre actuel est Genève uniquement. Voir
 ## Multi-entités
 
 Les organisations sont les entités légales et peuvent conserver des attributs
-juridiques datés. L’onglet **Comptabilité > Consolidation** gère groupes,
-membres, périodes, ratios entiers, mappings, réconciliation inter-entités et
+juridiques datés. L’onglet **Comptabilité > Consolidation** distingue
+l’agrégation interne de plusieurs dossiers d’une même organisation de la
+consolidation légale de plusieurs organisations. Son assistant gère groupes,
+membres, périodes, ratios entiers, mappings versionnés, réconciliation et
 éliminations séparées des grands livres. Un groupe n’accorde aucun droit sur
-ses membres et l’export JSON autonome conserve toute la piste de calcul. Voir
+ses membres et l’export JSON autonome qualifie et conserve toute la piste. Voir
 [le guide multi-entités et consolidation](docs/multientites-consolidation.md).
 
 ## Enseignement

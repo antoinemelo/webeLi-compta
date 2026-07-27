@@ -623,19 +623,44 @@ test('balance consolidée drillable et refus de mutation sans droit sur chaque m
   });
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
   await page.getByRole('link', { name: 'Consolidation', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Consolidation', exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 800 });
+  await expect(page.getByRole('heading', { name: 'Agrégation interne', exact: true })).toBeVisible();
+  await page.getByText('Aide : agrégation, consolidation et livres statutaires').click();
+  await expect(page.getByText(/les livres statutaires restent indépendants/i)).toBeVisible();
   await expect(page.getByText('Formule vérifiée', { exact: true })).toBeVisible();
   const revenueRow = page.getByRole('row').filter({ hasText: '3400 — Produits' });
   await expect(revenueRow).toContainText(/CHF.*1.*200\.00/);
   await revenueRow.getByText('1 balance(s) source(s)').click();
-  await expect(revenueRow.getByText(/Entreprise Alpha SA.*Comptabilité principale/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Exporter la piste JSON' })).toBeEnabled();
+  await expect(revenueRow).toContainText(
+    /Entreprise Alpha SA\s*\/\s*Comptabilité principale/
+  );
+  const exportButton = page.getByRole('button', { name: 'Exporter l’agrégation' });
+  await expect(exportButton).toBeEnabled();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    exportButton.click()
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^agregation-/);
+
+  const balanceTab = page.getByRole('button', { name: 'Balance', exact: true });
+  await balanceTab.focus();
+  await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Groupe et mappings' })).toBeFocused();
+  const hasGlobalOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+  );
+  expect(hasGlobalOverflow).toBe(false);
+  await page.setViewportSize({ width: 1280, height: 800 });
 
   await page.getByRole('button', { name: 'Groupe et mappings' }).click();
-  await expect(page.getByRole('heading', { name: 'Membres du groupe' })).toBeVisible();
-  await expect(page.getByRole('row').filter({ hasText: 'Entreprise Alpha SA' })).toContainText(
-    'CHF'
-  );
+  await page.getByRole('button', { name: '2. Dossiers membres' }).click();
+  await expect(page.getByRole('heading', { name: 'Dossiers membres', exact: true })).toBeVisible();
+  await expect(page.getByRole('row').filter({
+    hasText: 'Entreprise Alpha SA — Comptabilité principale'
+  })).toContainText('CHF');
+  await expect(page.getByRole('row').filter({
+    hasText: 'Entreprise Alpha SA — Reporting analytique'
+  })).toContainText('CHF');
 
   await page.getByRole('button', { name: 'Déconnexion' }).click();
   await page.getByRole('button', { name: 'Se déconnecter' }).click();
@@ -646,7 +671,7 @@ test('balance consolidée drillable et refus de mutation sans droit sur chaque m
   });
   await page.goto('/e2e/app/compta/consolidation');
   await page.getByRole('button', { name: 'Groupe et mappings' }).click();
-  await expect(page.getByRole('button', { name: 'Créer', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Créer le brouillon' })).toBeDisabled();
 
   const refusal = await page.evaluate(async () => {
     const context = await fetch('/e2e/api/v1/context').then((response) => response.json());
@@ -661,6 +686,7 @@ test('balance consolidée drillable et refus de mutation sans droit sur chaque m
       },
       body: JSON.stringify({
         data: {
+          mode: 'agregation_interne',
           code: 'REFUSE',
           label: 'Refusé',
           currency: 'CHF',
@@ -670,6 +696,63 @@ test('balance consolidée drillable et refus de mutation sans droit sur chaque m
     }).then((response) => response.status);
   });
   expect(refusal).toBe(403);
+});
+
+test('assistant de consolidation légale active et exporte deux organisations', async ({
+  page
+}) => {
+  await loginAsAdministrator(page);
+  await page.getByLabel('Dossier', { exact: true }).selectOption({
+    label: 'Reporting analytique'
+  });
+  await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
+  await page.getByRole('link', { name: 'Consolidation', exact: true }).click();
+  await page.getByRole('button', { name: 'Groupe et mappings' }).click();
+
+  const groupForm = page.locator('form').filter({
+    has: page.getByRole('button', { name: 'Créer le brouillon' })
+  });
+  await groupForm.getByLabel('Usage').selectOption('consolidation_legale');
+  await groupForm.getByLabel('Code').fill('LEGAL-E2E');
+  await groupForm.getByLabel('Libellé').fill('Consolidation légale E2E');
+  await groupForm.getByRole('button', { name: 'Créer le brouillon' }).click();
+
+  await expect(page.getByRole('heading', {
+    name: 'Entités juridiques et dossiers membres'
+  })).toBeVisible();
+  await page.getByLabel('Dossier visible').selectOption({
+    label: 'Entreprise Confidentielle SA — Dossier inaccessible'
+  });
+  await page.getByRole('button', { name: 'Ajouter le membre' }).click();
+  await expect(page.getByRole('row').filter({
+    hasText: 'Entreprise Confidentielle SA — Dossier inaccessible'
+  })).toBeVisible();
+  await page.getByRole('button', { name: 'Continuer vers les ratios' }).click();
+
+  const periodForm = page.locator('form').filter({
+    has: page.getByRole('button', { name: 'Créer et figer' })
+  });
+  await periodForm.getByLabel('Libellé').fill('Exercice légal E2E');
+  await periodForm.getByLabel('Début').fill('2026-01-01');
+  await periodForm.getByLabel('Fin').fill('2026-12-31');
+  await periodForm.getByRole('button', { name: 'Créer et figer' }).click();
+  await page.getByRole('button', { name: 'Prévisualiser le résultat' }).click();
+  await expect(page.getByText(
+    'balances sources converties + éliminations = résultat du groupe'
+  )).toBeVisible();
+  await page.getByRole('button', { name: 'Confirmer et activer' }).click();
+  await expect(page.getByText('Groupe activé après prévisualisation.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Balance', exact: true }).click();
+  await expect(page.getByRole('heading', {
+    name: 'Balance consolidée',
+    exact: true
+  })).toBeVisible();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Exporter la consolidation' }).click()
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^consolidation-/);
 });
 
 test('facturation client, contact 360 et aging utilisent le parcours Vue unique', async ({ page }) => {

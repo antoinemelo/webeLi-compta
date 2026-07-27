@@ -64,6 +64,25 @@ final class ConsolidationApiController
                     $userId, $organisationId, $dossierId, 'compta.setup'
                 ),
             ];
+            $data['available_members'] = array_values(array_map(
+                static fn (array $dossier): array => [
+                    'organisation_id' => (int) $dossier['organisation_id'],
+                    'organisation' => (string) $dossier['organisation_nom'],
+                    'dossier_id' => (int) $dossier['id'],
+                    'dossier' => (string) $dossier['nom'],
+                    'label' => (string) $dossier['organisation_nom']
+                        . ' — ' . (string) $dossier['nom'],
+                ],
+                array_filter(
+                    $this->access->dossiersForUser($userId),
+                    fn (array $dossier): bool => $this->has(
+                        $userId,
+                        (int) $dossier['organisation_id'],
+                        (int) $dossier['id'],
+                        'compta.view'
+                    )
+                )
+            ));
             return $data;
         });
     }
@@ -80,9 +99,43 @@ final class ConsolidationApiController
                 $data['label'],
                 $data['currency'],
                 $data['valid_from'],
-                $userId
+                $userId,
+                $data['mode']
             ),
         ]);
+    }
+
+    public function updateGroup(Request $request): Response
+    {
+        [$userId] = $this->scope('compta.setup');
+        $data = $this->validator->groupUpdate($request);
+        $this->assertGroupPermission($userId, $data['group_id'], 'compta.setup');
+        return $this->execute($request, function () use ($userId, $data): array {
+            $this->consolidation->updateGroup(
+                $data['group_id'],
+                $data['label'],
+                $data['currency'],
+                $data['mode'],
+                $data['version'],
+                $userId
+            );
+            return ['updated' => true];
+        });
+    }
+
+    public function activateGroup(Request $request): Response
+    {
+        return $this->groupLifecycle($request, 'activate');
+    }
+
+    public function archiveGroup(Request $request): Response
+    {
+        return $this->groupLifecycle($request, 'archive');
+    }
+
+    public function reactivateGroup(Request $request): Response
+    {
+        return $this->groupLifecycle($request, 'reactivate');
     }
 
     public function addMember(Request $request): Response
@@ -106,6 +159,23 @@ final class ConsolidationApiController
                 $userId
             ),
         ]);
+    }
+
+    public function removeMember(Request $request): Response
+    {
+        [$userId] = $this->scope('compta.setup');
+        $data = $this->validator->memberRemoval($request);
+        $this->assertGroupPermission($userId, $data['group_id'], 'compta.setup');
+        return $this->execute(
+            $request,
+            fn (): array => $this->consolidation->removeMember(
+                $data['group_id'],
+                $data['member_id'],
+                $data['version'],
+                $data['valid_until'],
+                $userId
+            )
+        );
     }
 
     public function saveLegalAttributes(Request $request): Response
@@ -157,9 +227,27 @@ final class ConsolidationApiController
                 $data['target_label'],
                 $data['target_type'],
                 $data['version'],
-                $userId
+                $userId,
+                $data['effective_from']
             ),
         ]);
+    }
+
+    public function disableMapping(Request $request): Response
+    {
+        [$userId] = $this->scope('compta.setup');
+        $data = $this->validator->versionedDisable($request, 'mapping_id');
+        $this->assertGroupPermission($userId, $data['group_id'], 'compta.setup');
+        return $this->execute($request, function () use ($userId, $data): array {
+            $this->consolidation->disableMapping(
+                $data['group_id'],
+                $data['resource_id'],
+                $data['version'],
+                $data['effective_from'],
+                $userId
+            );
+            return ['disabled' => true];
+        });
     }
 
     public function savePair(Request $request): Response
@@ -175,9 +263,27 @@ final class ConsolidationApiController
                 $data['left_account_id'],
                 $data['right_member_id'],
                 $data['right_account_id'],
-                $userId
+                $userId,
+                $data['effective_from']
             ),
         ]);
+    }
+
+    public function disablePair(Request $request): Response
+    {
+        [$userId] = $this->scope('compta.setup');
+        $data = $this->validator->versionedDisable($request, 'pair_id');
+        $this->assertGroupPermission($userId, $data['group_id'], 'compta.setup');
+        return $this->execute($request, function () use ($userId, $data): array {
+            $this->consolidation->disableIntercompanyPair(
+                $data['group_id'],
+                $data['resource_id'],
+                $data['version'],
+                $data['effective_from'],
+                $userId
+            );
+            return ['disabled' => true];
+        });
     }
 
     public function createElimination(Request $request): Response
@@ -264,6 +370,39 @@ final class ConsolidationApiController
                 'La permission est requise sur chaque entité du groupe.'
             );
         }
+    }
+
+    private function groupLifecycle(Request $request, string $action): Response
+    {
+        [$userId] = $this->scope('compta.setup');
+        $data = $this->validator->groupAction($request);
+        $this->assertGroupPermission($userId, $data['group_id'], 'compta.setup');
+        return $this->execute($request, function () use (
+            $userId,
+            $data,
+            $action
+        ): array {
+            if ($action === 'activate') {
+                $this->consolidation->activateGroup(
+                    $data['group_id'],
+                    $data['version'],
+                    $userId
+                );
+            } elseif ($action === 'archive') {
+                $this->consolidation->archiveGroup(
+                    $data['group_id'],
+                    $data['version'],
+                    $userId
+                );
+            } else {
+                $this->consolidation->reactivateGroup(
+                    $data['group_id'],
+                    $data['version'],
+                    $userId
+                );
+            }
+            return ['status' => $action];
+        });
     }
 
     private function hasGroupPermission(

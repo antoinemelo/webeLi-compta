@@ -1510,9 +1510,11 @@ export type ConsolidationMember = {
   dossier_id: number;
   organisation: string;
   dossier: string;
+  label: string;
   currency: string;
   valid_from: string;
   valid_until: string | null;
+  version: number;
   accounts: Array<{
     id: number;
     number: string;
@@ -1527,6 +1529,8 @@ export type ConsolidationWorkspace = {
     code: string;
     label: string;
     currency: string;
+    mode: 'agregation_interne' | 'consolidation_legale';
+    status: 'brouillon' | 'actif' | 'archive';
     version: number;
   }>;
   selected_group: {
@@ -1534,6 +1538,8 @@ export type ConsolidationWorkspace = {
     code: string;
     label: string;
     currency: string;
+    mode: 'agregation_interne' | 'consolidation_legale';
+    status: 'brouillon' | 'actif' | 'archive';
     version: number;
   } | null;
   periods: Array<{
@@ -1561,12 +1567,36 @@ export type ConsolidationWorkspace = {
     source_account_id: number;
     source_account: string;
     source_label: string;
+    organisation: string;
+    dossier: string;
+    member_label: string;
     target_account: string;
     target_label: string;
     target_type: string;
+    active: boolean;
+    valid_from: string;
+    valid_until: string | null;
+    version: number;
+    history_count: number;
+  }>;
+  intercompany_pairs: Array<{
+    id: number;
+    label: string;
+    left_member_id: number;
+    left_account_id: number;
+    left_account: string;
+    left_label: string;
+    left_member_label: string;
+    right_member_id: number;
+    right_account_id: number;
+    right_account: string;
+    right_label: string;
+    right_member_label: string;
+    active: boolean;
+    valid_from: string;
+    valid_until: string | null;
     version: number;
   }>;
-  intercompany_pairs: Array<Record<string, string | number>>;
   legal_histories: Array<{
     id: number;
     organisation_id: number;
@@ -1587,6 +1617,9 @@ export type ConsolidationWorkspace = {
       member_id: number;
       organisation_id: number;
       dossier_id: number;
+      organisation: string;
+      dossier: string;
+      member_label: string;
       account_id: number;
       account: string;
       label: string;
@@ -1645,5 +1678,26 @@ export type ConsolidationWorkspace = {
     validate: boolean;
     export: boolean;
     create_group: boolean;
+  };
+  available_members: Array<{
+    organisation_id: number;
+    organisation: string;
+    dossier_id: number;
+    dossier: string;
+    label: string;
+  }>;
+  activation_preview: null | {
+    group_id: number;
+    mode: 'agregation_interne' | 'consolidation_legale';
+    status: 'brouillon' | 'actif' | 'archive';
+    member_count: number;
+    period_id: number | null;
+    formula: string;
+    formula_verified: boolean;
+    source_total_cents: number;
+    elimination_total_cents: number;
+    result_total_cents: number;
+    issues: string[];
+    ready: boolean;
   };
 };

@@ -871,12 +871,13 @@ final class PublicMarketDataService
         string $status,
         string $error = '',
     ): void {
+        $attemptedAt = $this->now()->format('Y-m-d H:i:s');
         $this->pdo->prepare(
             'INSERT INTO actualisations_marche_publiques
              (jeu_donnees, signature_besoin, url_source, statut,
               tente_le, reussie_le, erreur)
-             VALUES (?, ?, ?, ?, datetime(\'now\'),
-                     CASE WHEN ? = \'succes\' THEN datetime(\'now\') END, ?)
+             VALUES (?, ?, ?, ?, ?,
+                     CASE WHEN ? = \'succes\' THEN ? END, ?)
              ON CONFLICT(jeu_donnees) DO UPDATE SET
                signature_besoin = excluded.signature_besoin,
                url_source = excluded.url_source, statut = excluded.statut,
@@ -885,7 +886,10 @@ final class PublicMarketDataService
                     THEN excluded.reussie_le
                     ELSE actualisations_marche_publiques.reussie_le END,
                erreur = excluded.erreur'
-        )->execute([$dataset, $signature, $url, $status, $status, $error]);
+        )->execute([
+            $dataset, $signature, $url, $status, $attemptedAt,
+            $status, $attemptedAt, $error,
+        ]);
     }
 
     /** @return list<string> */

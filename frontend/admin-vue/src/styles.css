@@ -995,6 +995,11 @@ textarea {
   gap: 0.75rem;
 }
 
+.stack,
+.panel {
+  min-width: 0;
+}
+
 .compact-control {
   min-width: 14rem;
 }
@@ -1596,6 +1601,7 @@ textarea {
 
   .accounting-header,
   .section-heading,
+  .section-heading > .button-row,
   .inline-create,
   .metric-strip {
     align-items: stretch;

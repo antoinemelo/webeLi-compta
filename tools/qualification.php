@@ -43,7 +43,7 @@ function qualificationMigrationHashes(string $root): bool
 {
     $manifest = $root . '/docs/baseline/migrations.sha256';
     $lines = file($manifest, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    if ($lines === false || count($lines) !== 1) {
+    if ($lines === false || count($lines) !== 2) {
         fwrite(STDERR, "Manifeste de migrations absent ou incomplet.\n");
         return false;
     }

@@ -17,10 +17,10 @@ La commande vérifie successivement :
 5. le diagnostic et l'intégrité de cette base ;
 6. les préconditions de l'archive de production.
 
-La suite d’intégration vérifie qu’une base vide atteint directement le schéma
-courant avec la seule version `001`, que le rejeu est idempotent et que toute
-altération de son checksum est refusée. Les migrations additives postérieures
-au gel de production devront compléter cette preuve.
+La suite d’intégration vérifie qu’une base vide atteint le schéma courant par
+les versions immuables `001` puis `002`, que leur rejeu est idempotent et que
+toute altération d’un checksum est refusée. `002` ajoute la gouvernance des
+groupes sans reconstruire ni gonfler artificiellement la base existante.
 
 Les tests ne sont pas dupliqués. `quick` contient les contrôles purs de
 configuration et la parité de calcul OCAS ; `integration` contient SQLite,
@@ -61,10 +61,10 @@ Elle couvre également une facture EUR réglée en deux fois à des taux distinc
 les gains et pertes de change réalisés, la réévaluation latente contre-passable,
 la traçabilité des taux et l’absence de régression du parcours mono-CHF.
 
-La recette multi-entités additionne deux balances dans des devises différentes,
-réconcilie une créance et une dette réciproques, valide une élimination hors des
-livres statutaires, vérifie son immutabilité, son export autonome et masque le
-groupe tant que les droits ne couvrent pas chacun de ses membres.
+La recette multi-entités couvre l’agrégation de dossiers d’une organisation et
+la consolidation légale de plusieurs organisations. Elle contrôle cycle de
+vie, ratios, mappings versionnés, rapprochement, éliminations hors livres,
+exports qualifiés et disparition du groupe dès qu’un droit membre est perdu.
 
 Les données publiques BNS/OFDF sont testées avec des réponses locales
 déterministes : aucune qualification ne dépend du réseau. Le test vérifie le
