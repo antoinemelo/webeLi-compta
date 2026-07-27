@@ -32,8 +32,9 @@ class ComptaAdminTests(unittest.TestCase):
 
     def test_database_modes_are_explicit(self) -> None:
         technical = ADMIN.parser().parse_args(["db-create"])
-        initialized = ADMIN.parser().parse_args([
-            "db-create", "--initialize", "--with-pedagogy",
+        initialized = ADMIN.parser().parse_args(["db-create", "--initialize"])
+        without_pedagogy = ADMIN.parser().parse_args([
+            "db-create", "--initialize", "--without-pedagogy",
         ])
         restoration = ADMIN.parser().parse_args([
             "db-restore", "--source", "backup.sqlite",
@@ -43,7 +44,9 @@ class ComptaAdminTests(unittest.TestCase):
         ])
         self.assertFalse(technical.initialize)
         self.assertTrue(initialized.initialize)
-        self.assertTrue(initialized.with_pedagogy)
+        self.assertTrue(ADMIN.pedagogy_enabled(initialized, True))
+        self.assertFalse(ADMIN.pedagogy_enabled(without_pedagogy, True))
+        self.assertFalse(ADMIN.pedagogy_enabled(technical, False))
         self.assertEqual(Path("backup.sqlite"), restoration.source)
         self.assertEqual(Path("version-zero.sqlite"), inspection.path)
 

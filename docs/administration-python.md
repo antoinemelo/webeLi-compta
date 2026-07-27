@@ -16,8 +16,9 @@ qui modifient un état commencent par une simulation et exigent `--apply`.
 Dans le menu, l’option recommandée crée une instance immédiatement utilisable :
 administrateur, organisation, dossier, exercice, période, journal, plan
 comptable, modules et codes TVA. Elle propose par défaut une seconde organisation
-pédagogique avec son dossier de démonstration et les sept parcours WebeLi. Le mot
-de passe est demandé sans être affiché ni placé dans la ligne de commande.
+pédagogique avec son dossier de démonstration et les sept parcours WebeLi, sans
+question supplémentaire. Le mot de passe est demandé sans être affiché ni placé
+dans la ligne de commande.
 
 La sous-commande équivalente utilise la variable d’environnement
 `COMPTA_ADMIN_PASSWORD` :
@@ -30,9 +31,11 @@ python3 tools/python/compta.py db-create \
   --admin-email admin@example.test \
   --organisation "Mon organisation" \
   --dossier "Comptabilité" \
-  --with-pedagogy \
   --apply
 ```
+
+`--initialize` installe toujours les parcours pédagogiques par défaut. L’option
+experte `--without-pedagogy` permet seulement de les omettre volontairement.
 
 Sans `--initialize`, `db-create` produit volontairement une base technique
 vierge : schéma, référentiels globaux et catalogue des plans, mais aucun

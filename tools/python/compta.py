@@ -393,7 +393,7 @@ def initialize_database(
     ]
     if getattr(args, "association", False):
         command.append("--association")
-    if getattr(args, "with_pedagogy", False):
+    if getattr(args, "with_pedagogy", True):
         command.extend([
             "--pedagogie",
             f"--organisation-pedagogique={args.pedagogy_organisation}",
@@ -401,6 +401,16 @@ def initialize_database(
             f"--slug-pedagogique={args.pedagogy_slug}",
         ])
     run(command, env=environment)
+
+
+def pedagogy_enabled(args: argparse.Namespace, initialize: bool) -> bool:
+    option = getattr(args, "with_pedagogy", None)
+    if option is True and not initialize:
+        raise AdminError(
+            "--with-pedagogy exige --initialize afin de créer son organisation "
+            "et son dossier."
+        )
+    return initialize and option is not False
 
 
 def database_create(args: argparse.Namespace) -> int:
@@ -419,11 +429,8 @@ def database_create(args: argparse.Namespace) -> int:
     else:
         backup = None
     initialize = bool(getattr(args, "initialize", False))
-    if getattr(args, "with_pedagogy", False) and not initialize:
-        raise AdminError(
-            "--with-pedagogy exige --initialize afin de créer son organisation "
-            "et son dossier."
-        )
+    with_pedagogy = pedagogy_enabled(args, initialize)
+    args.with_pedagogy = with_pedagogy
     if initialize:
         password = str(
             getattr(args, "admin_password", "")
@@ -437,7 +444,7 @@ def database_create(args: argparse.Namespace) -> int:
           + (", initialisation de l’instance" if initialize else "")
           + (
               ", installation des parcours pédagogiques"
-              if getattr(args, "with_pedagogy", False)
+              if with_pedagogy
               else ""
           )
           + ", contrôle d’intégrité.")
@@ -873,7 +880,7 @@ def interactive_create_database(initialize: bool) -> int:
         "modules": "liquidites,facturation,comptabilite,salaires",
         "plan_variant": "personne_morale",
         "association": False,
-        "with_pedagogy": False,
+        "with_pedagogy": initialize,
         "pedagogy_organisation": "École WebeLi",
         "pedagogy_dossier": "Démonstration guidée",
         "pedagogy_slug": "demonstration-guidee",
@@ -910,10 +917,6 @@ def interactive_create_database(initialize: bool) -> int:
         )
         values["association"] = confirm(
             "Ajouter l’overlay du plan comptable pour associations"
-        )
-        values["with_pedagogy"] = confirm(
-            "Installer aussi les sept parcours pédagogiques WebeLi",
-            default=True,
         )
     if not confirm("Créer maintenant cette base"):
         print("Opération annulée.")
@@ -1121,13 +1124,22 @@ def parser() -> argparse.ArgumentParser:
         default="personne_morale",
     )
     database.add_argument("--association", action="store_true")
-    database.add_argument(
+    pedagogy = database.add_mutually_exclusive_group()
+    pedagogy.add_argument(
         "--with-pedagogy",
+        dest="with_pedagogy",
         action="store_true",
+        default=None,
         help=(
             "Créer une organisation pédagogique, son dossier et les sept "
-            "parcours WebeLi"
+            "parcours WebeLi (comportement par défaut avec --initialize)"
         ),
+    )
+    pedagogy.add_argument(
+        "--without-pedagogy",
+        dest="with_pedagogy",
+        action="store_false",
+        help="Créer exceptionnellement l’instance sans parcours pédagogiques",
     )
     database.add_argument(
         "--pedagogy-organisation",
