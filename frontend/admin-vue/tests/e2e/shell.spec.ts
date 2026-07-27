@@ -692,6 +692,32 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await expect(page.getByRole('heading', { name: 'Configuration', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Plan comptable', level: 2 })).toBeVisible();
   await expect(page.getByLabel('Sections du plan comptable')).toBeVisible();
+  const savePlan = page.getByRole('button', { name: 'Enregistrer', exact: true });
+  await expect(savePlan).toHaveCount(1);
+  await expect(savePlan).toBeVisible();
+  await expect(savePlan).toBeDisabled();
+  const planTabs = page.getByLabel('Sections du plan comptable');
+  expect(await planTabs.evaluate((element) => getComputedStyle(element).position)).toBe('sticky');
+  const [tabsBox, saveBox] = await Promise.all([
+    planTabs.boundingBox(),
+    savePlan.boundingBox()
+  ]);
+  expect(tabsBox).not.toBeNull();
+  expect(saveBox).not.toBeNull();
+  expect(saveBox!.x).toBeGreaterThan(tabsBox!.x + tabsBox!.width / 2);
+  await page.getByRole('button', { name: 'Sens', exact: true }).click();
+  await expect(savePlan).toBeVisible();
+
+  await page.getByRole('button', { name: 'Rubriques', exact: true }).click();
+  const rubricRow = page.locator('.plan-workspace table tbody tr').first();
+  const rubricLabel = rubricRow.locator('input').nth(1);
+  const originalRubricLabel = await rubricLabel.inputValue();
+  await rubricLabel.fill(`${originalRubricLabel} E2E`);
+  await expect(savePlan).toBeEnabled();
+  await savePlan.click();
+  await expect(page.getByText(/1 rubrique\(s\) modifiée\(s\)/)).toBeVisible();
+  await rubricRow.locator('input').nth(1).fill(originalRubricLabel);
+  await savePlan.click();
 
   await page.getByRole('button', { name: 'Comptes', exact: true }).click();
   const accountRow = page.locator('.plan-workspace table tbody tr').first();
@@ -704,7 +730,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
     '+/-',
     '-/+'
   ]);
-  const saveAccounts = page.getByRole('button', { name: 'Enregistrer', exact: true });
+  const saveAccounts = savePlan;
   await expect(saveAccounts).toHaveCount(1);
   await expect(saveAccounts).toBeDisabled();
   const accountLabel = accountRow.locator('input').nth(1);
@@ -714,6 +740,22 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await expect(page.getByText('1 compte(s) enregistré(s).')).toBeVisible();
   await accountRow.locator('input').nth(1).fill(originalLabel);
   await saveAccounts.click();
+
+  const chartCsvResponse = await page.request.get('/e2e/api/v1/accounting/chart/export');
+  expect(chartCsvResponse.status()).toBe(200);
+  expect(chartCsvResponse.headers()['content-type']).toContain('text/csv');
+  const chartCsv = await chartCsvResponse.body();
+  await page.locator('.plan-tabs input[type="file"]').setInputFiles({
+    name: 'plan-comptable.csv',
+    mimeType: 'text/csv',
+    buffer: chartCsv
+  });
+  await expect(page.getByRole('heading', {
+    name: 'Importer un plan comptable CSV'
+  })).toBeVisible();
+  await expect(page.getByText('Aucune écriture ni aucun solde')).toBeVisible();
+  await page.getByRole('button', { name: 'Confirmer l’import' }).click();
+  await expect(page.getByText('Plan comptable importé après validation complète.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Ouverture', exact: true }).click();
   await expect(page.getByRole('columnheader', { name: 'Sens', exact: true })).toBeVisible();

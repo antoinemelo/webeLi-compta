@@ -441,11 +441,46 @@ final class AccountingInputValidator
     {
         $data = $this->only($request, [
             'action', 'id', 'structure_level', 'code', 'label', 'type',
-            'parent_id', 'position', 'version', 'ordered_ids',
+            'parent_id', 'position', 'version', 'ordered_ids', 'rubrics',
         ]);
         $action = (string) ($data['action'] ?? '');
-        if (!in_array($action, ['save', 'delete', 'reorder'], true)) {
+        if (!in_array($action, ['save', 'save_batch', 'delete', 'reorder'], true)) {
             throw ApiException::validation(['action' => ['Action invalide.']]);
+        }
+        $rubrics = [];
+        if ($action === 'save_batch') {
+            foreach ($data['rubrics'] ?? [] as $index => $rubric) {
+                if (!is_array($rubric)) {
+                    throw ApiException::validation([
+                        "rubrics.{$index}" => ['Rubrique invalide.'],
+                    ]);
+                }
+                $rubrics[] = [
+                    'id' => $this->integer($rubric['id'] ?? 0, "rubrics.{$index}.id", 1),
+                    'code' => (string) ($rubric['code'] ?? ''),
+                    'label' => (string) ($rubric['label'] ?? ''),
+                    'type' => (string) ($rubric['type'] ?? ''),
+                    'parent_id' => $this->nullablePositiveInteger(
+                        $rubric['parent_id'] ?? null,
+                        "rubrics.{$index}.parent_id"
+                    ),
+                    'position' => $this->integer(
+                        $rubric['position'] ?? 0,
+                        "rubrics.{$index}.position",
+                        0
+                    ),
+                    'version' => $this->integer(
+                        $rubric['version'] ?? 0,
+                        "rubrics.{$index}.version",
+                        0
+                    ),
+                ];
+            }
+            if ($rubrics === [] && ($data['ordered_ids'] ?? []) === []) {
+                throw ApiException::validation([
+                    'rubrics' => ['Au moins une modification est requise.'],
+                ]);
+            }
         }
         return [
             'action' => $action,
@@ -464,6 +499,7 @@ final class AccountingInputValidator
                 $data['ordered_ids'] ?? [],
                 'ordered_ids'
             ),
+            'rubrics' => $rubrics,
         ];
     }
 
@@ -480,9 +516,9 @@ final class AccountingInputValidator
         }
         $accounts = [];
         if ($action === 'save_batch') {
-            if (!is_array($data['accounts'] ?? null) || $data['accounts'] === []) {
+            if (!is_array($data['accounts'] ?? null)) {
                 throw ApiException::validation([
-                    'accounts' => ['Au moins un compte modifié est requis.'],
+                    'accounts' => ['Liste de comptes invalide.'],
                 ]);
             }
             foreach ($data['accounts'] as $index => $account) {
@@ -507,6 +543,11 @@ final class AccountingInputValidator
                     ),
                 ];
             }
+            if ($accounts === [] && ($data['ordered_ids'] ?? []) === []) {
+                throw ApiException::validation([
+                    'accounts' => ['Au moins une modification est requise.'],
+                ]);
+            }
         }
         return [
             'action' => $action,
@@ -525,6 +566,28 @@ final class AccountingInputValidator
             ),
             'accounts' => $accounts,
         ];
+    }
+
+    /** @return array{csv:string,fingerprint:string} */
+    public function chartImport(Request $request, bool $requiresFingerprint): array
+    {
+        $data = $this->only($request, ['csv', 'fingerprint']);
+        $csv = $data['csv'] ?? null;
+        if (!is_string($csv) || trim($csv) === '' || strlen($csv) > 2_000_000) {
+            throw ApiException::validation([
+                'csv' => ['Le fichier CSV est vide ou dépasse 2 Mo.'],
+            ]);
+        }
+        $fingerprint = (string) ($data['fingerprint'] ?? '');
+        if (
+            $requiresFingerprint
+            && preg_match('/^[a-f0-9]{64}$/', $fingerprint) !== 1
+        ) {
+            throw ApiException::validation([
+                'fingerprint' => ['Prévisualisation absente ou périmée.'],
+            ]);
+        }
+        return ['csv' => $csv, 'fingerprint' => $fingerprint];
     }
 
     /** @return array{exercise_id:int,validate:bool,balances:array<int,int>} */

@@ -678,6 +678,41 @@ h3,
   top: 8.25rem;
 }
 
+.plan-tabs {
+  align-items: center;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.plan-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+}
+
+.plan-tabs .plan-tab-actions .button {
+  min-height: 2.2rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+}
+
+.plan-tabs .plan-tab-actions .button.primary {
+  color: white;
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.plan-tabs .plan-tab-actions .button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.chart-import-summary {
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+}
+
 .tertiary-tabs {
   position: relative;
   z-index: auto;
@@ -1901,6 +1936,20 @@ textarea {
   .secondary-tabs {
     position: relative;
     top: auto;
+  }
+
+  .plan-tabs {
+    align-items: stretch;
+  }
+
+  .plan-tab-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .plan-tab-actions .button {
+    flex: 1 1 auto;
+    justify-content: center;
   }
 }
 

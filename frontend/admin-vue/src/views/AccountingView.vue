@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
+import ModalDialog from '@/components/ui/ModalDialog.vue';
 import AssetsPanel from '@/components/accounting/AssetsPanel.vue';
 import ConsolidationPanel from '@/components/accounting/ConsolidationPanel.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -10,6 +11,7 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { runtimeConfig } from '@/config';
 import type { AccountingWorkspace } from '@/api/contracts';
+import { api, errorMessage } from '@/api/client';
 import { referenceNavigation, subNavigation } from '@/router/navigation';
 import { useAccountingStore } from '@/stores/accounting';
 import { useContextStore } from '@/stores/context';
@@ -24,6 +26,19 @@ type EntryLine = {
 type CashFlowCategory = {
   key: string;
   label: string;
+};
+
+type ChartImportPreview = {
+  fingerprint: string;
+  summary: {
+    rows: number;
+    type_updates: number;
+    rubric_creates: number;
+    rubric_updates: number;
+    account_creates: number;
+    account_updates: number;
+  };
+  warnings: string[];
 };
 
 const route = useRoute();
@@ -53,6 +68,8 @@ const taxAdjustment = reactive({
 const planSection = ref<'types' | 'sense' | 'rubrics' | 'accounts' | 'opening'>('types');
 const rubricLevel = ref<'classe' | 'groupe_principal' | 'groupe' | 'sous_groupe'>('classe');
 const accountSearch = ref('');
+const accountOrderDraft = ref<number[]>([]);
+const rubricOrderDrafts = reactive<Record<string, number[]>>({});
 const typeLabels = reactive<Record<number, string>>({});
 const prefixText = ref('');
 const rubricDrafts = reactive<Record<number, {
@@ -68,6 +85,13 @@ const accountDrafts = reactive<Record<number, {
   rubric_id: number | null;
 }>>({});
 const openingDrafts = reactive<Record<number, string>>({});
+const chartFileInput = ref<HTMLInputElement | null>(null);
+const chartImportDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const chartImportName = ref('');
+const chartImportCsv = ref('');
+const chartImportPreview = ref<ChartImportPreview | null>(null);
+const chartImportError = ref('');
+const chartImportBusy = ref(false);
 const newRubric = reactive({
   code: '',
   label: '',
@@ -177,13 +201,19 @@ const entryBalanced = computed(() =>
   entryTotals.value.debit > 0 && entryTotals.value.debit === entryTotals.value.credit
 );
 const visibleRubrics = computed(() =>
-  (workspace.value?.chart.rubrics ?? []).filter(
-    (rubric) => rubric.structure_level === rubricLevel.value
-  )
+  (workspace.value?.chart.rubrics ?? [])
+    .filter((rubric) => rubric.structure_level === rubricLevel.value)
+    .sort((left, right) => {
+      const order = rubricOrderDrafts[rubricLevel.value] ?? [];
+      return order.indexOf(left.id) - order.indexOf(right.id);
+    })
 );
 const visibleAccounts = computed(() => {
   const search = accountSearch.value.trim().toLocaleLowerCase('fr-CH');
-  const accounts = workspace.value?.chart.accounts ?? [];
+  const order = accountOrderDraft.value;
+  const accounts = [...(workspace.value?.chart.accounts ?? [])].sort(
+    (left, right) => order.indexOf(left.id) - order.indexOf(right.id)
+  );
   if (!search) return accounts;
   return accounts.filter((account) =>
     `${account.number} ${account.label} ${account.rubric_path}`
@@ -207,6 +237,58 @@ const dirtyAccounts = computed(() =>
     );
   })
 );
+const dirtyTypes = computed(() =>
+  (workspace.value?.chart.types ?? []).filter(
+    (type) => typeLabels[type.id] !== type.label
+  )
+);
+const senseDirty = computed(() => {
+  const prefixes = prefixText.value.split(/[\s,;]+/).filter(Boolean);
+  return prefixes.join('|') !== (workspace.value?.chart.credit_prefixes ?? []).join('|');
+});
+const dirtyRubrics = computed(() =>
+  visibleRubrics.value.filter((rubric) => {
+    const draft = rubricDrafts[rubric.id];
+    return draft && (
+      draft.code !== rubric.code
+      || draft.label !== rubric.label
+      || draft.type !== rubric.type
+      || draft.parent_id !== rubric.parent_id
+    );
+  })
+);
+const rubricOrderDirty = computed(() => {
+  const original = (workspace.value?.chart.rubrics ?? [])
+    .filter((rubric) => rubric.structure_level === rubricLevel.value)
+    .map((rubric) => rubric.id);
+  return original.join('|')
+    !== (rubricOrderDrafts[rubricLevel.value] ?? []).join('|');
+});
+const accountOrderDirty = computed(() =>
+  (workspace.value?.chart.accounts ?? []).map((account) => account.id).join('|')
+    !== accountOrderDraft.value.join('|')
+);
+const openingDirty = computed(() =>
+  openingAccounts.value.some((account) =>
+    safeCents(openingDrafts[account.id] || '0')
+      !== (workspace.value?.opening.soldes[String(account.id)] ?? 0)
+  )
+);
+const planSaveLabel = computed(() =>
+  planSection.value === 'opening' ? 'Enregistrer le brouillon' : 'Enregistrer'
+);
+const planSaveDisabled = computed(() => {
+  if (!canSetup.value || accounting.saving) return true;
+  if (planSection.value === 'types') return dirtyTypes.value.length === 0;
+  if (planSection.value === 'sense') return !senseDirty.value;
+  if (planSection.value === 'rubrics') {
+    return dirtyRubrics.value.length === 0 && !rubricOrderDirty.value;
+  }
+  if (planSection.value === 'accounts') {
+    return dirtyAccounts.value.length === 0 && !accountOrderDirty.value;
+  }
+  return workspace.value?.opening.status === 'validee' || !openingDirty.value;
+});
 const openingAccounts = computed(() =>
   (workspace.value?.chart.accounts ?? []).filter(
     (account) => account.active && ['actif', 'passif'].includes(account.type)
@@ -246,6 +328,11 @@ watch(
         parent_id: rubric.parent_id
       };
     });
+    ['classe', 'groupe_principal', 'groupe', 'sous_groupe'].forEach((level) => {
+      rubricOrderDrafts[level] = value.chart.rubrics
+        .filter((rubric) => rubric.structure_level === level)
+        .map((rubric) => rubric.id);
+    });
     Object.keys(accountDrafts).forEach((key) => delete accountDrafts[Number(key)]);
     value.chart.accounts.forEach((account) => {
       accountDrafts[account.id] = {
@@ -255,6 +342,7 @@ watch(
         rubric_id: account.rubric_id
       };
     });
+    accountOrderDraft.value = value.chart.accounts.map((account) => account.id);
     Object.keys(openingDrafts).forEach((key) => delete openingDrafts[Number(key)]);
     Object.entries(value.opening.soldes).forEach(([id, cents]) => {
       openingDrafts[Number(id)] = centsToInput(cents);
@@ -420,11 +508,12 @@ async function submitEntry(validate: boolean): Promise<void> {
 }
 
 async function saveTypes(): Promise<void> {
-  const types = (workspace.value?.chart.types ?? []).map((type) => ({
+  const types = dirtyTypes.value.map((type) => ({
     id: type.id,
     label: typeLabels[type.id],
     version: type.version
   }));
+  if (!types.length) return;
   await mutateAndReload('/accounting/chart/types', { types }, 'Types enregistrés.');
 }
 
@@ -448,22 +537,29 @@ function parentOptions(level: string) {
   );
 }
 
-async function saveRubric(id: number): Promise<void> {
-  const rubric = workspace.value?.chart.rubrics.find((item) => item.id === id);
-  const draft = rubricDrafts[id];
-  if (!rubric || !draft) return;
-  await mutateAndReload('/accounting/chart/rubrics', {
-    action: 'save',
-    id,
-    structure_level: rubric.structure_level,
-    code: draft.code,
-    label: draft.label,
-    type: draft.type,
-    parent_id: draft.parent_id,
+async function saveRubrics(): Promise<void> {
+  const rubrics = dirtyRubrics.value.map((rubric) => ({
+    id: rubric.id,
+    code: rubricDrafts[rubric.id].code,
+    label: rubricDrafts[rubric.id].label,
+    type: rubricDrafts[rubric.id].type,
+    parent_id: rubricDrafts[rubric.id].parent_id,
     position: rubric.order,
-    version: rubric.version,
-    ordered_ids: []
-  }, 'Rubrique enregistrée.');
+    version: rubric.version
+  }));
+  await mutateAndReload('/accounting/chart/rubrics', {
+    action: 'save_batch',
+    id: 0,
+    structure_level: rubricLevel.value,
+    code: '',
+    label: '',
+    type: 'actif',
+    parent_id: null,
+    position: 0,
+    version: 0,
+    rubrics,
+    ordered_ids: rubricOrderDrafts[rubricLevel.value] ?? []
+  }, `${rubrics.length} rubrique(s) modifiée(s), ordre enregistré.`);
 }
 
 async function createRubric(): Promise<void> {
@@ -502,23 +598,12 @@ async function deleteRubric(id: number): Promise<void> {
 }
 
 async function moveRubric(id: number, direction: -1 | 1): Promise<void> {
-  const ids = visibleRubrics.value.map((item) => item.id);
+  const ids = [...(rubricOrderDrafts[rubricLevel.value] ?? [])];
   const index = ids.indexOf(id);
   const target = index + direction;
   if (index < 0 || target < 0 || target >= ids.length) return;
   [ids[index], ids[target]] = [ids[target], ids[index]];
-  await mutateAndReload('/accounting/chart/rubrics', {
-    action: 'reorder',
-    id,
-    structure_level: rubricLevel.value,
-    code: '',
-    label: '',
-    type: 'actif',
-    parent_id: null,
-    position: 0,
-    version: 0,
-    ordered_ids: ids
-  }, 'Ordre des rubriques enregistré.');
+  rubricOrderDrafts[rubricLevel.value] = ids;
 }
 
 async function saveAccounts(): Promise<void> {
@@ -534,7 +619,7 @@ async function saveAccounts(): Promise<void> {
   await mutateAndReload('/accounting/chart/accounts', {
     action: 'save_batch',
     accounts,
-    ordered_ids: (workspace.value?.chart.accounts ?? []).map((account) => account.id)
+    ordered_ids: accountOrderDraft.value
   }, `${accounts.length} compte(s) enregistré(s).`);
 }
 
@@ -568,21 +653,12 @@ async function deleteAccount(id: number): Promise<void> {
 }
 
 async function moveAccount(id: number, direction: -1 | 1): Promise<void> {
-  const ids = (workspace.value?.chart.accounts ?? []).map((item) => item.id);
+  const ids = [...accountOrderDraft.value];
   const index = ids.indexOf(id);
   const target = index + direction;
   if (index < 0 || target < 0 || target >= ids.length) return;
   [ids[index], ids[target]] = [ids[target], ids[index]];
-  await mutateAndReload('/accounting/chart/accounts', {
-    action: 'reorder',
-    id,
-    number: '',
-    label: '',
-    sense_mode: 'automatique',
-    rubric_id: null,
-    version: 0,
-    ordered_ids: ids
-  }, 'Ordre des comptes enregistré.');
+  accountOrderDraft.value = ids;
 }
 
 async function saveOpening(validate: boolean): Promise<void> {
@@ -615,6 +691,71 @@ async function mutateAndReload(
 function selectPlanSection(value: string): void {
   if (['types', 'sense', 'rubrics', 'accounts', 'opening'].includes(value)) {
     planSection.value = value as typeof planSection.value;
+  }
+}
+
+async function savePlanSection(): Promise<void> {
+  if (planSection.value === 'types') return saveTypes();
+  if (planSection.value === 'sense') return saveSense();
+  if (planSection.value === 'rubrics') return saveRubrics();
+  if (planSection.value === 'accounts') return saveAccounts();
+  return saveOpening(false);
+}
+
+function exportChart(): void {
+  download('/accounting/chart/export', {});
+}
+
+function chooseChartImport(): void {
+  chartFileInput.value?.click();
+}
+
+async function chartCsvSelected(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  chartImportError.value = '';
+  chartImportPreview.value = null;
+  chartImportName.value = file.name;
+  if (file.size > 2_000_000) {
+    chartImportError.value = 'Le fichier dépasse la limite de 2 Mo.';
+    chartImportDialog.value?.open();
+    return;
+  }
+  chartImportBusy.value = true;
+  try {
+    chartImportCsv.value = await file.text();
+    chartImportPreview.value = (
+      await api.post<ChartImportPreview>(
+        '/accounting/chart/import/preview',
+        { csv: chartImportCsv.value }
+      )
+    ).data;
+  } catch (error) {
+    chartImportError.value = errorMessage(error);
+  } finally {
+    chartImportBusy.value = false;
+    chartImportDialog.value?.open();
+  }
+}
+
+async function applyChartImport(): Promise<void> {
+  if (!chartImportPreview.value) return;
+  chartImportBusy.value = true;
+  chartImportError.value = '';
+  try {
+    await api.post('/accounting/chart/import', {
+      csv: chartImportCsv.value,
+      fingerprint: chartImportPreview.value.fingerprint
+    });
+    await reload();
+    accounting.notice = 'Plan comptable importé après validation complète.';
+    chartImportDialog.value?.close();
+  } catch (error) {
+    chartImportError.value = errorMessage(error);
+  } finally {
+    chartImportBusy.value = false;
   }
 }
 
@@ -956,20 +1097,46 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           <div><p class="eyebrow">Référentiel unique</p><h2>Plan comptable</h2></div>
           <span v-if="!canSetup" class="status-chip warning">Lecture seule</span>
         </div>
-        <nav class="subtabs secondary-tabs" aria-label="Sections du plan comptable">
+        <nav class="subtabs secondary-tabs plan-tabs" aria-label="Sections du plan comptable">
           <button v-for="item in [
             ['types', 'Types'], ['sense', 'Sens'], ['rubrics', 'Rubriques'],
             ['accounts', 'Comptes'], ['opening', 'Ouverture']
           ]" :key="item[0]" :class="{ active: planSection === item[0] }" type="button" @click="selectPlanSection(item[0])">
             {{ item[1] }}
           </button>
+          <span class="plan-tab-actions">
+            <button
+              v-if="workspace.capabilities.export"
+              class="button secondary small"
+              type="button"
+              @click="exportChart"
+            >Exporter CSV</button>
+            <button
+              v-if="canSetup"
+              class="button secondary small"
+              type="button"
+              @click="chooseChartImport"
+            >Importer CSV</button>
+            <input
+              ref="chartFileInput"
+              class="visually-hidden"
+              type="file"
+              accept=".csv,text/csv"
+              @change="chartCsvSelected"
+            >
+            <button
+              class="button primary small"
+              type="button"
+              :disabled="planSaveDisabled"
+              @click="savePlanSection"
+            >{{ planSaveLabel }}</button>
+          </span>
         </nav>
 
         <form v-if="planSection === 'types'" class="stack" @submit.prevent="saveTypes">
           <label v-for="type in workspace.chart.types" :key="type.id">{{ type.code }}
             <input v-model="typeLabels[type.id]" :disabled="!canSetup" required>
           </label>
-          <button class="button primary" :disabled="!canSetup || accounting.saving">Enregistrer les types</button>
         </form>
 
         <form v-else-if="planSection === 'sense'" class="stack" @submit.prevent="saveSense">
@@ -977,7 +1144,6 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           <label>Préfixes séparés par une virgule
             <input v-model="prefixText" :disabled="!canSetup" placeholder="2, 3, 9">
           </label>
-          <button class="button primary" :disabled="!canSetup || accounting.saving">Enregistrer les règles</button>
         </form>
 
         <template v-else-if="planSection === 'rubrics'">
@@ -995,7 +1161,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
                 <td><select v-model="rubricDrafts[rubric.id].parent_id" :disabled="!canSetup || rubricLevel === 'classe'"><option :value="null">—</option><option v-for="parent in parentOptions(rubricLevel)" :key="parent.id" :value="parent.id">{{ parent.code }} {{ parent.label }}</option></select></td>
                 <td><select v-model="rubricDrafts[rubric.id].type" :disabled="!canSetup || rubricLevel !== 'classe'"><option v-for="type in workspace.chart.types" :key="type.code" :value="type.code">{{ type.label }}</option></select></td>
                 <td><button class="icon-button" type="button" :disabled="!canSetup" @click="moveRubric(rubric.id, -1)">↑</button><button class="icon-button" type="button" :disabled="!canSetup" @click="moveRubric(rubric.id, 1)">↓</button></td>
-                <td><button class="button small" type="button" :disabled="!canSetup" @click="saveRubric(rubric.id)">Enregistrer</button><button class="button danger small" type="button" :disabled="!canSetup" @click="deleteRubric(rubric.id)">Retirer</button></td>
+                <td><button class="button danger small" type="button" :disabled="!canSetup" @click="deleteRubric(rubric.id)">Retirer</button></td>
               </tr>
             </tbody>
           </table></div>
@@ -1029,16 +1195,6 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             <select v-model="newAccount.sense_mode"><option value="automatique">Automatique</option><option value="debit">+/-</option><option value="credit">-/+</option></select>
             <button class="button primary" :disabled="!canSetup">Ajouter</button>
           </form>
-          <div class="button-row">
-            <button
-              class="button primary"
-              type="button"
-              :disabled="!canSetup || !dirtyAccounts.length || accounting.saving"
-              @click="saveAccounts"
-            >
-              Enregistrer
-            </button>
-          </div>
         </template>
 
         <template v-else>
@@ -1046,8 +1202,40 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           <div class="table-scroll"><table class="editable-table"><thead><tr><th>Compte</th><th>Type</th><th>Sens</th><th>Solde initial</th></tr></thead>
             <tbody><tr v-for="account in openingAccounts" :key="account.id"><td>{{ account.number }} — {{ account.label }}</td><td>{{ account.type }}</td><td>{{ senseLabel(account.normal_side) }}</td><td><input v-model="openingDrafts[account.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00"></td></tr></tbody>
           </table></div>
-          <div class="button-row"><button class="button" type="button" :disabled="!canSetup || workspace.opening.status === 'validee'" @click="saveOpening(false)">Enregistrer le brouillon</button><button class="button primary" type="button" :disabled="!canValidate || workspace.opening.status === 'validee'" @click="saveOpening(true)">Valider l’ouverture</button></div>
+          <div class="button-row"><button class="button primary" type="button" :disabled="!canValidate || workspace.opening.status === 'validee'" @click="saveOpening(true)">Valider l’ouverture</button></div>
         </template>
+
+        <ModalDialog
+          ref="chartImportDialog"
+          title="Importer un plan comptable CSV"
+          description="Le fichier est d’abord contrôlé et prévisualisé. L’application est atomique et ne supprime aucune ligne absente du CSV."
+        >
+          <div class="stack">
+            <p><strong>{{ chartImportName || 'Fichier CSV' }}</strong></p>
+            <p v-if="chartImportBusy">Contrôle du fichier en cours…</p>
+            <ErrorSummary v-if="chartImportError" :message="chartImportError" />
+            <template v-if="chartImportPreview">
+              <div class="metric-strip chart-import-summary">
+                <span><small>Lignes contrôlées</small><strong>{{ chartImportPreview.summary.rows }}</strong></span>
+                <span><small>Rubriques à créer</small><strong>{{ chartImportPreview.summary.rubric_creates }}</strong></span>
+                <span><small>Rubriques à modifier</small><strong>{{ chartImportPreview.summary.rubric_updates }}</strong></span>
+                <span><small>Comptes à créer</small><strong>{{ chartImportPreview.summary.account_creates }}</strong></span>
+                <span><small>Comptes à modifier</small><strong>{{ chartImportPreview.summary.account_updates }}</strong></span>
+              </div>
+              <ul class="muted-list">
+                <li v-for="warning in chartImportPreview.warnings" :key="warning">{{ warning }}</li>
+              </ul>
+              <div class="button-row">
+                <button
+                  class="button primary"
+                  type="button"
+                  :disabled="chartImportBusy"
+                  @click="applyChartImport"
+                >Confirmer l’import</button>
+              </div>
+            </template>
+          </div>
+        </ModalDialog>
       </section>
 
       <section v-else-if="currentTab === 'etats'" class="stack">

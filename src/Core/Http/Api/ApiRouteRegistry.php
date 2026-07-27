@@ -270,6 +270,24 @@ final class ApiRouteRegistry
             );
             $this->add(
                 $router,
+                'GET',
+                '/api/v1/accounting/chart/export',
+                $this->accounting->exportChart(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/chart/import/preview',
+                $this->accounting->previewChartImport(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/chart/import',
+                $this->accounting->importChart(...)
+            );
+            $this->add(
+                $router,
                 'POST',
                 '/api/v1/accounting/opening',
                 $this->accounting->saveOpening(...)

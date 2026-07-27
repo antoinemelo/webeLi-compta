@@ -845,6 +845,638 @@ final class ChartOfAccountsService
         });
     }
 
+    public function exportCsv(int $organisationId, int $dossierId): string
+    {
+        $this->assertDossierScope($organisationId, $dossierId);
+        $stream = fopen('php://temp', 'w+');
+        if ($stream === false) {
+            throw new AccountingException('Impossible de préparer le plan comptable CSV.');
+        }
+        fwrite($stream, "\xEF\xBB\xBF");
+        fputcsv($stream, [
+            'type_ligne', 'niveau', 'code', 'libelle', 'parent_code',
+            'type_compte', 'sens', 'ordre',
+        ], ';', '"', '');
+        foreach ($this->accountTypes($organisationId, $dossierId) as $type) {
+            $this->writeCsvRow($stream, [
+                'type_compte', '', $type['code'], $type['libelle'], '',
+                '', '', $type['ordre'],
+            ]);
+        }
+        foreach ($this->creditPrefixes($organisationId, $dossierId) as $order => $prefix) {
+            $this->writeCsvRow($stream, [
+                'regle_sens', '', $prefix, '', '', '', '', ($order + 1) * 10,
+            ]);
+        }
+        $rubrics = $this->rubrics($organisationId, $dossierId);
+        $rubricsById = [];
+        foreach ($rubrics as $rubric) {
+            $rubricsById[(int) $rubric['id']] = $rubric;
+        }
+        foreach ($rubrics as $rubric) {
+            $parent = $rubricsById[(int) ($rubric['parent_id'] ?? 0)] ?? null;
+            $this->writeCsvRow($stream, [
+                'rubrique',
+                $rubric['niveau_structure'],
+                $rubric['code'],
+                $rubric['libelle'],
+                $parent['code'] ?? '',
+                $rubric['type'],
+                '',
+                $rubric['ordre'],
+            ]);
+        }
+        foreach ($this->accounts($organisationId, $dossierId, false) as $account) {
+            $this->writeCsvRow($stream, [
+                'compte',
+                '',
+                $account['numero'],
+                $account['libelle'],
+                $account['rubrique_code'],
+                $account['type'],
+                $account['sens_mode'],
+                $account['ordre'],
+            ]);
+        }
+        rewind($stream);
+        $csv = stream_get_contents($stream);
+        fclose($stream);
+        return $csv === false ? '' : $csv;
+    }
+
+    /** @return array<string,mixed> */
+    public function previewCsv(
+        int $organisationId,
+        int $dossierId,
+        string $csv,
+    ): array {
+        $analysis = $this->analyseCsv($organisationId, $dossierId, $csv);
+        return [
+            'fingerprint' => hash(
+                'sha256',
+                $this->exportCsv($organisationId, $dossierId)
+            ),
+            'summary' => $analysis['summary'],
+            'warnings' => [
+                'L’import ajoute ou met à jour les lignes présentes sans supprimer les autres.',
+                'Aucune écriture ni aucun solde n’est modifié par cet import.',
+            ],
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function importCsv(
+        int $organisationId,
+        int $dossierId,
+        string $csv,
+        string $expectedFingerprint,
+        ?int $actorId = null,
+    ): array {
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $csv,
+            $expectedFingerprint,
+            $actorId
+        ): array {
+            $currentFingerprint = hash(
+                'sha256',
+                $this->exportCsv($organisationId, $dossierId)
+            );
+            if (!hash_equals($currentFingerprint, $expectedFingerprint)) {
+                throw new AccountingException(
+                    'Le plan comptable a changé depuis la prévisualisation. Recommencez l’import.'
+                );
+            }
+            $analysis = $this->analyseCsv($organisationId, $dossierId, $csv);
+            $specifications = $analysis['specifications'];
+
+            $typesByCode = [];
+            foreach ($this->accountTypes($organisationId, $dossierId) as $type) {
+                $typesByCode[(string) $type['code']] = $type;
+            }
+            foreach ($specifications['types'] as $type) {
+                $existing = $typesByCode[$type['code']];
+                if ((string) $existing['libelle'] !== $type['label']) {
+                    $this->renameAccountType(
+                        $organisationId,
+                        $dossierId,
+                        (int) $existing['id'],
+                        $type['label'],
+                        (int) $existing['version'],
+                        $actorId
+                    );
+                }
+            }
+            if (
+                $specifications['prefixes'] !== []
+                && $specifications['prefixes']
+                    !== $this->creditPrefixes($organisationId, $dossierId)
+            ) {
+                $this->replaceCreditPrefixes(
+                    $organisationId,
+                    $dossierId,
+                    $specifications['prefixes'],
+                    $actorId
+                );
+            }
+
+            foreach (self::STRUCTURE_LEVELS as $level) {
+                $levelRows = array_values(array_filter(
+                    $specifications['rubrics'],
+                    static fn (array $row): bool => $row['level'] === $level
+                ));
+                if ($levelRows === []) {
+                    continue;
+                }
+                $rubrics = $this->rubrics($organisationId, $dossierId);
+                $byCode = [];
+                $bySubgroup = [];
+                foreach ($rubrics as $rubric) {
+                    if ((string) $rubric['code'] !== '') {
+                        $byCode[(string) $rubric['code']] = $rubric;
+                    } else {
+                        $bySubgroup[
+                            (int) $rubric['parent_id'] . '|'
+                            . $this->csvKey((string) $rubric['libelle'])
+                        ] = $rubric;
+                    }
+                }
+                $orderedIds = [];
+                foreach ($levelRows as $row) {
+                    $parent = $row['parent_code'] === ''
+                        ? null
+                        : ($byCode[$row['parent_code']] ?? null);
+                    $parentId = $parent === null ? null : (int) $parent['id'];
+                    $existing = $row['code'] !== ''
+                        ? ($byCode[$row['code']] ?? null)
+                        : ($bySubgroup[
+                            $parentId . '|' . $this->csvKey($row['label'])
+                        ] ?? null);
+                    $id = $existing === null ? null : (int) $existing['id'];
+                    $changed = $existing === null
+                        || (string) $existing['libelle'] !== $row['label']
+                        || (string) $existing['type'] !== $row['type']
+                        || (int) ($existing['parent_id'] ?? 0) !== (int) ($parentId ?? 0);
+                    if ($changed) {
+                        $id = $this->saveRubric(
+                            $organisationId,
+                            $dossierId,
+                            $id,
+                            $level,
+                            $row['code'],
+                            $row['label'],
+                            $row['type'],
+                            $parentId,
+                            $row['order'],
+                            $existing === null ? null : (int) $existing['version'],
+                            $actorId
+                        );
+                    }
+                    $orderedIds[] = (int) $id;
+                    $rubrics = $this->rubrics($organisationId, $dossierId);
+                    foreach ($rubrics as $rubric) {
+                        if ((string) $rubric['code'] !== '') {
+                            $byCode[(string) $rubric['code']] = $rubric;
+                        }
+                    }
+                }
+                $currentLevelIds = [];
+                foreach ($this->rubrics($organisationId, $dossierId) as $rubric) {
+                    if (
+                        (string) $rubric['niveau_structure'] !== $level
+                    ) {
+                        continue;
+                    }
+                    $currentLevelIds[] = (int) $rubric['id'];
+                    if (!in_array((int) $rubric['id'], $orderedIds, true)) {
+                        $orderedIds[] = (int) $rubric['id'];
+                    }
+                }
+                if ($orderedIds !== $currentLevelIds) {
+                    $this->reorderRubrics(
+                        $organisationId,
+                        $dossierId,
+                        $level,
+                        $orderedIds,
+                        $actorId
+                    );
+                }
+            }
+
+            $rubricsByCode = [];
+            foreach ($this->rubrics($organisationId, $dossierId) as $rubric) {
+                if ((string) $rubric['code'] !== '') {
+                    $rubricsByCode[(string) $rubric['code']] = $rubric;
+                }
+            }
+            $accountsByNumber = [];
+            foreach ($this->accounts($organisationId, $dossierId) as $account) {
+                $accountsByNumber[(string) $account['numero']] = $account;
+            }
+            $orderedAccountIds = [];
+            foreach ($specifications['accounts'] as $row) {
+                $rubricId = (int) $rubricsByCode[$row['parent_code']]['id'];
+                $existing = $accountsByNumber[$row['number']] ?? null;
+                if ($existing === null) {
+                    $id = $this->createConfigured(
+                        $organisationId,
+                        $dossierId,
+                        $row['number'],
+                        $row['label'],
+                        $row['type'],
+                        $row['sense'],
+                        $actorId,
+                        $rubricId
+                    );
+                } else {
+                    if ((int) $existing['actif'] !== 1) {
+                        throw new AccountingException(
+                            "Le compte {$row['number']} est désactivé et ne peut pas être réactivé par CSV."
+                        );
+                    }
+                    $id = (int) $existing['id'];
+                    if (
+                        (string) $existing['libelle'] !== $row['label']
+                        || (string) $existing['sens_mode'] !== $row['sense']
+                        || (int) ($existing['rubrique_id'] ?? 0) !== $rubricId
+                    ) {
+                        $this->updateAccount(
+                            $organisationId,
+                            $dossierId,
+                            $id,
+                            $row['number'],
+                            $row['label'],
+                            $row['type'],
+                            $row['sense'],
+                            (int) $existing['version'],
+                            $actorId,
+                            $rubricId
+                        );
+                    }
+                }
+                $orderedAccountIds[] = $id;
+            }
+            $currentAccountIds = [];
+            foreach ($this->accounts($organisationId, $dossierId) as $account) {
+                $currentAccountIds[] = (int) $account['id'];
+                if (!in_array((int) $account['id'], $orderedAccountIds, true)) {
+                    $orderedAccountIds[] = (int) $account['id'];
+                }
+            }
+            if (
+                $orderedAccountIds !== []
+                && $orderedAccountIds !== $currentAccountIds
+            ) {
+                $this->reorderAccounts(
+                    $organisationId,
+                    $dossierId,
+                    $orderedAccountIds,
+                    $actorId
+                );
+            }
+            $this->audit->log(
+                'compta.plan_csv_importe',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'plan_comptable',
+                (string) $dossierId,
+                $analysis['summary']
+            );
+            return $analysis['summary'];
+        });
+    }
+
+    /**
+     * @return array{
+     *   specifications:array<string,mixed>,
+     *   summary:array<string,int>
+     * }
+     */
+    private function analyseCsv(
+        int $organisationId,
+        int $dossierId,
+        string $csv,
+    ): array {
+        $rows = $this->parseCsv($csv);
+        $types = [];
+        $prefixes = [];
+        $rubricRows = [];
+        $accountRows = [];
+        foreach ($rows as $row) {
+            match ($row['type_ligne']) {
+                'type_compte' => $types[] = [
+                    'code' => $row['code'],
+                    'label' => $this->requiredCsvLabel($row),
+                ],
+                'regle_sens' => $prefixes[] = $row['code'],
+                'rubrique' => $rubricRows[] = $row,
+                'compte' => $accountRows[] = $row,
+                default => throw new AccountingException(
+                    "Type de ligne CSV inconnu à la ligne {$row['_line']}."
+                ),
+            };
+        }
+        $knownTypes = [];
+        foreach ($this->accountTypes($organisationId, $dossierId) as $type) {
+            $knownTypes[(string) $type['code']] = $type;
+        }
+        $seenTypes = [];
+        $typeUpdates = 0;
+        foreach ($types as $type) {
+            if (!isset($knownTypes[$type['code']]) || isset($seenTypes[$type['code']])) {
+                throw new AccountingException(
+                    "Type de compte CSV inconnu ou dupliqué : {$type['code']}."
+                );
+            }
+            $seenTypes[$type['code']] = true;
+            if ((string) $knownTypes[$type['code']]['libelle'] !== $type['label']) {
+                $typeUpdates++;
+            }
+        }
+        foreach ($prefixes as $prefix) {
+            $this->assertPrefix($prefix);
+        }
+        if (count(array_unique($prefixes)) !== count($prefixes)) {
+            throw new AccountingException('Une règle de sens est dupliquée dans le CSV.');
+        }
+
+        $currentRubrics = $this->rubrics($organisationId, $dossierId);
+        $currentByCode = [];
+        $currentBySubgroup = [];
+        $currentRubricsById = [];
+        foreach ($currentRubrics as $rubric) {
+            $currentRubricsById[(int) $rubric['id']] = $rubric;
+            if ((string) $rubric['code'] !== '') {
+                $currentByCode[(string) $rubric['code']] = $rubric;
+            }
+        }
+        foreach ($currentRubrics as $rubric) {
+            if ((string) $rubric['code'] === '') {
+                $parent = $currentRubricsById[(int) $rubric['parent_id']] ?? null;
+                $currentBySubgroup[
+                    (string) ($parent['code'] ?? '') . '|'
+                    . $this->csvKey((string) $rubric['libelle'])
+                ] = $rubric;
+            }
+        }
+        $plannedByCode = [];
+        foreach ($currentByCode as $code => $rubric) {
+            $plannedByCode[$code] = [
+                'level' => (string) $rubric['niveau_structure'],
+                'type' => (string) $rubric['type'],
+            ];
+        }
+        usort($rubricRows, static fn (array $a, array $b): int =>
+            array_search($a['niveau'], self::STRUCTURE_LEVELS, true)
+                <=> array_search($b['niveau'], self::STRUCTURE_LEVELS, true)
+            ?: $a['ordre'] <=> $b['ordre']
+        );
+        $rubrics = [];
+        $seenRubrics = [];
+        $rubricCreates = 0;
+        $rubricUpdates = 0;
+        foreach ($rubricRows as $row) {
+            $level = $row['niveau'];
+            $code = $row['code'];
+            $label = $this->requiredCsvLabel($row);
+            $this->assertStructureCode($level, $code);
+            $expectedParent = self::PARENT_LEVEL[$level] ?? null;
+            $parentCode = $row['parent_code'];
+            if (
+                ($expectedParent === null && $parentCode !== '')
+                || ($expectedParent !== null && (
+                    !isset($plannedByCode[$parentCode])
+                    || $plannedByCode[$parentCode]['level'] !== $expectedParent
+                ))
+            ) {
+                throw new AccountingException(
+                    "Parent invalide à la ligne {$row['_line']}."
+                );
+            }
+            $type = $expectedParent === null
+                ? $row['type_compte']
+                : $plannedByCode[$parentCode]['type'];
+            if (!in_array($type, self::TYPES, true)) {
+                throw new AccountingException(
+                    "Type comptable invalide à la ligne {$row['_line']}."
+                );
+            }
+            $key = $code !== ''
+                ? $code
+                : $parentCode . '|' . $this->csvKey($label);
+            if (isset($seenRubrics[$key])) {
+                throw new AccountingException(
+                    "Rubrique dupliquée à la ligne {$row['_line']}."
+                );
+            }
+            $seenRubrics[$key] = true;
+            $existing = $code !== ''
+                ? ($currentByCode[$code] ?? null)
+                : ($currentBySubgroup[$key] ?? null);
+            if (
+                $existing !== null
+                && (string) $existing['niveau_structure'] !== $level
+            ) {
+                throw new AccountingException(
+                    "Le code {$code} existe déjà à un autre niveau."
+                );
+            }
+            if ($existing === null) {
+                $rubricCreates++;
+            } elseif (
+                (string) $existing['libelle'] !== $label
+                || (string) $existing['type'] !== $type
+                || (string) ($currentRubricsById[(int) ($existing['parent_id'] ?? 0)]['code'] ?? '')
+                    !== $parentCode
+            ) {
+                $rubricUpdates++;
+            }
+            $plannedByCode[$code] = ['level' => $level, 'type' => $type];
+            $rubrics[] = [
+                'level' => $level,
+                'code' => $code,
+                'label' => $label,
+                'parent_code' => $parentCode,
+                'type' => $type,
+                'order' => $row['ordre'],
+            ];
+        }
+
+        $currentAccounts = [];
+        foreach ($this->accounts($organisationId, $dossierId) as $account) {
+            $currentAccounts[(string) $account['numero']] = $account;
+        }
+        $accounts = [];
+        $seenAccounts = [];
+        $accountCreates = 0;
+        $accountUpdates = 0;
+        foreach ($accountRows as $row) {
+            $number = $row['code'];
+            $this->assertNumber($number);
+            if (isset($seenAccounts[$number])) {
+                throw new AccountingException("Compte {$number} dupliqué dans le CSV.");
+            }
+            $seenAccounts[$number] = true;
+            $parentCode = $row['parent_code'];
+            $parent = $plannedByCode[$parentCode] ?? null;
+            if (
+                $parent === null
+                || !in_array($parent['level'], ['groupe_principal', 'groupe'], true)
+            ) {
+                throw new AccountingException(
+                    "Rubrique du compte {$number} absente ou incompatible."
+                );
+            }
+            $sense = $row['sens'];
+            if (!in_array($sense, ['automatique', 'debit', 'credit'], true)) {
+                throw new AccountingException("Sens invalide pour le compte {$number}.");
+            }
+            $label = $this->requiredCsvLabel($row);
+            $existing = $currentAccounts[$number] ?? null;
+            if ($existing !== null && (int) $existing['actif'] !== 1) {
+                throw new AccountingException(
+                    "Le compte {$number} est désactivé ; réactivez-le manuellement avant l’import."
+                );
+            }
+            if ($existing === null) {
+                $accountCreates++;
+            } elseif (
+                (string) $existing['libelle'] !== $label
+                || (string) $existing['sens_mode'] !== $sense
+                || (string) $existing['rubrique_code'] !== $parentCode
+            ) {
+                $accountUpdates++;
+            }
+            $accounts[] = [
+                'number' => $number,
+                'label' => $label,
+                'parent_code' => $parentCode,
+                'type' => $parent['type'],
+                'sense' => $sense,
+                'order' => $row['ordre'],
+            ];
+        }
+        if ($rubrics === [] || $accounts === []) {
+            throw new AccountingException(
+                'Le CSV doit contenir au moins une rubrique et un compte.'
+            );
+        }
+        return [
+            'specifications' => [
+                'types' => $types,
+                'prefixes' => array_values(array_unique($prefixes)),
+                'rubrics' => $rubrics,
+                'accounts' => $accounts,
+            ],
+            'summary' => [
+                'rows' => count($rows),
+                'type_updates' => $typeUpdates,
+                'rubric_creates' => $rubricCreates,
+                'rubric_updates' => $rubricUpdates,
+                'account_creates' => $accountCreates,
+                'account_updates' => $accountUpdates,
+            ],
+        ];
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function parseCsv(string $csv): array
+    {
+        $stream = fopen('php://temp', 'w+');
+        if ($stream === false) {
+            throw new AccountingException('Impossible de lire le CSV.');
+        }
+        fwrite($stream, $csv);
+        rewind($stream);
+        $headers = fgetcsv($stream, 0, ';', '"', '');
+        if (is_array($headers) && isset($headers[0])) {
+            $headers[0] = preg_replace('/^\xEF\xBB\xBF/', '', $headers[0]) ?? $headers[0];
+        }
+        $expected = [
+            'type_ligne', 'niveau', 'code', 'libelle', 'parent_code',
+            'type_compte', 'sens', 'ordre',
+        ];
+        if ($headers !== $expected) {
+            fclose($stream);
+            throw new AccountingException(
+                'En-tête CSV invalide. Utilisez un fichier exporté par COMPTA.'
+            );
+        }
+        $rows = [];
+        $line = 1;
+        while (($values = fgetcsv($stream, 0, ';', '"', '')) !== false) {
+            $line++;
+            if ($values === [null] || $values === []) {
+                continue;
+            }
+            if (count($values) !== count($expected)) {
+                fclose($stream);
+                throw new AccountingException("Nombre de colonnes invalide à la ligne {$line}.");
+            }
+            $row = array_combine($expected, array_map(
+                fn (mixed $value): string => $this->unescapeCsvCell(trim((string) $value)),
+                $values
+            ));
+            if (!is_array($row)) {
+                fclose($stream);
+                throw new AccountingException("Ligne CSV invalide : {$line}.");
+            }
+            if (preg_match('/^[0-9]+$/', $row['ordre']) !== 1) {
+                fclose($stream);
+                throw new AccountingException("Ordre invalide à la ligne {$line}.");
+            }
+            $row['ordre'] = (int) $row['ordre'];
+            $row['_line'] = $line;
+            $rows[] = $row;
+            if (count($rows) > 5_000) {
+                fclose($stream);
+                throw new AccountingException('Le CSV dépasse 5 000 lignes.');
+            }
+        }
+        fclose($stream);
+        if ($rows === []) {
+            throw new AccountingException('Le CSV ne contient aucune donnée.');
+        }
+        return $rows;
+    }
+
+    /** @param resource $stream @param list<mixed> $values */
+    private function writeCsvRow($stream, array $values): void
+    {
+        fputcsv($stream, array_map(
+            fn (mixed $value): string => $this->escapeCsvCell((string) $value),
+            $values
+        ), ';', '"', '');
+    }
+
+    private function requiredCsvLabel(array $row): string
+    {
+        $label = trim((string) $row['libelle']);
+        if ($label === '') {
+            throw new AccountingException(
+                "Libellé requis à la ligne {$row['_line']}."
+            );
+        }
+        return $label;
+    }
+
+    private function escapeCsvCell(string $value): string
+    {
+        return preg_match('/^[=+@-]/', $value) === 1 ? "'" . $value : $value;
+    }
+
+    private function unescapeCsvCell(string $value): string
+    {
+        return preg_match("/^'[=+@-]/", $value) === 1 ? substr($value, 1) : $value;
+    }
+
+    private function csvKey(string $value): string
+    {
+        return mb_strtolower(trim($value), 'UTF-8');
+    }
+
     public function ensureOpeningJournal(
         int $organisationId,
         int $dossierId,

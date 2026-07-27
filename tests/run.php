@@ -4771,6 +4771,54 @@ final class Tests
             $plan->headers['Location'] ?? '',
             'plan comptable servi par Configuration Vue'
         );
+        $chartCsv = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/chart/export'
+        ));
+        $this->same(
+            'text/csv; charset=UTF-8',
+            $chartCsv->headers['Content-Type'] ?? '',
+            'plan comptable exporté en CSV par l’API'
+        );
+        $chartPreviewNoCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/import/preview',
+            json: ['data' => ['csv' => $chartCsv->body]]
+        ));
+        $this->same(
+            403,
+            $chartPreviewNoCsrf->status,
+            'prévisualisation CSV protégée par CSRF'
+        );
+        $chartPreview = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/import/preview',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['csv' => $chartCsv->body]]
+        ));
+        $this->same(200, $chartPreview->status, 'plan CSV prévisualisé par l’API');
+        $chartPreviewJson = $this->responseJson($chartPreview);
+        $this->true(
+            preg_match(
+                '/^[a-f0-9]{64}$/',
+                (string) ($chartPreviewJson['data']['fingerprint'] ?? '')
+            ) === 1,
+            'prévisualisation liée à une empreinte du plan courant'
+        );
+        $chartImport = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/import',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'csv' => $chartCsv->body,
+                'fingerprint' => $chartPreviewJson['data']['fingerprint'] ?? '',
+            ]]
+        ));
+        $this->same(
+            200,
+            $chartImport->status,
+            'import CSV validé et appliqué atomiquement par l’API'
+        );
         $this->true(
             !is_file(dirname(__DIR__) . '/templates/compta/plan.php')
             && !is_file(dirname(__DIR__) . '/templates/compta/report.php')
@@ -5800,6 +5848,95 @@ final class Tests
             $ids['organisation_a'],
             $ids['dossier_a'],
             $manualAccount
+        );
+        $chartCsv = $chart->exportCsv(
+            $ids['organisation_a'],
+            $ids['dossier_a']
+        );
+        $this->true(
+            str_starts_with(
+                $chartCsv,
+                "\xEF\xBB\xBFtype_ligne;niveau;code;libelle;parent_code;"
+            ),
+            'plan comptable exporté en CSV UTF-8 structuré'
+        );
+        $chartPreview = $chart->previewCsv(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $chartCsv
+        );
+        $this->same(
+            0,
+            $chartPreview['summary']['account_updates'],
+            'réimport sans modification prévisualisé sans faux positif'
+        );
+        $modifiedChartCsv = str_replace(
+            ';1000;Caisse;',
+            ';1000;Caisse importée;',
+            $chartCsv
+        );
+        $this->true(
+            $modifiedChartCsv !== $chartCsv,
+            'modification CSV de test appliquée'
+        );
+        $modifiedPreview = $chart->previewCsv(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $modifiedChartCsv
+        );
+        $this->same(
+            1,
+            $modifiedPreview['summary']['account_updates'],
+            'modification de compte identifiée avant import'
+        );
+        $chart->importCsv(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $modifiedChartCsv,
+            $modifiedPreview['fingerprint'],
+            $reportActorId
+        );
+        $this->same(
+            'Caisse importée',
+            (string) $pdo->query(
+                "SELECT libelle FROM comptes
+                 WHERE dossier_id = {$ids['dossier_a']} AND numero = '1000'"
+            )->fetchColumn(),
+            'import CSV appliqué atomiquement'
+        );
+        $this->throws(
+            fn () => $chart->importCsv(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $modifiedChartCsv,
+                $modifiedPreview['fingerprint'],
+                $reportActorId
+            ),
+            'empreinte périmée refuse un import concurrent'
+        );
+        $invalidChartCsv = preg_replace(
+            '/^compte;;1000;([^;]+);100;/m',
+            'compte;;1000;$1;X;',
+            $chart->exportCsv($ids['organisation_a'], $ids['dossier_a']),
+            1,
+            $invalidReplacementCount
+        );
+        $this->same(1, $invalidReplacementCount, 'CSV invalide de test préparé');
+        $this->throws(
+            fn () => $chart->previewCsv(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                (string) $invalidChartCsv
+            ),
+            'rubrique inconnue refuse tout le CSV avant mutation'
+        );
+        $this->same(
+            'Caisse importée',
+            (string) $pdo->query(
+                "SELECT libelle FROM comptes
+                 WHERE dossier_id = {$ids['dossier_a']} AND numero = '1000'"
+            )->fetchColumn(),
+            'échec de prévisualisation sans mutation partielle'
         );
 
         $bank = $this->accountId($pdo, $ids['dossier_a'], '1020');

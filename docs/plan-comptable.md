@@ -53,8 +53,10 @@ classe : les groupes principaux, groupes et comptes l’héritent de leur parent
 Les rubriques et comptes dont le numéro commence par `9` appartiennent
 obligatoirement au type `hors_bilan`.
 Les rubriques peuvent être créées, renommées, déplacées vers un parent valide
-et réordonnées par glisser-déposer. Une rubrique encore liée à des enfants ou
-à des comptes doit d’abord être vidée avant son retrait.
+et réordonnées. Les modifications d’un niveau sont conservées localement puis
+appliquées ensemble par le bouton **Enregistrer** de la barre d’onglets. Une
+rubrique encore liée à des enfants ou à des comptes doit d’abord être vidée
+avant son retrait.
 
 ## 3. Comptes
 
@@ -92,7 +94,37 @@ immuable et toute correction passe par une contre-passation.
 
 Les fonctions sont présentées dans cet ordre : types de comptes, règles de
 sens, rubriques, comptes et ouverture. Les niveaux structurels ont leurs
-propres contrôles compacts. Les tableaux s’étendent avec leur contenu : aucun
-ascenseur vertical interne ne concurrence celui de la page. Vue ne calcule
-aucune règle comptable ; toutes les mutations appellent l'API et les services
-PHP qui alimentaient déjà le moteur.
+propres contrôles compacts. Le bouton d’enregistrement contextuel reste à
+droite de cette barre lorsque la page défile. Il enregistre en une seule
+transaction les modifications du sous-menu courant ; sous **Ouverture**, il
+enregistre le brouillon sans le valider.
+
+Les tableaux s’étendent avec leur contenu : aucun ascenseur vertical interne
+ne concurrence celui de la page. Vue ne calcule aucune règle comptable ;
+toutes les mutations appellent l'API et les services PHP qui alimentaient déjà
+le moteur.
+
+## Importer ou exporter un CSV
+
+**Exporter CSV** produit un fichier UTF-8 séparé par des points-virgules. Il
+contient les types, les règles de sens, les quatre niveaux de rubriques et les
+comptes actifs. Les cellules susceptibles d’être interprétées comme des
+formules par un tableur sont neutralisées.
+
+Pour réimporter un fichier :
+
+1. partir de préférence d’un export COMPTA ;
+2. conserver exactement l’en-tête et les types de lignes ;
+3. choisir **Importer CSV** puis vérifier la prévisualisation ;
+4. confirmer uniquement le nombre attendu de créations et modifications.
+
+Le serveur limite le fichier à 2 Mo et 5 000 lignes. Il contrôle les numéros,
+les doublons, les niveaux, les parents, les types et les sens avant toute
+écriture. L’import est transactionnel : une seule erreur annule tout le lot.
+L’empreinte de la prévisualisation empêche également d’écraser un plan modifié
+entre-temps par une autre session.
+
+L’import suit volontairement une stratégie non destructive : il crée ou met à
+jour les lignes présentes, mais ne supprime ni ne désactive les lignes absentes
+du fichier. Il ne touche jamais aux écritures, aux soldes ni aux comptes déjà
+désactivés.

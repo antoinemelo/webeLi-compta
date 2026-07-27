@@ -701,6 +701,25 @@ final class AccountingWorkspaceService
         array $data,
         int $actorId,
     ): void {
+        if ($data['action'] === 'save_batch') {
+            $this->chart->saveRubricsBatch(
+                $organisationId,
+                $dossierId,
+                $data['structure_level'],
+                array_map(static fn (array $row): array => [
+                    'id' => $row['id'],
+                    'code' => $row['code'],
+                    'libelle' => $row['label'],
+                    'type' => $row['type'],
+                    'parent_id' => $row['parent_id'],
+                    'ordre' => $row['position'],
+                    'version' => $row['version'],
+                ], $data['rubrics']),
+                $data['ordered_ids'],
+                $actorId
+            );
+            return;
+        }
         if ($data['action'] === 'delete') {
             $this->chart->removeRubric(
                 $organisationId,
@@ -731,6 +750,41 @@ final class AccountingWorkspaceService
             $data['parent_id'],
             $data['position'],
             $data['id'] > 0 ? $data['version'] : null,
+            $actorId
+        );
+    }
+
+    /** @return array{content:string,filename:string} */
+    public function exportChart(int $organisationId, int $dossierId): array
+    {
+        return [
+            'content' => $this->chart->exportCsv($organisationId, $dossierId),
+            'filename' => 'plan-comptable-' . $dossierId . '.csv',
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function previewChartImport(
+        int $organisationId,
+        int $dossierId,
+        string $csv,
+    ): array {
+        return $this->chart->previewCsv($organisationId, $dossierId, $csv);
+    }
+
+    /** @return array<string,mixed> */
+    public function importChart(
+        int $organisationId,
+        int $dossierId,
+        string $csv,
+        string $fingerprint,
+        int $actorId,
+    ): array {
+        return $this->chart->importCsv(
+            $organisationId,
+            $dossierId,
+            $csv,
+            $fingerprint,
             $actorId
         );
     }

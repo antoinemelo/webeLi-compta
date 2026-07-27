@@ -146,6 +146,63 @@ final class AccountingApiController
         });
     }
 
+    public function exportChart(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.export');
+        return $this->raw(function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $request
+        ): Response {
+            $export = $this->workspace->exportChart($organisationId, $dossierId);
+            $this->audit->log(
+                'compta.plan_csv_exporte',
+                $userId,
+                $organisationId,
+                $dossierId,
+                'plan_comptable',
+                (string) $dossierId,
+                [],
+                $request->ip()
+            );
+            return new Response($export['content'], 200, [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' =>
+                    'attachment; filename="' . $export['filename'] . '"',
+                'X-Content-Type-Options' => 'nosniff',
+            ]);
+        });
+    }
+
+    public function previewChartImport(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->chartImport($request, false);
+        return $this->execute($request, fn (): array =>
+            $this->workspace->previewChartImport(
+                $organisationId,
+                $dossierId,
+                $data['csv']
+            )
+        );
+    }
+
+    public function importChart(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $data = $this->validator->chartImport($request, true);
+        return $this->execute($request, fn (): array =>
+            $this->workspace->importChart(
+                $organisationId,
+                $dossierId,
+                $data['csv'],
+                $data['fingerprint'],
+                $userId
+            )
+        );
+    }
+
     public function createVatPeriod(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');
