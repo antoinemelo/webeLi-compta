@@ -1164,10 +1164,10 @@ test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page
   await page.getByLabel('Fournisseur', { exact: true }).selectOption({
     label: 'Fournitures E2E SA'
   });
-  await page.getByLabel('Numéro fournisseur').fill('E2E-DEP-001');
+  await page.getByLabel('Référence fournisseur').fill('E2E-DEP-001');
   await page.getByLabel('Date du document').fill('2026-07-20');
   await page.getByLabel('Échéance').fill('2026-08-19');
-  const payable = page.getByLabel('Compte collectif fournisseur');
+  const payable = page.getByLabel('Paiement fournisseur');
   await chooseAccount(payable, '2000');
   await expect(page.getByLabel('Justificatif facultatif')).toBeVisible();
   await page.getByLabel('Libellé', { exact: true }).fill('Fournitures de bureau');
@@ -1179,6 +1179,14 @@ test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page
   const row = page.getByRole('row').filter({ hasText: 'Fournitures E2E SA' });
   await expect(row).toContainText('108.10 CHF');
   await expect(row).toContainText('Brouillon');
+  await row.getByRole('button', { name: /Brouillon #/ }).click();
+  const detail = page.getByRole('article').filter({ hasText: 'Détail de la dépense' });
+  await expect(detail).toContainText('Référence fournisseur');
+  await expect(detail).toContainText('E2E-DEP-001');
+  await expect(detail).toContainText('2000 Dettes');
+  await expect(detail).toContainText("6500 Charges d'administration");
+  await expect(detail).toContainText('AM81');
+  await detail.getByRole('button', { name: 'Fermer' }).click();
   await row.getByRole('button', { name: 'Soumettre' }).click();
   await expect(row).toContainText('À approuver');
   await row.getByRole('button', { name: 'Approuver' }).click();

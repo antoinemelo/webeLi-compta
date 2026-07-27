@@ -485,6 +485,8 @@ final class ExpenseService
     {
         $expenses = $this->pdo->prepare(
             "SELECT d.*, c.raison_sociale, c.prenom, c.nom,
+                    collectif.numero AS compte_collectif_numero,
+                    collectif.libelle AS compte_collectif_libelle,
                     p.nom_fichier AS justificatif_nom,
                     p.type_mime AS justificatif_type,
                     p.taille_octets AS justificatif_taille,
@@ -494,6 +496,7 @@ final class ExpenseService
                     ), 0) AS alloue_centimes
              FROM documents_financiers d
              JOIN contacts c ON c.id = d.contact_id
+             JOIN comptes collectif ON collectif.id = d.compte_collectif_id
              LEFT JOIN pieces_jointes p ON p.id = d.justificatif_id
              WHERE d.organisation_id = ? AND d.dossier_id = ?
                AND d.workflow = 'depense'
@@ -526,6 +529,11 @@ final class ExpenseService
                     0,
                     (int) $row['total_brut_centimes'] - (int) $row['alloue_centimes']
                 ),
+                'collective_account' => [
+                    'id' => (int) $row['compte_collectif_id'],
+                    'number' => (string) $row['compte_collectif_numero'],
+                    'label' => (string) $row['compte_collectif_libelle'],
+                ],
                 'attachment' => $row['justificatif_id'] === null ? null : [
                     'id' => (int) $row['justificatif_id'],
                     'name' => (string) $row['justificatif_nom'],
@@ -543,7 +551,11 @@ final class ExpenseService
                     'unit_price_cents' => (int) $line['prix_unitaire_centimes'],
                     'input_mode' => (string) $line['mode_saisie'],
                     'account_id' => (int) $line['compte_id'],
+                    'account_number' => (string) $line['compte_numero'],
+                    'account_label' => (string) $line['compte_libelle'],
                     'vat_code_id' => (int) $line['code_tva_id'],
+                    'vat_code' => (string) $line['code_tva'],
+                    'vat_label' => (string) $line['libelle_tva'],
                     'net_cents' => (int) $line['base_nette_centimes'],
                     'vat_cents' => (int) $line['tva_centimes'],
                     'gross_cents' => (int) $line['total_brut_centimes'],
@@ -761,7 +773,7 @@ final class ExpenseService
                AND EXISTS(
                  SELECT 1 FROM comptes
                  WHERE id = ? AND organisation_id = ?
-                   AND dossier_id = ? AND actif = 1
+                   AND dossier_id = ? AND actif = 1 AND imputable = 1
                )"
         );
         $stmt->execute([

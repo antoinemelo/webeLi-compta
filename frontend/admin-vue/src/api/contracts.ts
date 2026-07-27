@@ -473,7 +473,11 @@ export type ExpenseLine = {
   unit_price_cents: number;
   input_mode: 'net' | 'brut';
   account_id: number;
+  account_number: string;
+  account_label: string;
   vat_code_id: number;
+  vat_code: string;
+  vat_label: string;
   net_cents: number;
   vat_cents: number;
   gross_cents: number;
@@ -495,6 +499,7 @@ export type ExpenseItem = {
   gross_cents: number;
   allocated_cents: number;
   open_cents: number;
+  collective_account: { id: number; number: string; label: string };
   attachment: null | { id: number; name: string; type: string; size: number };
   entry_id: number | null;
   reversal_entry_id: number | null;
@@ -531,6 +536,7 @@ export type TreasuryWorkspace = {
   treasury_accounts: Array<{
     id: number; label: string; type: string; iban: string; bic: string;
     currency: string; ledger_account_id: number; ledger_number: string;
+    ledger_label: string;
   }>;
   imports: Array<{
     id: number; treasury_account_id: number; format: string; filename: string;
@@ -604,6 +610,7 @@ export type TreasuryWorkspace = {
     treasury_accounts: Array<{
       id: number; label: string; type: string; iban: string; bic: string;
       currency: string; ledger_account_id: number; ledger_number: string;
+      ledger_label: string;
     }>;
   };
   capabilities: {

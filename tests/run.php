@@ -10434,6 +10434,43 @@ final class Tests
         $this->same(810, $created['vat_cents'], 'TVA de dépense exacte au centime');
         $this->same(10810, $created['gross_cents'], 'dépense brute exacte au centime');
         $this->same(
+            [
+                'id' => $payable,
+                'number' => '2000',
+                'label' => "Dettes résultant de l'achat de biens et de "
+                    . 'prestations de services (Créanciers)',
+            ],
+            $created['collective_account'],
+            'détail de dépense expose le compte de paiement fournisseur'
+        );
+        $this->same(
+            [
+                'account_number' => '6500',
+                'vat_code' => 'AM81',
+            ],
+            [
+                'account_number' => $created['lines'][0]['account_number'],
+                'vat_code' => $created['lines'][0]['vat_code'],
+            ],
+            'détail de dépense expose compte et code TVA de chaque ligne'
+        );
+        $catalogAccountIds = array_column(
+            $expenses->read($organisationId, $dossierId)['catalog']['accounts'],
+            'id'
+        );
+        $nonPostingAccounts = array_map(
+            'intval',
+            $pdo->query(
+                "SELECT id FROM comptes
+                 WHERE dossier_id = {$dossierId} AND imputable = 0"
+            )->fetchAll(PDO::FETCH_COLUMN)
+        );
+        $this->same(
+            [],
+            array_values(array_intersect($catalogAccountIds, $nonPostingAccounts)),
+            'sélecteurs métier limités aux comptes imputables'
+        );
+        $this->same(
             0,
             (int) $pdo->query('SELECT COUNT(*) FROM ecritures')->fetchColumn(),
             'création sans comptabilisation automatique'

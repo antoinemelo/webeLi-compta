@@ -842,7 +842,8 @@ final class PayrollConfigurationService
         $tariffs->execute([$organisationId, $dossierId]);
         $accounts = $this->pdo->prepare(
             'SELECT id, numero, libelle FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND imputable = 1
              ORDER BY length(numero), numero'
         );
         $accounts->execute([$organisationId, $dossierId]);
@@ -870,8 +871,9 @@ final class PayrollConfigurationService
         $contracts->execute([$organisationId, $dossierId]);
         $treasury = $this->pdo->prepare(
             "SELECT id, numero, libelle FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
-               AND type = 'actif' ORDER BY numero"
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND imputable = 1 AND type = 'actif'
+             ORDER BY numero"
         );
         $treasury->execute([$organisationId, $dossierId]);
         return [

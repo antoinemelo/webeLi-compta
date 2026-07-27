@@ -726,7 +726,8 @@ final class ManagedReferencesService
         }
         $accounts = $this->pdo->prepare(
             'SELECT id, numero, libelle FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND imputable = 1
              ORDER BY length(numero), numero'
         );
         $accounts->execute([$organisationId, $dossierId]);

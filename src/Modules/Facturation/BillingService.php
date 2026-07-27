@@ -704,9 +704,12 @@ final class BillingService
     public function lines(int $documentId): array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT l.*, c.compte_tva_id
+            'SELECT l.*, c.compte_tva_id,
+                    c.code AS code_tva, c.libelle AS libelle_tva,
+                    a.numero AS compte_numero, a.libelle AS compte_libelle
              FROM lignes_document l
              JOIN tva_codes c ON c.id = l.code_tva_id
+             JOIN comptes a ON a.id = l.compte_id
              WHERE l.document_id = ? ORDER BY l.ordre'
         );
         $stmt->execute([$documentId]);
@@ -750,7 +753,8 @@ final class BillingService
     {
         $accounts = $this->pdo->prepare(
             'SELECT id, numero, libelle FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND imputable = 1
              ORDER BY length(numero), numero, ordre, id'
         );
         $accounts->execute([$organisationId, $dossierId]);

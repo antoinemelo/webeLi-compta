@@ -22,10 +22,11 @@ final class TreasuryWorkspaceService
         $accounts = $this->query(
             'SELECT t.id, t.libelle AS label, t.type, t.iban, t.bic, t.monnaie AS currency,
                     t.compte_comptable_id AS ledger_account_id,
-                    c.numero AS ledger_number
+                    c.numero AS ledger_number, c.libelle AS ledger_label
              FROM comptes_tresorerie t
              JOIN comptes c ON c.id = t.compte_comptable_id
-             WHERE t.organisation_id = ? AND t.dossier_id = ? AND t.actif = 1
+             WHERE t.organisation_id = ? AND t.dossier_id = ?
+               AND t.actif = 1 AND c.actif = 1 AND c.imputable = 1
              ORDER BY t.libelle',
             [$organisationId, $dossierId]
         );

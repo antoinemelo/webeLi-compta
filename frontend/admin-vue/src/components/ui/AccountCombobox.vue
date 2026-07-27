@@ -78,7 +78,7 @@ function optionLabel(option: AccountOption): string {
 function displayLabel(option: AccountOption): string {
   const number = optionNumber(option);
   const label = optionLabel(option);
-  return number && label ? `${number} — ${label}` : number || label;
+  return number && label ? `${number} ${label}` : number || label;
 }
 
 function comparable(value: string | number | null | undefined): string {

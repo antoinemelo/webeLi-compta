@@ -35,7 +35,7 @@ final class ExpenseInputValidator
             !is_string($data['external_number'] ?? null)
             || trim((string) $data['external_number']) === ''
         ) {
-            $errors['external_number'][] = 'Numéro fournisseur requis.';
+            $errors['external_number'][] = 'Référence fournisseur requise.';
         }
         $lines = $this->lines($data['lines'] ?? null, $errors);
         $attachment = $this->attachment($data['attachment'] ?? null, $errors);

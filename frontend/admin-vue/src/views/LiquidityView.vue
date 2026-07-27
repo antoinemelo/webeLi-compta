@@ -271,6 +271,29 @@ function statusLabel(status: string): string {
   }[status] || status;
 }
 
+function dateLabel(value: string): string {
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return value || '—';
+  return new Intl.DateTimeFormat('fr-CH', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'UTC'
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} octets`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} Ko`;
+  return `${(bytes / (1024 * 1024)).toLocaleString('fr-CH', {
+    maximumFractionDigits: 1
+  })} Mo`;
+}
+
+function accountLabel(number: string, label: string): string {
+  return [number, label].filter(Boolean).join(' ');
+}
+
 function apiLines(lines: DraftLine[], date: string): Array<Record<string, unknown>> {
   return lines.map((line) => ({
     libelle: line.libelle,
@@ -692,7 +715,7 @@ async function toggleRecurrence(item: {
               </select>
             </template>
           </FormField>
-          <FormField id="expense-number" label="Numéro fournisseur">
+          <FormField id="expense-number" label="Référence fournisseur">
             <template #default="{ describedBy }">
               <input id="expense-number" v-model="expense.external_number" :aria-describedby="describedBy" required>
             </template>
@@ -703,7 +726,7 @@ async function toggleRecurrence(item: {
           <FormField id="expense-due" label="Échéance">
             <template #default="{ describedBy }"><input id="expense-due" v-model="expense.due_date" type="date" :aria-describedby="describedBy" required></template>
           </FormField>
-          <FormField id="expense-collective" label="Compte collectif fournisseur">
+          <FormField id="expense-collective" label="Paiement fournisseur">
             <template #default="{ describedBy }">
               <AccountCombobox
                 id="expense-collective"
@@ -789,23 +812,97 @@ async function toggleRecurrence(item: {
       </DataTable>
       <EmptyState v-else title="Aucune dépense" description="Ajoutez une dépense ponctuelle ou générez une échéance récurrente." />
 
-      <article v-if="selected" class="detail-card">
-        <div>
-          <p class="eyebrow">Détail</p>
-          <h3>{{ selected.number || `Brouillon #${selected.id}` }}</h3>
-          <p>{{ selected.supplier }} · {{ selected.external_number }}</p>
-        </div>
-        <dl class="detail-grid">
-          <div><dt>Net</dt><dd>{{ money(selected.net_cents) }}</dd></div>
-          <div><dt>TVA</dt><dd>{{ money(selected.vat_cents) }}</dd></div>
-          <div><dt>Brut</dt><dd>{{ money(selected.gross_cents) }}</dd></div>
-          <div><dt>Justificatif</dt><dd>{{ selected.attachment?.name || 'Absent' }}</dd></div>
+      <article v-if="selected" class="detail-card expense-detail">
+        <header class="expense-detail-heading">
+          <div>
+            <p class="eyebrow">Détail de la dépense</p>
+            <div class="expense-title-row">
+              <h3>{{ selected.number || `Brouillon #${selected.id}` }}</h3>
+              <span :class="['status-chip', `status-${selected.status}`]">
+                {{ statusLabel(selected.status) }}
+              </span>
+            </div>
+            <p>{{ selected.supplier }}</p>
+          </div>
+          <button class="button ghost small" type="button" @click="selectedId = 0">
+            Fermer
+          </button>
+        </header>
+
+        <dl class="expense-metadata">
+          <div>
+            <dt>Référence fournisseur</dt>
+            <dd>{{ selected.external_number || '—' }}</dd>
+          </div>
+          <div>
+            <dt>Date du document</dt>
+            <dd>{{ dateLabel(selected.document_date) }}</dd>
+          </div>
+          <div>
+            <dt>Échéance</dt>
+            <dd>{{ dateLabel(selected.due_date) }}</dd>
+          </div>
+          <div>
+            <dt>Paiement fournisseur</dt>
+            <dd>{{ accountLabel(selected.collective_account.number, selected.collective_account.label) }}</dd>
+          </div>
+          <div>
+            <dt>Montant payé</dt>
+            <dd>{{ money(selected.allocated_cents, selected.currency) }}</dd>
+          </div>
+          <div>
+            <dt>Solde ouvert</dt>
+            <dd>{{ money(selected.open_cents, selected.currency) }}</dd>
+          </div>
+          <div>
+            <dt>Écriture comptable</dt>
+            <dd>{{ selected.entry_id ? `#${selected.entry_id}` : 'Non comptabilisée' }}</dd>
+          </div>
+          <div>
+            <dt>Justificatif</dt>
+            <dd v-if="selected.attachment">
+              {{ selected.attachment.name }}
+              <small>{{ selected.attachment.type }} · {{ fileSize(selected.attachment.size) }}</small>
+            </dd>
+            <dd v-else>Absent</dd>
+          </div>
         </dl>
-        <ul>
-          <li v-for="line in selected.lines" :key="line.id">
-            {{ line.label }} — {{ money(line.net_cents) }} + {{ money(line.vat_cents) }} TVA
-          </li>
-        </ul>
+
+        <div class="expense-lines">
+          <h4>Ventilation</h4>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Libellé</th>
+                  <th>Compte</th>
+                  <th>TVA</th>
+                  <th class="amount">Net</th>
+                  <th class="amount">TVA</th>
+                  <th class="amount">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="line in selected.lines" :key="line.id">
+                  <td>{{ line.label }}</td>
+                  <td>{{ accountLabel(line.account_number, line.account_label) }}</td>
+                  <td><strong>{{ line.vat_code }}</strong><small>{{ line.vat_label }}</small></td>
+                  <td class="amount">{{ money(line.net_cents, selected.currency) }}</td>
+                  <td class="amount">{{ money(line.vat_cents, selected.currency) }}</td>
+                  <td class="amount">{{ money(line.gross_cents, selected.currency) }}</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th colspan="3">Total</th>
+                  <th class="amount">{{ money(selected.net_cents, selected.currency) }}</th>
+                  <th class="amount">{{ money(selected.vat_cents, selected.currency) }}</th>
+                  <th class="amount">{{ money(selected.gross_cents, selected.currency) }}</th>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
       </article>
 
       <section class="recurrence-section">
@@ -821,7 +918,7 @@ async function toggleRecurrence(item: {
             <FormField id="rec-next" label="Prochaine échéance"><template #default="{ describedBy }"><input id="rec-next" v-model="recurrence.next_date" type="date" :aria-describedby="describedBy" required></template></FormField>
             <FormField id="rec-end" label="Fin facultative"><template #default="{ describedBy }"><input id="rec-end" v-model="recurrence.end_date" type="date" :aria-describedby="describedBy"></template></FormField>
             <FormField id="rec-prefix" label="Préfixe fournisseur"><template #default="{ describedBy }"><input id="rec-prefix" v-model="recurrence.external_prefix" :aria-describedby="describedBy" required></template></FormField>
-            <FormField id="rec-collective" label="Compte collectif"><template #default="{ describedBy }"><AccountCombobox id="rec-collective" v-model="recurrence.collective_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
+            <FormField id="rec-collective" label="Paiement fournisseur"><template #default="{ describedBy }"><AccountCombobox id="rec-collective" v-model="recurrence.collective_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
           </div>
           <fieldset v-for="(line, index) in recurrence.lines" :key="index" class="line-editor">
             <legend>Ligne {{ index + 1 }}</legend>
@@ -866,6 +963,8 @@ async function toggleRecurrence(item: {
                 id="statement-account"
                 v-model="importAccountId"
                 :options="treasury.workspace.treasury_accounts"
+                number-key="ledger_number"
+                label-key="ledger_label"
                 :aria-describedby="describedBy"
                 required
               />
@@ -960,6 +1059,8 @@ async function toggleRecurrence(item: {
           <AccountCombobox
             v-model="reconciliationAccountId"
             :options="treasury.workspace.treasury_accounts"
+            number-key="ledger_number"
+            label-key="ledger_label"
             aria-label="Compte à rapprocher"
             placeholder="Compte bancaire"
             required
@@ -1054,7 +1155,7 @@ async function toggleRecurrence(item: {
           <FormField id="matching-date" label="Date"><template #default="{ describedBy }"><input id="matching-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="matching-amount" label="Montant"><template #default="{ describedBy }"><input id="matching-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="matching-reference" label="Référence"><template #default="{ describedBy }"><input id="matching-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy"></template></FormField>
-          <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="matching-account" v-model="paymentDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" :aria-describedby="describedBy" required /></template></FormField>
+          <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="matching-account" v-model="paymentDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="ledger_label" :aria-describedby="describedBy" required /></template></FormField>
           <FormField id="matching-bank-line" label="Ligne bancaire facultative" hint="Le montant cumulé et le sens sont contrôlés côté serveur.">
             <template #default="{ describedBy }">
               <select id="matching-bank-line" v-model.number="paymentDraft.bank_line_id" :aria-describedby="describedBy">
@@ -1106,7 +1207,7 @@ async function toggleRecurrence(item: {
       <form v-if="treasury.workspace.capabilities.prepare_payments" class="editor-card" @submit.prevent="prepareBatch">
         <h3>Dettes approuvées et comptabilisées</h3>
         <div class="form-grid">
-          <FormField id="batch-account" label="Compte débiteur"><template #default="{ describedBy }"><AccountCombobox id="batch-account" v-model="batchDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" :aria-describedby="describedBy" required /></template></FormField>
+          <FormField id="batch-account" label="Compte débiteur"><template #default="{ describedBy }"><AccountCombobox id="batch-account" v-model="batchDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="ledger_label" :aria-describedby="describedBy" required /></template></FormField>
           <FormField id="batch-date" label="Date d’exécution"><template #default="{ describedBy }"><input id="batch-date" v-model="batchDraft.execution_date" type="date" :aria-describedby="describedBy" required></template></FormField>
         </div>
         <label v-for="debt in treasury.workspace.payable_debts" :key="debt.id" class="selection-row">
@@ -1389,6 +1490,25 @@ async function toggleRecurrence(item: {
 .detail-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .8rem; }
 .detail-grid dt { color: var(--muted); font-size: .8rem; }
 .detail-grid dd { margin: .2rem 0 0; font-weight: 750; }
+.expense-detail { display: grid; gap: 1.2rem; }
+.expense-detail-heading, .expense-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: .75rem; }
+.expense-detail-heading h3, .expense-lines h4 { margin: 0; }
+.expense-detail-heading p:not(.eyebrow) { margin: .3rem 0 0; color: var(--muted); }
+.expense-title-row { align-items: center; justify-content: flex-start; margin-top: .25rem; }
+.expense-metadata { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin: 0; }
+.expense-metadata div { min-width: 0; padding: .8rem; background: #f7f7fb; border: 1px solid var(--border); border-radius: .55rem; }
+.expense-metadata dt { color: var(--muted); font-size: .78rem; }
+.expense-metadata dd { margin: .3rem 0 0; overflow-wrap: anywhere; font-weight: 700; }
+.expense-metadata small, .expense-lines td small { display: block; margin-top: .2rem; color: var(--muted); font-size: .75rem; font-weight: 500; }
+.expense-lines { display: grid; gap: .65rem; }
+.expense-lines table { width: 100%; min-width: 760px; border-collapse: collapse; }
+.expense-lines th, .expense-lines td { padding: .7rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.expense-lines .amount { text-align: right; white-space: nowrap; }
+.expense-lines tfoot th { color: var(--ink); border-bottom: 0; }
+.status-chip { display: inline-flex; align-items: center; padding: .28rem .55rem; border-radius: 999px; color: var(--ink); background: #ebecf5; font-size: .75rem; font-weight: 800; white-space: nowrap; }
+.status-approuve, .status-comptabilise { color: #16603d; background: #e9f7ef; }
+.status-a_approuver { color: #765000; background: #fff4d5; }
+.status-annule { color: #8d2727; background: #fdecec; }
 .recurrence-section { display: grid; gap: 1rem; }
 .reconciliation-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .reconciliation-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; margin: 1rem 0; }
@@ -1414,7 +1534,8 @@ async function toggleRecurrence(item: {
 .market-note { margin: 0; color: var(--muted); font-size: .9rem; }
 .market-divider { width: 100%; margin: 1rem 0 0; border: 0; border-top: 1px solid var(--border); }
 @media (max-width: 850px) {
-  .form-grid, .detail-grid, .reconciliation-grid, .reconciliation-totals, .confirmation-row, .market-summary { grid-template-columns: 1fr; }
+  .form-grid, .detail-grid, .expense-metadata, .reconciliation-grid, .reconciliation-totals, .confirmation-row, .market-summary { grid-template-columns: 1fr; }
   .line-editor { grid-template-columns: 1fr; }
+  .expense-detail-heading { align-items: flex-start; }
 }
 </style>
