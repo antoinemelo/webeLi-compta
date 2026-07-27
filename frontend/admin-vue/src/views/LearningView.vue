@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -233,12 +233,13 @@ function updateTarget(): void {
   assignment.target_id = assignmentTargets()[0]?.id || 0;
 }
 
-watch(() => context.selection?.dossier.id, () => {
-  if (allowed.value) void reload();
-});
-onMounted(() => {
-  if (allowed.value) void reload();
-});
+watch(
+  [() => context.selection?.dossier.id, allowed],
+  ([, isAllowed]) => {
+    if (isAllowed) void reload();
+  },
+  { immediate: true }
+);
 </script>
 
 <template>
