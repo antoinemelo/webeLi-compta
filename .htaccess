@@ -1,0 +1,25 @@
+Options -Indexes
+DirectoryIndex index.php
+AddDefaultCharset UTF-8
+
+RewriteEngine On
+
+# Transmit Authorization to PHP/FastCGI for authenticated API requests.
+SetEnvIfNoCase Authorization "^(.*)$" HTTP_AUTHORIZATION=$1
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Serve only the compiled public assets from their stable external paths.
+RewriteRule ^app/assets/(.+)$ public/app/assets/$1 [END]
+RewriteRule ^assets/(.+)$ public/assets/$1 [END]
+
+# Never expose application code, persistent data, dependencies or metadata.
+RewriteRule ^(?:bin|bootstrap|config|database|public|resources|src|storage|templates|vendor)(?:/|$) - [F,END]
+RewriteRule ^(?:composer\.(?:json|lock)|VERSION)$ - [F,END]
+RewriteRule (^|/)\. - [F,END]
+
+# Vue routes, API routes and legacy redirects all use the PHP front controller.
+RewriteRule ^ index.php [QSA,END]
+
+<FilesMatch "^(?:\.|composer\.(?:json|lock)$|VERSION$)">
+    Require all denied
+</FilesMatch>

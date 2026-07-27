@@ -446,6 +446,23 @@ final class Tests
         $this->true($a->sessionName() !== $b->sessionName(), 'cookies propres aux instances');
         $this->same('/edu/', $a->sessionPath(), 'path cookie propre');
 
+        $rootFrontController = (string) file_get_contents($root . '/index.php');
+        $rootHtaccess = (string) file_get_contents($root . '/.htaccess');
+        $this->true(
+            str_contains($rootFrontController, "'/public/index.php'"),
+            'frontal mutualisé délègue au webroot public'
+        );
+        $this->true(
+            str_contains($rootHtaccess, 'public/app/assets/$1')
+            && str_contains($rootHtaccess, 'public/assets/$1'),
+            'frontal mutualisé sert uniquement les assets compilés'
+        );
+        $this->true(
+            str_contains($rootHtaccess, 'storage|templates|vendor')
+            && str_contains($rootHtaccess, '[F,END]'),
+            'frontal mutualisé protège données, sources et dépendances'
+        );
+
         $defaults = require $root . '/config/app.php';
         $this->false(
             array_key_exists('vue_shell_enabled', $defaults),

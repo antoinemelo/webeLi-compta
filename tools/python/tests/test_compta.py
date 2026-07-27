@@ -38,6 +38,8 @@ class ComptaAdminTests(unittest.TestCase):
         uploads, deletions = ADMIN.changed_runtime_files(None, commit)
         self.assertEqual(inventory, uploads)
         self.assertEqual([], deletions)
+        self.assertIn(".htaccess", uploads)
+        self.assertIn("index.php", uploads)
         self.assertIn("public/index.php", uploads)
         self.assertIn("src/Core/Http/WebApplication.php", uploads)
         self.assertIn("public/app/index.html", uploads)
