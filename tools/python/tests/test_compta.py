@@ -28,18 +28,21 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertFalse(ADMIN.is_runtime_path("frontend/admin-vue/src/App.vue"))
         self.assertFalse(ADMIN.is_runtime_path("storage/database/app.sqlite"))
         self.assertFalse(ADMIN.is_runtime_path("config/local.php"))
+        self.assertFalse(ADMIN.is_runtime_path("vendor/autoload.php"))
         self.assertFalse(ADMIN.is_runtime_path("livrables/SPECS_V02/README.md"))
 
     def test_initial_deployment_contains_the_complete_runtime_tree(self) -> None:
         commit = ADMIN.git("rev-parse", "HEAD")
-        inventory = ADMIN.runtime_files_at(commit)
+        ADMIN.ensure_vendor_ready(commit)
+        inventory = ADMIN.deployment_files_at(commit)
         uploads, deletions = ADMIN.changed_runtime_files(None, commit)
         self.assertEqual(inventory, uploads)
         self.assertEqual([], deletions)
         self.assertIn("public/index.php", uploads)
         self.assertIn("src/Core/Http/WebApplication.php", uploads)
         self.assertIn("public/app/index.html", uploads)
-        self.assertGreater(len(uploads), 100)
+        self.assertIn("vendor/autoload.php", uploads)
+        self.assertGreater(len(uploads), 500)
 
     def test_only_complete_v2_manifests_are_trusted_for_deltas(self) -> None:
         commit = ADMIN.git("rev-parse", "HEAD")
@@ -54,7 +57,7 @@ class ComptaAdminTests(unittest.TestCase):
             "schema": ADMIN.DEPLOY_MANIFEST_SCHEMA,
             "files": [
                 {"path": path, "sha256": "digest"}
-                for path in ADMIN.runtime_files_at(commit)
+                for path in ADMIN.deployment_files_at(commit)
             ],
         }
         self.assertFalse(ADMIN.manifest_has_complete_inventory(None))
@@ -152,7 +155,7 @@ class ComptaAdminTests(unittest.TestCase):
             self.assertEqual(commit, stored["commit"])
             self.assertEqual("webeli-compta", stored["application"])
             self.assertEqual(ADMIN.DEPLOY_MANIFEST_SCHEMA, stored["schema"])
-            self.assertGreater(len(stored["files"]), 100)
+            self.assertGreater(len(stored["files"]), 500)
 
     def test_legacy_marker_forces_a_complete_repair_deployment(self) -> None:
         commit = ADMIN.git("rev-parse", "HEAD")
@@ -185,9 +188,10 @@ class ComptaAdminTests(unittest.TestCase):
             self.assertTrue(
                 (target / "src/Core/Http/WebApplication.php").is_file()
             )
+            self.assertTrue((target / "vendor/autoload.php").is_file())
             stored = json.loads(marker.read_text(encoding="utf-8"))
             self.assertEqual(ADMIN.DEPLOY_MANIFEST_SCHEMA, stored["schema"])
-            self.assertGreater(len(stored["uploads"]), 100)
+            self.assertGreater(len(stored["uploads"]), 500)
 
 
 if __name__ == "__main__":

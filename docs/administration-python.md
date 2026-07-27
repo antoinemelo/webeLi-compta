@@ -110,10 +110,13 @@ python3 tools/python/compta.py deploy --apply
 Le script lit le marqueur `storage/deployments/current.json` du site, calcule le
 delta entre le commit déjà déployé et `HEAD`, puis ne transfère que les fichiers
 utiles au runtime : PHP, build public, migrations, seeds, ressources et
-templates. Les sources Vue, tests, livrables, bases, caches et secrets sont
-exclus. Sans marqueur complet et récent — notamment après un déploiement produit
-par une ancienne version du script — il réexpédie automatiquement l’inventaire
-applicatif complet afin de réparer une installation partielle.
+templates. Lors d’une première installation ou d’un changement de
+`composer.lock`, les dépendances PHP installées sont également livrées après
+vérification de leurs versions. Les sources Vue, tests, livrables, bases, caches
+et secrets sont exclus. Sans marqueur complet et récent — notamment après un
+déploiement produit par une ancienne version du script — il réexpédie
+automatiquement l’inventaire applicatif complet afin de réparer une installation
+partielle.
 
 Les fichiers envoyés proviennent directement des objets Git du commit, jamais
 du répertoire de travail. Les suppressions distantes restent désactivées par

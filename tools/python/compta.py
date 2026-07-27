@@ -632,9 +632,62 @@ def runtime_files_at(commit: str) -> list[str]:
     })
 
 
+def ensure_vendor_ready(commit: str) -> None:
+    lock = git_bytes(commit, "composer.lock")
+    local_lock = ROOT / "composer.lock"
+    installed = ROOT / "vendor" / "composer" / "installed.json"
+    autoload = ROOT / "vendor" / "autoload.php"
+    if not local_lock.is_file() or local_lock.read_bytes() != lock:
+        raise AdminError(
+            "Le composer.lock local ne correspond pas au commit ciblé."
+        )
+    if not installed.is_file() or not autoload.is_file():
+        raise AdminError(
+            "Dépendances PHP absentes. Exécutez composer install avant le "
+            "déploiement."
+        )
+    locked_data = json.loads(lock.decode("utf-8"))
+    installed_data = json.loads(installed.read_text(encoding="utf-8"))
+    installed_packages = installed_data.get("packages", installed_data)
+    locked_versions = {
+        str(package["name"]): str(package["version"])
+        for package in locked_data.get("packages", [])
+    }
+    installed_versions = {
+        str(package["name"]): str(package["version"])
+        for package in installed_packages
+        if isinstance(package, dict)
+        and package.get("name")
+        and package.get("version")
+    }
+    mismatches = [
+        name
+        for name, version in locked_versions.items()
+        if installed_versions.get(name) != version
+    ]
+    if mismatches:
+        raise AdminError(
+            "Le dossier vendor ne correspond pas à composer.lock : "
+            + ", ".join(mismatches)
+        )
+
+
+def vendor_files() -> list[str]:
+    root = ROOT / "vendor"
+    return sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+
+
+def deployment_files_at(commit: str) -> list[str]:
+    return sorted(set(runtime_files_at(commit) + vendor_files()))
+
+
 def changed_runtime_files(baseline: str | None, target: str) -> tuple[list[str], list[str]]:
     if baseline is None:
-        return runtime_files_at(target), []
+        return deployment_files_at(target), []
     if baseline:
         if not commit_exists(baseline):
             raise AdminError(f"Commit de référence absent localement : {baseline}")
@@ -657,11 +710,22 @@ def changed_runtime_files(baseline: str | None, target: str) -> tuple[list[str],
         if not status or not path or not is_runtime_path(path):
             continue
         (deletions if status.startswith("D") else uploads).append(path)
+    if "composer.lock" in uploads:
+        uploads.extend(vendor_files())
     return sorted(set(uploads)), sorted(set(deletions))
 
 
 def git_bytes(commit: str, path: str) -> bytes:
     return run(["git", "show", f"{commit}:{path}"], capture=True).stdout
+
+
+def deployment_bytes(commit: str, path: str) -> bytes:
+    if path.startswith("vendor/"):
+        source = ROOT / path
+        if not source.is_file():
+            raise AdminError(f"Dépendance PHP locale introuvable : {path}")
+        return source.read_bytes()
+    return git_bytes(commit, path)
 
 
 def release_manifest(
@@ -670,14 +734,15 @@ def release_manifest(
     uploads: list[str],
     deletions: list[str],
 ) -> dict[str, Any]:
-    inventory = runtime_files_at(target)
+    inventory = deployment_files_at(target)
     files = []
     for path in inventory:
-        content = git_bytes(target, path)
+        content = deployment_bytes(target, path)
         files.append({
             "path": path,
             "size": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
+            "source": "composer" if path.startswith("vendor/") else "git",
         })
     version = (
         git_bytes(target, "VERSION").decode("utf-8").strip()
@@ -793,7 +858,7 @@ def manifest_has_complete_inventory(manifest: dict[str, Any] | None) -> bool:
         str(item["path"])
         for item in files
     })
-    return recorded_paths == runtime_files_at(commit)
+    return recorded_paths == deployment_files_at(commit)
 
 
 def verify_local_uploads(root: Path, target: str, uploads: list[str]) -> None:
@@ -801,7 +866,7 @@ def verify_local_uploads(root: Path, target: str, uploads: list[str]) -> None:
         destination = root / path
         if not destination.is_file():
             raise AdminError(f"Fichier déployé introuvable : {destination}")
-        expected = git_bytes(target, path)
+        expected = deployment_bytes(target, path)
         if destination.read_bytes() != expected:
             raise AdminError(f"Fichier déployé altéré : {destination}")
 
@@ -819,7 +884,7 @@ def deploy_local(
     for path in uploads:
         destination = root / path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(git_bytes(target, path))
+        destination.write_bytes(deployment_bytes(target, path))
     if delete:
         for path in deletions:
             destination = root / path
@@ -860,7 +925,7 @@ def deploy_ftp(
         for path in uploads:
             remote = posixpath.join(root, path)
             ftp_mkdirs(client, posixpath.dirname(remote))
-            content = git_bytes(target, path)
+            content = deployment_bytes(target, path)
             expected_uploads[path] = content
             client.storbinary(f"STOR {remote}", io.BytesIO(content))
         if delete:
@@ -897,9 +962,11 @@ def deploy_ftp(
 def deploy(args: argparse.Namespace) -> int:
     config = load_config(args.config.resolve())
     target = git("rev-parse", args.commit)
+    ensure_vendor_ready(target)
     baseline = args.from_commit
     complete_resync = False
     resync_reason = ""
+    current: dict[str, Any] | None = None
     client: ftplib.FTP | None = None
     try:
         if baseline is None:
@@ -924,7 +991,22 @@ def deploy(args: argparse.Namespace) -> int:
         baseline = None
     uploads, deletions = changed_runtime_files(baseline, target)
     if complete_resync:
-        uploads = runtime_files_at(target)
+        uploads = deployment_files_at(target)
+    if (
+        args.delete
+        and current
+        and isinstance(current.get("files"), list)
+        and "composer.lock" in uploads
+    ):
+        current_vendor = {
+            str(item["path"])
+            for item in current["files"]
+            if isinstance(item, dict)
+            and str(item.get("path", "")).startswith("vendor/")
+        }
+        deletions = sorted(set(deletions) | (
+            current_vendor - set(vendor_files())
+        ))
     manifest = release_manifest(target, baseline, uploads, deletions)
     print(f"Déploiement : {baseline or 'installation initiale'} -> {target}")
     if complete_resync:
