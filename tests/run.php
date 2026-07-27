@@ -443,39 +443,11 @@ final class Tests
         $this->true($a->sessionName() !== $b->sessionName(), 'cookies propres aux instances');
         $this->same('/edu/', $a->sessionPath(), 'path cookie propre');
 
-        $originalEnvironment = getenv('APP_ENV');
-        $originalVueShellFlag = getenv('APP_VUE_SHELL_ENABLED');
-        try {
-            putenv('APP_ENV=local');
-            putenv('APP_VUE_SHELL_ENABLED');
-            $localDefaults = require $root . '/config/app.php';
-            $this->true(
-                $localDefaults['vue_shell_enabled'],
-                'shell Vue actif par défaut hors production'
-            );
-
-            putenv('APP_ENV=prod');
-            $productionDefaults = require $root . '/config/app.php';
-            $this->false(
-                $productionDefaults['vue_shell_enabled'],
-                'shell Vue inactif par défaut en production'
-            );
-
-            putenv('APP_ENV=local');
-            putenv('APP_VUE_SHELL_ENABLED=0');
-            $classicDefaults = require $root . '/config/app.php';
-            $this->false(
-                $classicDefaults['vue_shell_enabled'],
-                'interface classique forçable hors production'
-            );
-        } finally {
-            $originalEnvironment === false
-                ? putenv('APP_ENV')
-                : putenv('APP_ENV=' . $originalEnvironment);
-            $originalVueShellFlag === false
-                ? putenv('APP_VUE_SHELL_ENABLED')
-                : putenv('APP_VUE_SHELL_ENABLED=' . $originalVueShellFlag);
-        }
+        $defaults = require $root . '/config/app.php';
+        $this->false(
+            array_key_exists('vue_shell_enabled', $defaults),
+            'interface Vue unique sans bascule vers une interface classique'
+        );
 
         $session = new ArraySessionStore();
         $csrf = new Csrf($session);
@@ -2439,7 +2411,6 @@ final class Tests
             'database_path' => $dbPath,
             'storage_path' => dirname($dbPath),
             'debug' => true,
-            'vue_shell_enabled' => true,
         ]);
         $session = new ArraySessionStore(['user_id' => $userId]);
         $csrf = new Csrf($session);
@@ -4056,52 +4027,26 @@ final class Tests
             'dossier_compose' => $ids['organisation_a'] . ':' . $ids['dossier_a'],
         ]));
         $this->same(303, $allowed->status, 'sélection autorisée redirige');
-        $this->same('/edu/', $allowed->headers['Location'], 'redirection avec base path');
+        $this->same('/edu/app', $allowed->headers['Location'], 'redirection Vue avec base path');
         $this->same($ids['dossier_a'], $session->get('dossier_id'), 'contexte stocké');
 
-        $dashboard = $app->handle(new Request('GET', '/', query: ['legacy' => '1']));
-        $this->same(200, $dashboard->status, 'tableau de bord accessible');
+        $dashboardRedirect = $app->handle(new Request('GET', '/', query: ['legacy' => '1']));
+        $this->same(302, $dashboardRedirect->status, 'accueil redirigé vers Vue');
+        $this->same(
+            '/edu/app',
+            $dashboardRedirect->headers['Location'] ?? '',
+            'paramètre historique sans effet'
+        );
+        $dashboard = $app->handle(new Request('GET', '/app'));
+        $this->same(200, $dashboard->status, 'interface Vue accessible');
         $this->true(
             isset($dashboard->headers['Content-Security-Policy']),
             'en-têtes de sécurité présents'
         );
-        $this->true(
-            str_contains($dashboard->body, 'EXERCICE — DONNÉES FICTIVES'),
-            'bandeau fictif permanent sur un dossier exercice'
-        );
-        $this->true(
-            str_contains($dashboard->body, 'Organisation A')
-            && str_contains($dashboard->body, 'Exercice A')
-            && str_contains($dashboard->body, 'Exercice HTTP 2026')
-            && str_contains($dashboard->body, 'Tableau de bord')
-            && str_contains($dashboard->body, 'aria-label="Contexte de travail"'),
-            'instance, organisation, dossier, exercice et module restent identifiables'
-        );
-        $this->true(
-            str_contains($dashboard->body, 'href="#contenu"')
-            && str_contains($dashboard->body, 'aria-current="page"')
-            && str_contains($dashboard->body, '/edu/assets/app.js'),
-            'navigation commune progressive, clavier et sous-répertoire'
-        );
-        $this->false(str_contains($dashboard->body, 'Organisation B'), 'autre organisation absente du HTML');
-        $this->true(
-            str_contains(
-                $dashboard->body,
-                '/edu/app/configuration/referentiels/plan'
-            ),
-            'accès au plan comptable depuis Configuration'
-        );
-        $this->true(
-            str_contains($dashboard->body, '/edu/facturation'),
-            'accès aux débiteurs et créanciers depuis le tableau de bord'
-        );
-        $this->true(
-            str_contains($dashboard->body, '/edu/salaires'),
-            'accès aux salaires genevois depuis le tableau de bord'
-        );
-        $this->true(
-            str_contains($dashboard->body, '/edu/pedagogie'),
-            'accès à l’enseignement depuis le tableau de bord'
+        $this->false(
+            str_contains($dashboard->body, 'Interface classique')
+            || str_contains($dashboard->body, 'DÉMONSTRATION — DONNÉES FICTIVES'),
+            'aucun retour classique ni bandeau de démonstration'
         );
         $accountingHome = $app->handle(new Request('GET', '/compta'));
         $this->same(303, $accountingHome->status, 'ancien espace comptable redirigé');
@@ -4737,12 +4682,6 @@ final class Tests
             $userId, 'formateur', 'dossier', $realExerciseDossier
         );
         $session->set('dossier_id', $realExerciseDossier);
-        $realDashboard = $app->handle(new Request('GET', '/', query: ['legacy' => '1']));
-        $this->true(
-            str_contains($realDashboard->body, 'DOSSIER RÉEL — DONNÉES DE PRODUCTION')
-            && str_contains($realDashboard->body, 'context-real'),
-            'dossier réel distingué par texte et présentation'
-        );
         $resetReal = $app->handle(new Request(
             'POST',
             '/api/v1/pedagogie/reinitialiser',
@@ -4760,30 +4699,10 @@ final class Tests
             $userId, 'comptable', 'dossier', $demoDossier
         );
         $session->set('dossier_id', $demoDossier);
-        $demoDashboard = $app->handle(new Request('GET', '/', query: ['legacy' => '1']));
-        $this->true(
-            str_contains($demoDashboard->body, 'DÉMONSTRATION — DONNÉES FICTIVES')
-            && str_contains($demoDashboard->body, 'context-demo'),
-            'dossier de démonstration distingué par texte et présentation'
-        );
         $session->set('dossier_id', $ids['dossier_a']);
-        $this->true(
-            str_contains(
-                $dashboard->body,
-                '/edu/assets/vendor/bootstrap/bootstrap.min.css'
-            ),
-            'Bootstrap local chargé avec le base path'
-        );
-        $this->true(
-            str_contains(
-                $dashboard->body,
-                '/edu/assets/vendor/bootstrap/bootstrap.bundle.min.js'
-            ),
-            'bundle Bootstrap local chargé'
-        );
         $this->false(
             str_contains($dashboard->body, 'cdn.jsdelivr.net'),
-            'aucune dépendance Bootstrap au CDN'
+            'aucune dépendance au CDN'
         );
         $this->true(
             is_file(

@@ -3,7 +3,6 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
-import { runtimeConfig } from '@/config';
 import { subNavigation } from '@/router/navigation';
 import { useContextStore } from '@/stores/context';
 
@@ -34,11 +33,6 @@ const moduleEnabled = computed(() => {
 const allowed = computed(() =>
   moduleEnabled.value && context.can(requiredPermission[section.value] || 'dossier.view')
 );
-const legacyUrl = computed(() => {
-  const path = String(route.meta.legacyPath || '');
-  if (!path) return '';
-  return `${runtimeConfig.baseUrl}${path}`;
-});
 </script>
 
 <template>
@@ -65,9 +59,7 @@ const legacyUrl = computed(() => {
 
   <EmptyState
     v-else
-    :title="`${title} est prêt à être migré`"
-    description="Le shell, le contexte et les contrôles d’accès sont actifs. Les écrans métier restent disponibles dans l’interface PHP jusqu’à leur remplacement validé."
-  >
-    <a v-if="legacyUrl" class="button" :href="legacyUrl">Ouvrir l’écran classique</a>
-  </EmptyState>
+    :title="`${title} est indisponible`"
+    description="Aucun écran supplémentaire n’est disponible pour ce module."
+  />
 </template>

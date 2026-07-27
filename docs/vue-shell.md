@@ -1,23 +1,13 @@
-# Shell Vue progressif
+# Interface Vue
 
 Le shell est servi sous `/app` et ses routes profondes. Il utilise Vue 3,
 TypeScript, Pinia et Vue Router ; Vite n’intervient qu’au build. Toutes les
 données proviennent de l’API interne `/api/v1`.
 
-## Activation
+## Accès
 
-Le shell Vue est actif par défaut hors production : après connexion, `/`
-redirige vers `/app`. En production, il reste désactivé tant que l’activation
-n’est pas explicite :
-
-```text
-APP_VUE_SHELL_ENABLED=1
-```
-
-`APP_VUE_SHELL_ENABLED=0` force à l’inverse l’interface classique, y compris
-en environnement local. L’interface PHP historique reste aussi accessible avec
-`/?legacy=1` et par ses routes métier. Désactiver le flag rend `/app`
-indisponible et restaure immédiatement l’accueil PHP, sans changement de base.
+Après connexion, `/` redirige toujours vers `/app`. Les anciennes adresses
+métier encore référencées redirigent vers leur écran Vue correspondant.
 
 ## Build et livraison
 
@@ -38,7 +28,8 @@ d’environnement privée ou runtime Node n’est embarqué.
 - erreurs annoncées et focalisées, notifications `aria-live` ;
 - boîte de confirmation native pour la déconnexion ;
 - alerte avant abandon de formulaires marqués non enregistrés ;
-- bandeau textuel permanent pour les dossiers réel, démonstration et exercice.
+- contexte organisation, dossier, exercice et devise toujours visible dans
+  l’en-tête.
 
 Session, CSRF, permissions, scopes et corrélation restent appliqués par PHP.
 Une route Vue masquée par la navigation contrôle également la permission avant

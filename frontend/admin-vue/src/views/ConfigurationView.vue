@@ -701,9 +701,8 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
 </script>
 
 <template>
-  <header class="page-header">
+  <header class="page-heading">
     <div>
-      <p class="eyebrow">Référentiels du dossier</p>
       <h1>Configuration</h1>
       <p>Une source unique par domaine, des valeurs datées et un historique auditable.</p>
     </div>

@@ -633,9 +633,8 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
 </script>
 
 <template>
-  <header class="page-header accounting-header">
+  <header class="page-heading accounting-header">
     <div>
-      <p class="eyebrow">{{ isChartSettings ? 'Configuration · Référentiels' : 'Moteur comptable unique' }}</p>
       <h1>{{ isChartSettings ? 'Plan comptable' : 'Comptabilité' }}</h1>
       <p>
         {{ isChartSettings

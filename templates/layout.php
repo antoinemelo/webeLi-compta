@@ -5,13 +5,6 @@ use Compta\Core\Support\Html;
 
 $ui = is_array($ui_context ?? null) ? $ui_context : [];
 $authenticated = ($ui['authenticated'] ?? false) === true;
-$dossierType = (string) ($ui['dossier_type'] ?? '');
-$band = match ($dossierType) {
-    'reel' => ['context-real', 'DOSSIER RÉEL — DONNÉES DE PRODUCTION'],
-    'demo' => ['context-demo', 'DÉMONSTRATION — DONNÉES FICTIVES'],
-    'exercice' => ['context-exercise', 'EXERCICE — DONNÉES FICTIVES'],
-    default => ['', ''],
-};
 $path = (string) ($ui['path'] ?? '');
 ?>
 <!doctype html>
@@ -37,11 +30,6 @@ $path = (string) ($ui['path'] ?? '');
           Instance <strong><?= Html::escape((string) ($ui['instance'] ?? $config->string('instance_id'))) ?></strong>
         </span>
         <?php if ($authenticated): ?>
-          <?php if ($config->bool('vue_shell_enabled')): ?>
-            <a class="btn btn-sm btn-header" href="<?= Html::escape($config->url('/app')) ?>">
-              Nouvelle interface
-            </a>
-          <?php endif; ?>
           <form method="post" action="<?= Html::escape($config->url('/logout')) ?>">
             <input type="hidden" name="_csrf" value="<?= Html::escape((string) ($ui_csrf ?? '')) ?>">
             <button class="btn btn-sm btn-header" type="submit">Déconnexion</button>
@@ -51,12 +39,6 @@ $path = (string) ($ui['path'] ?? '');
     </div>
   </header>
   <div class="brand-accent no-print" aria-hidden="true"></div>
-
-  <?php if ($band[1] !== ''): ?>
-    <div class="context-band <?= Html::escape($band[0]) ?>" role="status">
-      <?= Html::escape($band[1]) ?>
-    </div>
-  <?php endif; ?>
 
   <?php if ($authenticated && ($ui['dossier'] ?? '') !== ''): ?>
     <section class="context-strip no-print" aria-label="Contexte de travail">

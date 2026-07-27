@@ -565,7 +565,6 @@ async function allocatePayment(): Promise<void> {
   <section class="page-stack">
     <header class="page-heading">
       <div>
-        <p class="eyebrow">Débiteurs · créanciers</p>
         <h1>Facturation</h1>
         <p>Documents, échéances, contacts et paiements reliés au même grand livre.</p>
       </div>

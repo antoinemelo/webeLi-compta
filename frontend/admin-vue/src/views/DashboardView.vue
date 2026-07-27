@@ -120,9 +120,8 @@ async function refresh(): Promise<void> {
 </script>
 
 <template>
-  <header class="page-header dashboard-header">
+  <header class="page-heading dashboard-header">
     <div>
-      <p class="eyebrow">Pilotage comptable</p>
       <h1>Tableau de bord</h1>
       <p>Une lecture du grand livre, des échéances et de la banque à une date explicite.</p>
     </div>

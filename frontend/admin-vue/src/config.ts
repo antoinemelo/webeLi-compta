@@ -13,6 +13,5 @@ export const runtimeConfig = {
   appBaseUrl: normalizedPath(meta('compta-app-base-url'), '/app'),
   apiBaseUrl: normalizedPath(meta('compta-api-base-url'), '/api/v1'),
   loginUrl: meta('compta-login-url', '/login'),
-  logoutUrl: meta('compta-logout-url', '/logout'),
-  legacyUrl: meta('compta-legacy-url', '/?legacy=1')
+  logoutUrl: meta('compta-logout-url', '/logout')
 };

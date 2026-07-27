@@ -172,7 +172,7 @@ final class WebApplication
                     401
                 );
             }
-            return Response::redirect($this->config->url('/'));
+            return Response::redirect($this->config->url('/app'));
         });
         $this->router->add('POST', '/logout', function (Request $request): Response {
             if (!$this->csrf->validate($request->post['_csrf'] ?? null)) {
@@ -181,22 +181,11 @@ final class WebApplication
             $this->auth->logout($request->ip());
             return Response::redirect($this->config->url('/login'));
         });
-        $this->router->add('GET', '/', function (Request $request): Response {
-            $userId = $this->auth->userId();
-            if ($userId === null) {
+        $this->router->add('GET', '/', function (): Response {
+            if ($this->auth->userId() === null) {
                 return Response::redirect($this->config->url('/login'), 302);
             }
-            if (
-                $this->config->bool('vue_shell_enabled')
-                && ($request->query['legacy'] ?? '') !== '1'
-            ) {
-                return Response::redirect($this->config->url('/app'), 302);
-            }
-            return new Response($this->view->render('dashboard', [
-                'csrf' => $this->csrf->token(),
-                'dossiers' => $this->access->dossiersForUser($userId),
-                'selected_dossier_id' => (int) $this->session->get('dossier_id', 0),
-            ], 'Tableau de bord'));
+            return Response::redirect($this->config->url('/app'), 302);
         });
         $this->router->add('POST', '/context/dossier', function (Request $request): Response {
             $userId = $this->auth->userId();
@@ -223,7 +212,7 @@ final class WebApplication
                 (string) $dossierId,
                 ip: $request->ip()
             );
-            return Response::redirect($this->config->url('/'));
+            return Response::redirect($this->config->url('/app'));
         });
         foreach ([
             '/compta' => '/app/compta',

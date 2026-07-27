@@ -20,13 +20,6 @@ final class ShellPageController
 
     public function show(Request $request): Response
     {
-        if (!$this->config->bool('vue_shell_enabled')) {
-            return new Response(
-                'Interface Vue désactivée.',
-                404,
-                ['Content-Type' => 'text/plain; charset=UTF-8']
-            );
-        }
         if ($this->auth->userId() === null) {
             return Response::redirect($this->config->url('/login'), 302);
         }

@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 
 const frontend = resolve(import.meta.dirname, '../..');
 const root = resolve(frontend, '../..');
+const port = process.env.E2E_PORT || '8093';
 const storage = resolve(frontend, 'test-results/storage');
 rmSync(storage, { recursive: true, force: true });
 mkdirSync(storage, { recursive: true });
@@ -27,7 +28,7 @@ if (seed.status !== 0) process.exit(seed.status ?? 1);
 
 const server = spawn(
   'php',
-  ['-S', '127.0.0.1:8093', '-t', resolve(root, 'public'), resolve(root, 'tools/dev-router.php')],
+  ['-S', `127.0.0.1:${port}`, '-t', resolve(root, 'public'), resolve(root, 'tools/dev-router.php')],
   { cwd: root, env: environment, stdio: 'inherit' }
 );
 

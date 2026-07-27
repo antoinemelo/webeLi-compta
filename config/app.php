@@ -2,10 +2,6 @@
 declare(strict_types=1);
 
 $environment = getenv('APP_ENV') ?: 'dev';
-$vueShellFlag = getenv('APP_VUE_SHELL_ENABLED');
-$vueShellEnabled = $vueShellFlag === false
-    ? $environment !== 'prod'
-    : $vueShellFlag === '1';
 
 return [
     'env' => $environment,
@@ -16,7 +12,6 @@ return [
     'database_path' => getenv('APP_DB_PATH') ?: '',
     'ocas_database_path' => getenv('OCAS_DB_PATH') ?: '',
     'setup_secret' => getenv('APP_SETUP_SECRET') ?: '',
-    'vue_shell_enabled' => $vueShellEnabled,
     'session_idle_seconds' => 1800,
     'session_absolute_seconds' => 43200,
     'login_max_attempts' => 5,

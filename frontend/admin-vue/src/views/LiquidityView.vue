@@ -644,7 +644,6 @@ async function toggleRecurrence(item: {
   <section class="page-stack">
     <header class="page-heading">
       <div>
-        <p class="eyebrow">Trésorerie · fournisseurs</p>
         <h1>Liquidités</h1>
         <p>Dépenses, validation et récurrences reliées au grand livre.</p>
       </div>

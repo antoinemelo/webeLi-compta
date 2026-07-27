@@ -1,28 +1,20 @@
 # Interface et accessibilité
 
-L’interface HTML reste utilisable sans JavaScript pour la navigation, les
-formulaires et toutes les mutations importantes. JavaScript améliore la saisie,
-annonce les changements et prévient la perte d’un formulaire, mais les règles
-comptables, autorisations, versions et jetons CSRF restent validés côté serveur.
+L’interface Vue nécessite JavaScript. Les règles comptables, autorisations,
+versions et jetons CSRF restent validés côté serveur.
 
 ## Contexte et environnements
 
-Chaque page authentifiée expose en texte l’instance, l’organisation, le dossier,
-l’exercice et le module courant. Le type du dossier ne sert jamais de contrôle
-d’accès. Il commande seulement un bandeau visuel et textuel :
-
-- `DOSSIER RÉEL — DONNÉES DE PRODUCTION` ;
-- `DÉMONSTRATION — DONNÉES FICTIVES` ;
-- `EXERCICE — DONNÉES FICTIVES`.
-
-Les couleurs, bordures et textes diffèrent afin que l’information ne repose
-jamais sur la couleur seule.
+L’en-tête authentifié expose l’organisation et le dossier actifs, suivis de
+l’exercice et de la devise de référence. Le type du dossier ne sert jamais de
+contrôle d’accès et aucun bandeau de démonstration ne surcharge l’espace de
+travail.
 
 ## Navigation et saisie
 
-La navigation principale est un composant HTML `details` sur petit écran et une
-barre latérale permanente sur grand écran. Le lien d’évitement mène directement
-au contenu. La page courante utilise `aria-current`.
+La navigation principale devient un panneau mobile sur petit écran et reste
+une barre latérale permanente sur grand écran. Le lien d’évitement mène
+directement au contenu. La page courante utilise `aria-current`.
 
 La saisie comptable suit l’ordre clavier en-tête, lignes, brouillon, validation.
 Les totaux débit/crédit et la différence sont annoncés avec `aria-live`. Le

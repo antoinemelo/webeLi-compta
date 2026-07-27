@@ -537,9 +537,8 @@ onMounted(() => reload());
 </script>
 
 <template>
-  <header class="page-header">
+  <header class="page-heading">
     <div>
-      <p class="eyebrow">Paie genevoise reliée au grand livre</p>
       <h1>Salaires</h1>
       <p>Contrats datés, calculs au centime, dettes séparées et certificats non transmis.</p>
     </div>

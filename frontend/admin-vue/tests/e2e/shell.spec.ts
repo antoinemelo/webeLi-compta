@@ -17,25 +17,69 @@ async function loginAsAdministrator(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/e2e\/app\/?$/);
 }
 
+async function openScopeMenu(page: Page): Promise<void> {
+  const button = page.getByRole('button', {
+    name: 'Organisation, dossier et configuration'
+  });
+  if (await button.getAttribute('aria-expanded') !== 'true') await button.click();
+}
+
+async function selectDossier(page: Page, label: string): Promise<void> {
+  await openScopeMenu(page);
+  const organization = page.getByLabel('Organisation', { exact: true });
+  const dossier = page.getByLabel('Dossier', { exact: true });
+  const organizationValues = await organization.locator('option:not([disabled])').evaluateAll(
+    (options) => options.map((option) => (option as HTMLOptionElement).value)
+  );
+  for (const value of organizationValues) {
+    if (await dossier.locator('option').filter({ hasText: label }).count()) break;
+    await organization.selectOption(value);
+  }
+  await dossier.selectOption({ label });
+}
+
+async function openConfiguration(page: Page): Promise<void> {
+  await openScopeMenu(page);
+  await page.getByRole('link', { name: 'Configuration', exact: true }).click();
+}
+
+async function logout(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Informations personnelles' }).click();
+  await page.getByRole('button', { name: 'Déconnexion' }).click();
+  await page.getByRole('button', { name: 'Se déconnecter' }).click();
+}
+
 test('connexion, changement de dossier, route profonde et déconnexion', async ({ page }) => {
   await login(page);
 
-  await page.getByLabel('Dossier', { exact: true }).selectOption({ label: 'Comptabilité principale' });
-  await expect(page.locator('.context-band')).toContainText('DOSSIER RÉEL');
+  await selectDossier(page, 'Comptabilité principale');
   await expect(
-    page.getByLabel('Contexte de travail').getByText('Entreprise Alpha SA', { exact: true })
-  ).toBeVisible();
+    page.getByRole('link', { name: 'Ouvrir le tableau de bord' })
+  ).toContainText(/Entreprise Alpha SA.*Comptabilité principale.*2026.*CHF/);
+  await expect(page.locator('.context-band')).toHaveCount(0);
+  await expect(
+    page.getByLabel('Navigation principale').getByRole('link', {
+      name: 'Tableau de bord',
+      exact: true
+    })
+  ).toHaveCount(0);
+  await expect(
+    page.getByLabel('Navigation principale').getByRole('link', {
+      name: 'Configuration',
+      exact: true
+    })
+  ).toHaveCount(0);
   await expect(page.getByText('Chiffre d’affaires', { exact: true })).toBeVisible();
   await expect(page.getByText('Produits comptabilisés', { exact: true }).locator('..')).toContainText(
     /CHF\s+1.*200\.00/
   );
   await expect(page.getByRole('heading', { name: 'Trésorerie par compte' })).toBeVisible();
 
-  await page.getByLabel('Dossier', { exact: true }).selectOption({ label: 'Démonstration guidée' });
-  await expect(page.locator('.context-band')).toContainText('DÉMONSTRATION');
+  await selectDossier(page, 'Démonstration guidée');
   await expect(
-    page.getByLabel('Contexte de travail').getByText('École WebeLi', { exact: true })
-  ).toBeVisible();
+    page.getByRole('link', { name: 'Ouvrir le tableau de bord' })
+  ).toContainText('École WebeLi');
+  await expect(page.getByText(/DÉMONSTRATION — DONNÉES FICTIVES/)).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Aucune activité à cette date' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
@@ -44,15 +88,13 @@ test('connexion, changement de dossier, route profonde et déconnexion', async (
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Comptabilité', exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Déconnexion' }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await page.getByRole('button', { name: 'Se déconnecter' }).click();
+  await logout(page);
   await expect(page).toHaveURL(/\/e2e\/login$/);
 });
 
 test('refus UI et API sans fuite inter-dossiers', async ({ page }) => {
   await login(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({ label: 'Comptabilité principale' });
+  await selectDossier(page, 'Comptabilité principale');
 
   await page.goto('/e2e/app/configuration');
   await expect(page.getByRole('alert')).toContainText('Accès refusé');
@@ -87,8 +129,24 @@ test('navigation clavier et largeur 360 px', async ({ page }) => {
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Ouvrir la navigation' })).toBeFocused();
   await page.keyboard.press('Enter');
-  await page.getByLabel('Dossier', { exact: true }).selectOption({ label: 'Comptabilité principale' });
+  await selectDossier(page, 'Comptabilité principale');
   await expect(page.getByText('Chiffre d’affaires', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: 'Liquidités', exact: true }).click();
+  const tabs = page.getByLabel('Navigation des liquidités');
+  await expect(tabs).toBeVisible();
+  expect(await tabs.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      position: style.position,
+      flexWrap: style.flexWrap,
+      overflowX: style.overflowX
+    };
+  })).toEqual({ position: 'sticky', flexWrap: 'wrap', overflowX: 'visible' });
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const tabsBox = await tabs.boundingBox();
+  expect(tabsBox?.y).toBeGreaterThanOrEqual(68);
+  expect(tabsBox?.y).toBeLessThan(180);
+  expect((tabsBox?.y || 0) + (tabsBox?.height || 0)).toBeLessThan(780);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
@@ -96,9 +154,7 @@ test('apprentissage ciblé, feedback et correction protégée utilisent le moteu
   page
 }) => {
   await login(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Atelier débit-crédit'
-  });
+  await selectDossier(page, 'Atelier débit-crédit');
   await page.getByRole('link', { name: 'Apprentissage', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Apprentissage', exact: true })).toBeVisible();
   await expect(page.getByLabel('Navigation Apprentissage')).toContainText('Catalogue');
@@ -138,9 +194,7 @@ test('apprentissage ciblé, feedback et correction protégée utilisent le moteu
 
 test('suivi formateur expose assignation, score, contributeurs et export', async ({ page }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Démonstration guidée'
-  });
+  await selectDossier(page, 'Démonstration guidée');
   await page.getByRole('link', { name: 'Apprentissage', exact: true }).click();
   await expect(page.locator('p.eyebrow').filter({
     hasText: 'Lecture d’états'
@@ -158,10 +212,8 @@ test('suivi formateur expose assignation, score, contributeurs et export', async
 test('configuration des modules et référentiels', async ({ page }) => {
   test.setTimeout(90_000);
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
-  await page.getByRole('link', { name: 'Configuration', exact: true }).click();
+  await selectDossier(page, 'Comptabilité principale');
+  await openConfiguration(page);
   await expect(page.getByRole('heading', { name: 'Configuration', exact: true })).toBeVisible();
   await expect(page.getByLabel('Navigation Configuration')).toBeVisible();
   await expect(page.getByLabel('IBAN de facturation')).toBeVisible();
@@ -397,28 +449,44 @@ test('deux dossiers réels sont créés, sélectionnés et archivés depuis Vue'
 
   await createDossier('Comptabilité A E2E', 'comptabilite-a-e2e', 'CHF', 'ODA');
   await expect(page.getByText(/comptes/).last()).toBeVisible();
+  await openScopeMenu(page);
+  await page.getByLabel('Organisation', { exact: true }).selectOption({
+    label: 'Multi-dossiers E2E'
+  });
   await expect(page.getByLabel('Dossier', { exact: true })).toContainText(
     'Comptabilité A E2E'
   );
+  await page.getByRole('button', {
+    name: 'Organisation, dossier et configuration'
+  }).click();
 
   await createDossier('Comptabilité B E2E', 'comptabilite-b-e2e', 'EUR', 'ODB');
+  await openScopeMenu(page);
+  await page.getByLabel('Organisation', { exact: true }).selectOption({
+    label: 'Multi-dossiers E2E'
+  });
   await expect(page.getByLabel('Dossier', { exact: true })).toContainText(
     'Comptabilité B E2E'
   );
+  await page.getByRole('button', {
+    name: 'Organisation, dossier et configuration'
+  }).click();
   await expect(page.getByRole('button', { name: /Comptabilité A E2E/ })).toBeVisible();
   await expect(page.getByRole('button', { name: /Comptabilité B E2E/ })).toBeVisible();
 
   await page.getByRole('button', { name: /Comptabilité A E2E/ }).click();
   await page.getByRole('button', { name: 'Ouvrir la navigation' }).click();
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité A E2E'
-  });
+  await selectDossier(page, 'Comptabilité A E2E');
   await page.getByRole('button', { name: 'Ouvrir la navigation' }).click();
   await page.getByRole('button', { name: 'Archiver le dossier' }).click();
   await expect(page.getByRole('button', { name: 'Réactiver le dossier' })).toBeVisible();
+  await openScopeMenu(page);
   await expect(page.getByLabel('Dossier', { exact: true })).not.toContainText(
     'Comptabilité A E2E'
   );
+  await page.getByRole('button', {
+    name: 'Organisation, dossier et configuration'
+  }).click();
 
   await page.getByRole('button', { name: 'Supprimer le dossier vide' }).click();
   const dialog = page.getByRole('dialog');
@@ -433,10 +501,12 @@ test('gouvernance des accès et révocation multi-session', async ({ browser }) 
   const readerPage = await readerContext.newPage();
   try {
     await login(readerPage);
-    await readerPage.getByLabel('Dossier', { exact: true }).selectOption({
-      label: 'Comptabilité principale'
-    });
+    await selectDossier(readerPage, 'Comptabilité principale');
+    await openScopeMenu(readerPage);
     await expect(readerPage.getByLabel('Dossier', { exact: true })).toHaveValue(/\d+/);
+    await readerPage.getByRole('button', {
+      name: 'Organisation, dossier et configuration'
+    }).click();
 
     await loginAsAdministrator(adminPage);
     await adminPage.goto('/e2e/app/configuration/structures');
@@ -473,9 +543,13 @@ test('gouvernance des accès et révocation multi-session', async ({ browser }) 
     await expect(readerPage.getByRole('heading', {
       name: 'Sélectionnez un dossier'
     })).toBeVisible();
+    await openScopeMenu(readerPage);
     await expect(readerPage.getByLabel('Dossier', { exact: true })).not.toContainText(
       'Comptabilité principale'
     );
+    await readerPage.getByRole('button', {
+      name: 'Organisation, dossier et configuration'
+    }).click();
 
     const refreshedReaderRow = adminPage.getByRole('row').filter({
       hasText: 'lecteur@example.test'
@@ -489,6 +563,7 @@ test('gouvernance des accès et révocation multi-session', async ({ browser }) 
       name: 'Confirmer cette matrice'
     }).click();
     await readerPage.reload();
+    await openScopeMenu(readerPage);
     await expect(readerPage.getByLabel('Dossier', { exact: true })).toContainText(
       'Comptabilité principale'
     );
@@ -502,9 +577,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   page
 }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
 
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Nouvelle écriture' })).toBeVisible();
@@ -513,7 +586,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
   await page.getByRole('link', { name: 'Extraits', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Extrait de compte' })).toBeVisible();
 
-  await page.getByRole('link', { name: 'Configuration', exact: true }).click();
+  await openConfiguration(page);
   await page.getByRole('link', { name: 'Référentiels', exact: true }).click();
   await expect(page).toHaveURL(/\/e2e\/app\/configuration\/referentiels\/plan$/);
   await expect(page.getByRole('heading', { name: 'Plan comptable', level: 1 })).toBeVisible();
@@ -526,9 +599,7 @@ test('journal, extrait et plan comptable de Configuration utilisent le parcours 
 
 test('états, clôture et dossier fiscal utilisent le grand livre unique', async ({ page }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
 
   await page.getByRole('link', { name: 'États financiers', exact: true }).click();
@@ -554,9 +625,7 @@ test('états, clôture et dossier fiscal utilisent le grand livre unique', async
 
 test('registre, plan et dotation des immobilisations utilisent le grand livre unique', async ({ page }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
   await page.getByRole('link', { name: 'Amortissements', exact: true }).click();
   await expect(page.getByRole('heading', {
@@ -618,9 +687,7 @@ test('balance consolidée drillable et refus de mutation sans droit sur chaque m
   page
 }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
   await page.getByRole('link', { name: 'Consolidation', exact: true }).click();
   await page.setViewportSize({ width: 360, height: 800 });
@@ -662,13 +729,10 @@ test('balance consolidée drillable et refus de mutation sans droit sur chaque m
     hasText: 'Entreprise Alpha SA — Reporting analytique'
   })).toContainText('CHF');
 
-  await page.getByRole('button', { name: 'Déconnexion' }).click();
-  await page.getByRole('button', { name: 'Se déconnecter' }).click();
+  await logout(page);
   await expect(page).toHaveURL(/\/e2e\/login$/);
   await login(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.goto('/e2e/app/compta/consolidation');
   await page.getByRole('button', { name: 'Groupe et mappings' }).click();
   await expect(page.getByRole('button', { name: 'Créer le brouillon' })).toBeDisabled();
@@ -702,9 +766,7 @@ test('assistant de consolidation légale active et exporte deux organisations', 
   page
 }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Reporting analytique'
-  });
+  await selectDossier(page, 'Reporting analytique');
   await page.getByRole('link', { name: 'Comptabilité', exact: true }).click();
   await page.getByRole('link', { name: 'Consolidation', exact: true }).click();
   await page.getByRole('button', { name: 'Groupe et mappings' }).click();
@@ -757,9 +819,7 @@ test('assistant de consolidation légale active et exporte deux organisations', 
 
 test('facturation client, contact 360 et aging utilisent le parcours Vue unique', async ({ page }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Facturation', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Factures clients' })).toBeVisible();
   await expect(page.getByLabel('Navigation de la facturation')).toContainText('Récurrences');
@@ -816,9 +876,7 @@ test('facturation client, contact 360 et aging utilisent le parcours Vue unique'
 
 test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Liquidités', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Utilisation des liquidités' })).toBeVisible();
   await page.getByRole('button', { name: 'Nouvelle dépense' }).click();
@@ -852,9 +910,7 @@ test('dépense fournisseur approuvée et comptabilisée dans Vue', async ({ page
 
 test('rapprochement, lettrage et paiements sortants utilisent le parcours Vue', async ({ page }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Liquidités', exact: true }).click();
   await page.getByRole('link', { name: 'Rapprochement', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Rapprochement bancaire' })).toBeVisible();
@@ -903,9 +959,7 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   page
 }) => {
   await loginAsAdministrator(page);
-  await page.getByLabel('Dossier', { exact: true }).selectOption({
-    label: 'Comptabilité principale'
-  });
+  await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Salaires', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Salaires', exact: true })).toBeVisible();
   await expect(page.getByLabel('Navigation des salaires')).toBeVisible();

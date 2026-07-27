@@ -1,5 +1,8 @@
 import { defineConfig } from '@playwright/test';
 
+const port = process.env.E2E_PORT || '8093';
+const origin = `http://127.0.0.1:${port}`;
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 30_000,
@@ -10,13 +13,13 @@ export default defineConfig({
   outputDir: 'test-results/artifacts',
   reporter: [['list'], ['junit', { outputFile: 'test-results/e2e-junit.xml' }]],
   use: {
-    baseURL: 'http://127.0.0.1:8093/e2e',
+    baseURL: `${origin}/e2e`,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
   },
   webServer: {
     command: 'node ./tests/e2e/serve.mjs',
-    url: 'http://127.0.0.1:8093/e2e/login',
+    url: `${origin}/e2e/login`,
     timeout: 30_000,
     reuseExistingServer: false
   },
