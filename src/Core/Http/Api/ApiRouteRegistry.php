@@ -98,6 +98,10 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/structures/dossiers/delete', $this->dossiers->delete(...));
         }
         if ($this->structureAccess !== null) {
+            $this->add($router, 'GET', '/api/v1/structures/users/export', $this->structureAccess->exportUsers(...));
+            $this->add($router, 'GET', '/api/v1/structures/access/export', $this->structureAccess->exportAccess(...));
+            $this->add($router, 'POST', '/api/v1/structures/access/csv-preview', $this->structureAccess->csvPreview(...));
+            $this->add($router, 'POST', '/api/v1/structures/access/csv-import', $this->structureAccess->csvImport(...));
             $this->add($router, 'GET', '/api/v1/structures/access', $this->structureAccess->matrix(...));
             $this->add($router, 'POST', '/api/v1/structures/access/preview', $this->structureAccess->preview(...));
             $this->add($router, 'POST', '/api/v1/structures/access/apply', $this->structureAccess->apply(...));

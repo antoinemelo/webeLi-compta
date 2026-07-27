@@ -96,6 +96,40 @@ final class StructureAccessInputValidator
         ];
     }
 
+    /** @return array{users_csv:string,access_csv:string} */
+    public function csvPreview(Request $request): array
+    {
+        $data = $this->only($request, ['users_csv', 'access_csv']);
+        return [
+            'users_csv' => $this->csv($data['users_csv'] ?? null, 'users_csv'),
+            'access_csv' => $this->csv(
+                $data['access_csv'] ?? null,
+                'access_csv'
+            ),
+        ];
+    }
+
+    /** @return array{users_csv:string,access_csv:string,confirmation_token:string} */
+    public function csvImport(Request $request): array
+    {
+        $data = $this->only($request, [
+            'users_csv',
+            'access_csv',
+            'confirmation_token',
+        ]);
+        return [
+            'users_csv' => $this->csv($data['users_csv'] ?? null, 'users_csv'),
+            'access_csv' => $this->csv(
+                $data['access_csv'] ?? null,
+                'access_csv'
+            ),
+            'confirmation_token' => $this->hash(
+                $data['confirmation_token'] ?? null,
+                'confirmation_token'
+            ),
+        ];
+    }
+
     /** @param array<string,mixed> $data */
     private function scope(array $data): array
     {
@@ -147,6 +181,20 @@ final class StructureAccessInputValidator
             || preg_match('/^[a-f0-9]{64}$/', $value) !== 1
         ) {
             throw ApiException::validation([$key => ['Jeton invalide.']]);
+        }
+        return $value;
+    }
+
+    private function csv(mixed $value, string $key): string
+    {
+        if (
+            !is_string($value)
+            || $value === ''
+            || strlen($value) > 2 * 1024 * 1024
+        ) {
+            throw ApiException::validation([
+                $key => ['Fichier CSV requis (2 Mo maximum).'],
+            ]);
         }
         return $value;
     }

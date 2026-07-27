@@ -570,6 +570,36 @@ test('gouvernance des accès et révocation multi-session', async ({ browser }) 
     await adminPage.getByRole('button', { name: /Entreprise Alpha SA/ }).click();
     await adminPage.getByRole('button', { name: /Comptabilité principale/ }).click();
     await adminPage.getByRole('button', { name: 'Accès', exact: true }).click();
+    await expect(adminPage.getByRole('link', {
+      name: 'Exporter utilisateurs.csv'
+    })).toBeVisible();
+    await expect(adminPage.getByRole('link', {
+      name: 'Exporter roles_acces.csv'
+    })).toBeVisible();
+    const usersCsvInput = adminPage.getByLabel('CSV utilisateurs');
+    const accessCsvInput = adminPage.getByLabel('CSV rôles et accès');
+    await usersCsvInput.setInputFiles({
+      name: 'utilisateurs.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(
+        'email;prenom;nom;actif;mot_de_passe\n'
+        + 'admin@example.test;Alex;Administrateur;1;\n'
+      )
+    });
+    await accessCsvInput.setInputFiles({
+      name: 'roles_acces.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(
+        'email;portee;organisation;dossier_slug;role\n'
+        + 'admin@example.test;installation;;;administrateur\n'
+      )
+    });
+    await adminPage.getByRole('button', {
+      name: 'Vérifier les deux CSV'
+    }).click();
+    await expect(adminPage.getByText(
+      /Les affectations sont remplacées uniquement/
+    )).toBeVisible();
     await adminPage.getByRole('button', {
       name: 'Accès du dossier sélectionné'
     }).click();

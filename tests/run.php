@@ -1571,12 +1571,88 @@ final class Tests
             $transferPreview['transfer']['user_id'] ?? 0,
             'transfert explicite du dernier administrateur prévisualisé'
         );
+
+        $usersExport = $service->exportUsersCsv();
+        $accessExport = $service->exportAccessCsv();
+        $this->true(
+            str_contains(
+                $usersExport,
+                'email;prenom;nom;actif;mot_de_passe'
+            ),
+            'export utilisateurs fournit le modèle CSV attendu'
+        );
+        $this->false(
+            str_contains($usersExport, 'mot-de-passe-access'),
+            'export utilisateurs ne divulgue aucun mot de passe'
+        );
+        $this->true(
+            str_contains(
+                $accessExport,
+                'email;portee;organisation;dossier_slug;role'
+            ),
+            'export rôles et accès fournit un second CSV distinct'
+        );
+        $importUsers = implode("\n", [
+            'email;prenom;nom;actif;mot_de_passe',
+            'access-admin@example.test;Ada;Admin;1;',
+            'csv-user@example.test;Camille;CSV;1;nouveau-mot-de-passe',
+            '',
+        ]);
+        $importAccess = implode("\n", [
+            'email;portee;organisation;dossier_slug;role',
+            'access-admin@example.test;installation;;;administrateur',
+            'csv-user@example.test;dossier;Accès A;access-a1;lecteur',
+            '',
+        ]);
+        $csvPreview = $service->previewCsv($importUsers, $importAccess);
+        $this->same(
+            1,
+            $csvPreview['users']['created'],
+            'prévisualisation détecte le nouvel utilisateur'
+        );
+        $this->same(
+            1,
+            $csvPreview['access']['added'],
+            'prévisualisation détecte la nouvelle affectation'
+        );
+        $csvApplied = $service->importCsv(
+            $importUsers,
+            $importAccess,
+            $csvPreview['confirmation_token'],
+            $adminId
+        );
+        $this->true($csvApplied['applied'], 'import des deux CSV confirmé');
+        $csvUser = $users->findByEmail('csv-user@example.test');
+        $this->same('Camille', $csvUser['prenom'] ?? '', 'prénom CSV importé');
+        $this->true(
+            password_verify(
+                'nouveau-mot-de-passe',
+                (string) ($csvUser['mot_de_passe'] ?? '')
+            ),
+            'mot de passe du nouvel utilisateur correctement haché'
+        );
+        $this->true(
+            $access->canViewDossier(
+                (int) ($csvUser['id'] ?? 0),
+                $organisationA,
+                $dossierA1
+            ),
+            'rôle de dossier du second CSV appliqué'
+        );
+        $this->throws(
+            fn () => $service->previewCsv(
+                $importUsers,
+                str_replace(';lecteur', ';role-inconnu', $importAccess)
+            ),
+            'rôle CSV inconnu refusé avant toute mutation'
+        );
         $this->true(
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM audit_events
                  WHERE action IN (
                     'structure.acces_modifie',
-                    'structure.acces_dossier_copies'
+                    'structure.acces_dossier_copies',
+                    'structure.utilisateurs_acces_importes'
                  )"
             )->fetchColumn() >= 4,
             'mutations et copie auditées'
@@ -3406,6 +3482,64 @@ final class Tests
             'dossier.manage ne permet aucune auto-attribution'
         );
         $session->set('user_id', $registryAdminId);
+        $usersCsvExportResponse = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/users/export'
+        ));
+        $this->same(
+            200,
+            $usersCsvExportResponse->status,
+            'export CSV utilisateurs réservé à l’administrateur'
+        );
+        $this->true(
+            str_contains(
+                $usersCsvExportResponse->headers['Content-Disposition'] ?? '',
+                'utilisateurs.csv'
+            ),
+            'export HTTP nomme explicitement le premier CSV'
+        );
+        $accessCsvExportResponse = $app->handle(new Request(
+            'GET',
+            '/api/v1/structures/access/export'
+        ));
+        $this->same(
+            200,
+            $accessCsvExportResponse->status,
+            'export HTTP des rôles et accès disponible séparément'
+        );
+        $csvHttpPayload = [
+            'users_csv' => implode("\n", [
+                'email;prenom;nom;actif;mot_de_passe',
+                'registry-admin-http@example.test;;;1;',
+                '',
+            ]),
+            'access_csv' => implode("\n", [
+                'email;portee;organisation;dossier_slug;role',
+                'registry-admin-http@example.test;installation;;;administrateur',
+                '',
+            ]),
+        ];
+        $csvPreviewWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/access/csv-preview',
+            json: ['data' => $csvHttpPayload]
+        ));
+        $this->same(
+            403,
+            $csvPreviewWithoutCsrf->status,
+            'prévisualisation CSV protégée par CSRF'
+        );
+        $csvPreviewResponse = $app->handle(new Request(
+            'POST',
+            '/api/v1/structures/access/csv-preview',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $csvHttpPayload]
+        ));
+        $this->same(
+            200,
+            $csvPreviewResponse->status,
+            'prévisualisation coordonnée des deux CSV exposée par l’API'
+        );
         $accessMatrixResponse = $app->handle(new Request(
             'GET',
             '/api/v1/structures/access',

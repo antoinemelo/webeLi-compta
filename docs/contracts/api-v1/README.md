@@ -71,6 +71,10 @@ Les exemples versionnés sont :
 | POST | `/api/v1/structures/dossiers/archive` | archivage sans suppression de l’historique |
 | POST | `/api/v1/structures/dossiers/reactivate` | réactivation si l’organisation est active |
 | POST | `/api/v1/structures/dossiers/delete` | suppression d’un dossier sans donnée métier |
+| GET | `/api/v1/structures/users/export` | export administrateur de `utilisateurs.csv`, sans mot de passe |
+| GET | `/api/v1/structures/access/export` | export administrateur de `roles_acces.csv` |
+| POST | `/api/v1/structures/access/csv-preview` | validation coordonnée des deux CSV et aperçu signé |
+| POST | `/api/v1/structures/access/csv-import` | import atomique confirmé des utilisateurs et affectations |
 | GET | `/api/v1/structures/access` | matrice versionnée et rôles effectifs par source |
 | POST | `/api/v1/structures/access/preview` | aperçu signé des permissions avant/après |
 | POST | `/api/v1/structures/access/apply` | confirmation optimiste et auditée de l’aperçu |
@@ -239,6 +243,16 @@ administrateur d’une structure active renvoie
 `409 STRUCTURE_ACCESS_LAST_ADMIN`, sauf transfert explicite à un successeur.
 La copie lors de la création d’un dossier porte uniquement sur les lignes
 directes de `utilisateur_roles_dossier` et exige le `preview_hash` courant.
+
+L’import global est réservé à `installation.admin` et utilise deux fichiers :
+`utilisateurs.csv` pour l’identité, l’état actif et le mot de passe d’import,
+puis `roles_acces.csv` pour les affectations d’installation, d’organisation et
+de dossier. Aucun mot de passe ni hachage n’est exporté. Un mot de passe vide
+conserve celui d’un utilisateur existant et un nouvel utilisateur exige au
+moins douze caractères. Après prévisualisation, l’import remplace uniquement
+les affectations des utilisateurs présents dans le premier CSV ; les autres
+utilisateurs restent intacts. La transaction protège le compte opérateur et le
+dernier administrateur actif.
 
 ## Listes
 

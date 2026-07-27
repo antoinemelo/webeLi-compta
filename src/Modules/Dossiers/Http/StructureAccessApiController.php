@@ -100,6 +100,62 @@ final class StructureAccessApiController
         );
     }
 
+    public function exportUsers(Request $request): Response
+    {
+        $this->installationAdministrator();
+        return new Response(
+            $this->service->exportUsersCsv(),
+            200,
+            [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' => 'attachment; filename="utilisateurs.csv"',
+                'Cache-Control' => 'no-store',
+            ]
+        );
+    }
+
+    public function exportAccess(Request $request): Response
+    {
+        $this->installationAdministrator();
+        return new Response(
+            $this->service->exportAccessCsv(),
+            200,
+            [
+                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Disposition' => 'attachment; filename="roles_acces.csv"',
+                'Cache-Control' => 'no-store',
+            ]
+        );
+    }
+
+    public function csvPreview(Request $request): Response
+    {
+        $this->installationAdministrator();
+        $data = $this->validator->csvPreview($request);
+        return $this->execute(
+            $request,
+            fn (): array => $this->service->previewCsv(
+                $data['users_csv'],
+                $data['access_csv']
+            )
+        );
+    }
+
+    public function csvImport(Request $request): Response
+    {
+        $userId = $this->installationAdministrator();
+        $data = $this->validator->csvImport($request);
+        return $this->execute(
+            $request,
+            fn (): array => $this->service->importCsv(
+                $data['users_csv'],
+                $data['access_csv'],
+                $data['confirmation_token'],
+                $userId
+            )
+        );
+    }
+
     /** @param array<string,mixed> $scope */
     private function authorise(int $userId, array $scope): bool
     {
@@ -132,6 +188,18 @@ final class StructureAccessApiController
         $userId = $this->auth->userId();
         if ($userId === null) {
             throw ApiException::authenticationRequired();
+        }
+        return $userId;
+    }
+
+    private function installationAdministrator(): int
+    {
+        $userId = $this->userId();
+        if (!$this->access->hasInstallationPermission(
+            $userId,
+            'installation.admin'
+        )) {
+            throw ApiException::notFound('Périmètre introuvable.');
         }
         return $userId;
     }

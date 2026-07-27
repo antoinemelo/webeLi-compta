@@ -5,6 +5,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
+import { runtimeConfig } from '@/config';
 import { useContextStore } from '@/stores/context';
 import { useNotificationStore } from '@/stores/notifications';
 import { useOrganisationRegistryStore } from '@/stores/organisationRegistry';
@@ -27,6 +28,10 @@ const successorUserId = ref(0);
 const copyAccess = ref(false);
 const copySourceDossierId = ref(0);
 const copyConfirmed = ref(false);
+const usersCsv = ref('');
+const accessCsv = ref('');
+const usersCsvName = ref('');
+const accessCsvName = ref('');
 const deleteDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const deleteDossierDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const today = new Date().toISOString().slice(0, 10);
@@ -304,6 +309,33 @@ async function applyAccess(): Promise<void> {
   await store.applyAccess(successorUserId.value || undefined);
   await context.load();
   notifications.push('Matrice d’accès mise à jour et auditée.', 'success');
+}
+
+async function readCsv(
+  event: Event,
+  target: 'users' | 'access'
+): Promise<void> {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const contents = await file.text();
+  if (target === 'users') {
+    usersCsv.value = contents;
+    usersCsvName.value = file.name;
+  } else {
+    accessCsv.value = contents;
+    accessCsvName.value = file.name;
+  }
+  store.accessCsvPreview = null;
+}
+
+async function previewAccessCsv(): Promise<void> {
+  await store.previewAccessCsv(usersCsv.value, accessCsv.value);
+}
+
+async function importAccessCsv(): Promise<void> {
+  await store.importAccessCsv(usersCsv.value, accessCsv.value);
+  await context.load();
+  notifications.push('Utilisateurs, rôles et accès importés.', 'success');
 }
 
 async function previewCopy(): Promise<void> {
@@ -845,6 +877,69 @@ async function removeDossier(): Promise<void> {
             </button>
           </div>
 
+          <section v-if="canAdminister" class="csv-access-panel" aria-labelledby="csv-access-title">
+            <div>
+              <p class="eyebrow">Import / export</p>
+              <h4 id="csv-access-title">Utilisateurs, rôles et accès</h4>
+              <p class="help-text">
+                Le mot de passe n’est jamais exporté. À l’import, laissez-le vide
+                pour conserver celui d’un utilisateur existant.
+              </p>
+            </div>
+            <div class="registry-actions">
+              <a class="button secondary" :href="`${runtimeConfig.apiBaseUrl}/structures/users/export`">
+                Exporter utilisateurs.csv
+              </a>
+              <a class="button secondary" :href="`${runtimeConfig.apiBaseUrl}/structures/access/export`">
+                Exporter roles_acces.csv
+              </a>
+            </div>
+            <div class="csv-file-grid">
+              <label>
+                <strong>CSV utilisateurs</strong>
+                <input type="file" accept=".csv,text/csv" @change="readCsv($event, 'users')">
+                <small>{{ usersCsvName || 'Aucun fichier sélectionné' }}</small>
+              </label>
+              <label>
+                <strong>CSV rôles et accès</strong>
+                <input type="file" accept=".csv,text/csv" @change="readCsv($event, 'access')">
+                <small>{{ accessCsvName || 'Aucun fichier sélectionné' }}</small>
+              </label>
+            </div>
+            <button
+              type="button"
+              class="button secondary"
+              :disabled="!usersCsv || !accessCsv || store.saving"
+              @click="previewAccessCsv"
+            >
+              Vérifier les deux CSV
+            </button>
+            <div v-if="store.accessCsvPreview" class="permission-preview">
+              <p>
+                Utilisateurs : {{ store.accessCsvPreview.users.created }} à créer,
+                {{ store.accessCsvPreview.users.updated }} à modifier,
+                {{ store.accessCsvPreview.users.unchanged }} inchangé(s).
+              </p>
+              <p>
+                Affectations : {{ store.accessCsvPreview.access.added }} à ajouter,
+                {{ store.accessCsvPreview.access.removed }} à retirer.
+              </p>
+              <p class="help-text">
+                Les affectations sont remplacées uniquement pour les utilisateurs
+                présents dans utilisateurs.csv.
+              </p>
+              <button
+                v-if="!store.accessCsvPreview.applied"
+                type="button"
+                class="button"
+                :disabled="store.saving"
+                @click="importAccessCsv"
+              >
+                Confirmer l’import
+              </button>
+            </div>
+          </section>
+
           <div v-if="accessOpen && store.accessMatrix" class="access-workspace">
             <div class="access-version">
               <strong>
@@ -1132,6 +1227,29 @@ async function removeDossier(): Promise<void> {
   display: grid; gap: 1rem;
 }
 .structure-access { padding-top: 1rem; border-top: 1px solid var(--border); }
+.csv-access-panel {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: .65rem;
+  background: #f8f8fb;
+}
+.csv-access-panel h4, .csv-access-panel p { margin: 0; }
+.csv-file-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.csv-file-grid label { display: grid; gap: .45rem; }
+.csv-file-grid input {
+  width: 100%;
+  padding: .55rem;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: .45rem;
+}
+.csv-file-grid small { color: var(--muted); }
 .access-version { display: flex; justify-content: space-between; gap: 1rem; }
 .access-table td:first-child { min-width: 13rem; }
 .access-table td:first-child small { display: block; }
@@ -1157,7 +1275,7 @@ async function removeDossier(): Promise<void> {
   .organisation-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
-  .registry-grid, .organisation-list { grid-template-columns: 1fr; }
+  .registry-grid, .organisation-list, .csv-file-grid { grid-template-columns: 1fr; }
   .registry-heading, .panel-heading, .registry-actions, .inline-editor, .registry-filters {
     align-items: stretch; flex-direction: column;
   }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Compta\Modules\Dossiers;
 
 use Compta\Core\Audit\AuditLogger;
+use Compta\Core\Auth\UserRepository;
 use PDO;
 use Throwable;
 
@@ -13,6 +14,251 @@ final class StructureAccessService
         private readonly PDO $pdo,
         private readonly AuditLogger $audit,
     ) {
+    }
+
+    public function exportUsersCsv(): string
+    {
+        $rows = $this->pdo->query(
+            'SELECT email, prenom, nom, actif
+             FROM utilisateurs ORDER BY email COLLATE NOCASE'
+        )->fetchAll();
+        return $this->csv(
+            ['email', 'prenom', 'nom', 'actif', 'mot_de_passe'],
+            array_map(static fn (array $row): array => [
+                $row['email'],
+                $row['prenom'],
+                $row['nom'],
+                (int) $row['actif'],
+                '',
+            ], $rows)
+        );
+    }
+
+    public function exportAccessCsv(): string
+    {
+        $sql = <<<'SQL'
+SELECT u.email, 'installation' AS portee, '' AS organisation,
+       '' AS dossier_slug, r.code AS role
+FROM utilisateur_roles_installation ur
+JOIN utilisateurs u ON u.id = ur.utilisateur_id
+JOIN roles r ON r.id = ur.role_id
+UNION ALL
+SELECT u.email, 'organisation', o.nom, '', r.code
+FROM utilisateur_roles_organisation ur
+JOIN utilisateurs u ON u.id = ur.utilisateur_id
+JOIN organisations o ON o.id = ur.organisation_id
+JOIN roles r ON r.id = ur.role_id
+UNION ALL
+SELECT u.email, 'dossier', o.nom, d.slug, r.code
+FROM utilisateur_roles_dossier ur
+JOIN utilisateurs u ON u.id = ur.utilisateur_id
+JOIN dossiers d ON d.id = ur.dossier_id
+JOIN organisations o ON o.id = d.organisation_id
+JOIN roles r ON r.id = ur.role_id
+ORDER BY email COLLATE NOCASE, portee, organisation, dossier_slug, role
+SQL;
+        return $this->csv(
+            ['email', 'portee', 'organisation', 'dossier_slug', 'role'],
+            $this->pdo->query($sql)->fetchAll(PDO::FETCH_NUM)
+        );
+    }
+
+    /** @return array<string,mixed> */
+    public function previewCsv(string $usersCsv, string $accessCsv): array
+    {
+        $data = $this->normaliseCsvImport($usersCsv, $accessCsv);
+        $existing = $this->usersByEmail();
+        $created = 0;
+        $updated = 0;
+        $unchanged = 0;
+        foreach ($data['users'] as $email => $user) {
+            $current = $existing[$email] ?? null;
+            if ($current === null) {
+                $created++;
+                continue;
+            }
+            $changed = (
+                (string) $current['prenom'] !== $user['prenom']
+                || (string) $current['nom'] !== $user['nom']
+                || (int) $current['actif'] !== $user['actif']
+                || $user['password'] !== ''
+            );
+            $changed ? $updated++ : $unchanged++;
+        }
+        $currentAccess = $this->csvAccessAssignments(array_keys($data['users']));
+        $incomingAccess = array_keys($data['access']);
+        sort($currentAccess);
+        sort($incomingAccess);
+        $version = $this->csvVersion();
+        return [
+            'users' => [
+                'total' => count($data['users']),
+                'created' => $created,
+                'updated' => $updated,
+                'unchanged' => $unchanged,
+            ],
+            'access' => [
+                'total' => count($incomingAccess),
+                'added' => count(array_diff($incomingAccess, $currentAccess)),
+                'removed' => count(array_diff($currentAccess, $incomingAccess)),
+            ],
+            'mode' => 'replace_for_imported_users',
+            'version' => $version,
+            'confirmation_token' => $this->hash([
+                'version' => $version,
+                'users' => $data['users'],
+                'access' => $data['access'],
+            ]),
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function importCsv(
+        string $usersCsv,
+        string $accessCsv,
+        string $confirmationToken,
+        int $actorId,
+    ): array {
+        return $this->transaction(function () use (
+            $usersCsv,
+            $accessCsv,
+            $confirmationToken,
+            $actorId
+        ): array {
+            $preview = $this->previewCsv($usersCsv, $accessCsv);
+            if (!hash_equals(
+                (string) $preview['confirmation_token'],
+                $confirmationToken
+            )) {
+                throw new StructureAccessException(
+                    'La prévisualisation CSV a expiré.',
+                    'STRUCTURE_ACCESS_PREVIEW_CONFLICT'
+                );
+            }
+            $data = $this->normaliseCsvImport($usersCsv, $accessCsv);
+            $repository = new UserRepository($this->pdo);
+            $userIds = [];
+            foreach ($data['users'] as $email => $user) {
+                $current = $repository->findByEmail($email);
+                if ($current === null) {
+                    $userIds[$email] = $repository->create(
+                        $email,
+                        $user['password'],
+                        $user['prenom'],
+                        $user['nom']
+                    );
+                    if ($user['actif'] !== 1) {
+                        $this->pdo->prepare(
+                            'UPDATE utilisateurs SET actif = ? WHERE id = ?'
+                        )->execute([$user['actif'], $userIds[$email]]);
+                    }
+                } else {
+                    $userId = (int) $current['id'];
+                    $userIds[$email] = $userId;
+                    if ($userId === $actorId && $user['actif'] !== 1) {
+                        throw new StructureAccessException(
+                            'Vous ne pouvez pas désactiver votre propre compte.'
+                        );
+                    }
+                    $password = (string) $current['mot_de_passe'];
+                    if ($user['password'] !== '') {
+                        $algorithm = defined('PASSWORD_ARGON2ID')
+                            ? PASSWORD_ARGON2ID
+                            : PASSWORD_BCRYPT;
+                        $password = password_hash($user['password'], $algorithm);
+                    }
+                    $this->pdo->prepare(
+                        'UPDATE utilisateurs
+                         SET prenom = ?, nom = ?, actif = ?, mot_de_passe = ?
+                         WHERE id = ?'
+                    )->execute([
+                        $user['prenom'],
+                        $user['nom'],
+                        $user['actif'],
+                        $password,
+                        $userId,
+                    ]);
+                }
+            }
+            foreach ($userIds as $userId) {
+                $this->pdo->prepare(
+                    'DELETE FROM utilisateur_roles_installation
+                     WHERE utilisateur_id = ?'
+                )->execute([$userId]);
+                $this->pdo->prepare(
+                    'DELETE FROM utilisateur_roles_organisation
+                     WHERE utilisateur_id = ?'
+                )->execute([$userId]);
+                $this->pdo->prepare(
+                    'DELETE FROM utilisateur_roles_dossier
+                     WHERE utilisateur_id = ?'
+                )->execute([$userId]);
+            }
+            foreach ($data['access'] as $assignment) {
+                $userId = $userIds[$assignment['email']];
+                if ($assignment['scope'] === 'installation') {
+                    $this->pdo->prepare(
+                        'INSERT INTO utilisateur_roles_installation
+                         (utilisateur_id, role_id) VALUES (?, ?)'
+                    )->execute([$userId, $assignment['role_id']]);
+                } elseif ($assignment['scope'] === 'organisation') {
+                    $this->pdo->prepare(
+                        'INSERT INTO utilisateur_roles_organisation
+                         (utilisateur_id, organisation_id, role_id)
+                         VALUES (?, ?, ?)'
+                    )->execute([
+                        $userId,
+                        $assignment['organisation_id'],
+                        $assignment['role_id'],
+                    ]);
+                } else {
+                    $this->pdo->prepare(
+                        'INSERT INTO utilisateur_roles_dossier
+                         (utilisateur_id, dossier_id, role_id)
+                         VALUES (?, ?, ?)'
+                    )->execute([
+                        $userId,
+                        $assignment['dossier_id'],
+                        $assignment['role_id'],
+                    ]);
+                }
+            }
+            $adminRole = (int) $this->pdo->query(
+                "SELECT id FROM roles WHERE code = 'administrateur'"
+            )->fetchColumn();
+            $activeAdmins = $this->pdo->prepare(
+                'SELECT COUNT(*) FROM utilisateur_roles_installation ur
+                 JOIN utilisateurs u ON u.id = ur.utilisateur_id
+                 WHERE ur.role_id = ? AND u.actif = 1'
+            );
+            $activeAdmins->execute([$adminRole]);
+            if ((int) $activeAdmins->fetchColumn() < 1) {
+                throw new StructureAccessException(
+                    'L’import supprimerait le dernier administrateur.',
+                    'STRUCTURE_ACCESS_LAST_ADMIN'
+                );
+            }
+            $actorAdmin = $this->pdo->prepare(
+                'SELECT COUNT(*) FROM utilisateur_roles_installation
+                 WHERE utilisateur_id = ? AND role_id = ?'
+            );
+            $actorAdmin->execute([$actorId, $adminRole]);
+            if ((int) $actorAdmin->fetchColumn() !== 1) {
+                throw new StructureAccessException(
+                    'L’import ne peut pas retirer votre rôle administrateur.',
+                    'STRUCTURE_ACCESS_LAST_ADMIN'
+                );
+            }
+            $this->audit->log(
+                'structure.utilisateurs_acces_importes',
+                $actorId,
+                summary: [
+                    'utilisateurs' => count($data['users']),
+                    'acces' => count($data['access']),
+                ]
+            );
+            return [...$preview, 'applied' => true];
+        });
     }
 
     /** @return array<string,mixed> */
@@ -942,6 +1188,376 @@ final class StructureAccessService
         $result = array_values(array_unique(array_map('intval', $roleIds)));
         sort($result);
         return $result;
+    }
+
+    /**
+     * @param list<string> $headers
+     * @param list<array<int|string,mixed>> $rows
+     */
+    private function csv(array $headers, array $rows): string
+    {
+        $stream = fopen('php://temp', 'w+');
+        if ($stream === false) {
+            throw new StructureAccessException(
+                'Impossible de préparer le fichier CSV.'
+            );
+        }
+        fwrite($stream, "\xEF\xBB\xBF");
+        fputcsv($stream, $headers, ';', '"', '');
+        foreach ($rows as $row) {
+            fputcsv($stream, array_values($row), ';', '"', '');
+        }
+        rewind($stream);
+        $contents = stream_get_contents($stream);
+        fclose($stream);
+        if ($contents === false) {
+            throw new StructureAccessException(
+                'Impossible de générer le fichier CSV.'
+            );
+        }
+        return $contents;
+    }
+
+    /**
+     * @return array{
+     *   users:array<string,array{
+     *     email:string,prenom:string,nom:string,actif:int,password:string
+     *   }>,
+     *   access:array<string,array{
+     *     email:string,scope:string,organisation_id:?int,dossier_id:?int,
+     *     role_id:int,organisation:string,dossier_slug:string,role:string
+     *   }>
+     * }
+     */
+    private function normaliseCsvImport(
+        string $usersCsv,
+        string $accessCsv,
+    ): array {
+        $userRows = $this->parseCsv(
+            $usersCsv,
+            ['email', 'prenom', 'nom', 'actif', 'mot_de_passe'],
+            'utilisateurs'
+        );
+        $accessRows = $this->parseCsv(
+            $accessCsv,
+            ['email', 'portee', 'organisation', 'dossier_slug', 'role'],
+            'rôles et accès'
+        );
+        if ($userRows === []) {
+            throw new StructureAccessException(
+                'Le CSV utilisateurs doit contenir au moins un utilisateur.'
+            );
+        }
+
+        $existing = $this->usersByEmail();
+        $users = [];
+        foreach ($userRows as $index => $row) {
+            $line = $index + 2;
+            $email = mb_strtolower(trim((string) $row[0]));
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                throw new StructureAccessException(
+                    "CSV utilisateurs, ligne {$line}: adresse e-mail invalide."
+                );
+            }
+            if (isset($users[$email])) {
+                throw new StructureAccessException(
+                    "CSV utilisateurs, ligne {$line}: utilisateur dupliqué."
+                );
+            }
+            $activeValue = mb_strtolower(trim((string) $row[3]));
+            $active = match ($activeValue) {
+                '1', 'oui', 'true', 'actif' => 1,
+                '0', 'non', 'false', 'inactif' => 0,
+                default => null,
+            };
+            if ($active === null) {
+                throw new StructureAccessException(
+                    "CSV utilisateurs, ligne {$line}: actif doit valoir 1 ou 0."
+                );
+            }
+            $password = (string) $row[4];
+            if ($password !== '' && strlen($password) < 12) {
+                throw new StructureAccessException(
+                    "CSV utilisateurs, ligne {$line}: le mot de passe doit "
+                    . 'contenir au moins 12 caractères.'
+                );
+            }
+            if (!isset($existing[$email]) && $password === '') {
+                throw new StructureAccessException(
+                    "CSV utilisateurs, ligne {$line}: un mot de passe est "
+                    . 'requis pour un nouvel utilisateur.'
+                );
+            }
+            $users[$email] = [
+                'email' => $email,
+                'prenom' => trim((string) $row[1]),
+                'nom' => trim((string) $row[2]),
+                'actif' => $active,
+                'password' => $password,
+            ];
+        }
+
+        $roles = [];
+        foreach ($this->pdo->query('SELECT id, code FROM roles')->fetchAll() as $row) {
+            $roles[mb_strtolower((string) $row['code'])] = [
+                'id' => (int) $row['id'],
+                'code' => (string) $row['code'],
+            ];
+        }
+        $organisations = [];
+        foreach (
+            $this->pdo->query(
+                'SELECT id, nom FROM organisations ORDER BY id'
+            )->fetchAll() as $row
+        ) {
+            $key = mb_strtolower(trim((string) $row['nom']));
+            $organisations[$key][] = [
+                'id' => (int) $row['id'],
+                'name' => (string) $row['nom'],
+            ];
+        }
+        $dossiers = [];
+        foreach (
+            $this->pdo->query(
+                'SELECT id, organisation_id, slug FROM dossiers ORDER BY id'
+            )->fetchAll() as $row
+        ) {
+            $key = (int) $row['organisation_id']
+                . '|' . mb_strtolower(trim((string) $row['slug']));
+            $dossiers[$key][] = [
+                'id' => (int) $row['id'],
+                'slug' => (string) $row['slug'],
+            ];
+        }
+
+        $access = [];
+        foreach ($accessRows as $index => $row) {
+            $line = $index + 2;
+            $email = mb_strtolower(trim((string) $row[0]));
+            if (!isset($users[$email])) {
+                throw new StructureAccessException(
+                    "CSV rôles et accès, ligne {$line}: l’utilisateur doit "
+                    . 'aussi figurer dans le CSV utilisateurs.'
+                );
+            }
+            $scope = mb_strtolower(trim((string) $row[1]));
+            if (!in_array(
+                $scope,
+                ['installation', 'organisation', 'dossier'],
+                true
+            )) {
+                throw new StructureAccessException(
+                    "CSV rôles et accès, ligne {$line}: portée invalide."
+                );
+            }
+            $organisationName = trim((string) $row[2]);
+            $dossierSlug = trim((string) $row[3]);
+            $roleCode = mb_strtolower(trim((string) $row[4]));
+            $role = $roles[$roleCode] ?? null;
+            if ($role === null) {
+                throw new StructureAccessException(
+                    "CSV rôles et accès, ligne {$line}: rôle inconnu."
+                );
+            }
+            $organisationId = null;
+            $dossierId = null;
+            if ($scope === 'installation') {
+                if ($organisationName !== '' || $dossierSlug !== '') {
+                    throw new StructureAccessException(
+                        "CSV rôles et accès, ligne {$line}: organisation et "
+                        . 'dossier doivent être vides pour la portée installation.'
+                    );
+                }
+            } else {
+                $matches = $organisations[
+                    mb_strtolower($organisationName)
+                ] ?? [];
+                if (count($matches) !== 1) {
+                    throw new StructureAccessException(
+                        "CSV rôles et accès, ligne {$line}: organisation "
+                        . 'introuvable ou ambiguë.'
+                    );
+                }
+                $organisationId = $matches[0]['id'];
+                $organisationName = $matches[0]['name'];
+                if ($scope === 'organisation' && $dossierSlug !== '') {
+                    throw new StructureAccessException(
+                        "CSV rôles et accès, ligne {$line}: le dossier doit "
+                        . 'être vide pour la portée organisation.'
+                    );
+                }
+                if ($scope === 'dossier') {
+                    if ($dossierSlug === '') {
+                        throw new StructureAccessException(
+                            "CSV rôles et accès, ligne {$line}: dossier requis."
+                        );
+                    }
+                    $matches = $dossiers[
+                        $organisationId . '|' . mb_strtolower($dossierSlug)
+                    ] ?? [];
+                    if (count($matches) !== 1) {
+                        throw new StructureAccessException(
+                            "CSV rôles et accès, ligne {$line}: dossier "
+                            . 'introuvable ou ambigu.'
+                        );
+                    }
+                    $dossierId = $matches[0]['id'];
+                    $dossierSlug = $matches[0]['slug'];
+                }
+            }
+            $key = implode('|', [
+                $email,
+                $scope,
+                $organisationId ?? 0,
+                $dossierId ?? 0,
+                $role['id'],
+            ]);
+            $access[$key] = [
+                'email' => $email,
+                'scope' => $scope,
+                'organisation_id' => $organisationId,
+                'dossier_id' => $dossierId,
+                'role_id' => $role['id'],
+                'organisation' => $organisationName,
+                'dossier_slug' => $dossierSlug,
+                'role' => $role['code'],
+            ];
+        }
+        ksort($users);
+        ksort($access);
+        return ['users' => $users, 'access' => $access];
+    }
+
+    /**
+     * @param list<string> $expectedHeaders
+     * @return list<list<string>>
+     */
+    private function parseCsv(
+        string $contents,
+        array $expectedHeaders,
+        string $label,
+    ): array {
+        if ($contents === '' || strlen($contents) > 2 * 1024 * 1024) {
+            throw new StructureAccessException(
+                "Le CSV {$label} est vide ou dépasse 2 Mo."
+            );
+        }
+        $contents = preg_replace('/^\xEF\xBB\xBF/', '', $contents) ?? $contents;
+        $stream = fopen('php://temp', 'w+');
+        if ($stream === false) {
+            throw new StructureAccessException('Impossible de lire le CSV.');
+        }
+        fwrite($stream, $contents);
+        rewind($stream);
+        $headers = fgetcsv($stream, 0, ';', '"', '');
+        if ($headers !== $expectedHeaders) {
+            fclose($stream);
+            throw new StructureAccessException(
+                "En-têtes invalides dans le CSV {$label}; utilisez le modèle exporté."
+            );
+        }
+        $rows = [];
+        while (($row = fgetcsv($stream, 0, ';', '"', '')) !== false) {
+            if ($row === [null] || (count($row) === 1 && trim((string) $row[0]) === '')) {
+                continue;
+            }
+            if (count($row) !== count($expectedHeaders)) {
+                fclose($stream);
+                throw new StructureAccessException(
+                    "Une ligne du CSV {$label} ne contient pas le bon nombre de colonnes."
+                );
+            }
+            $rows[] = array_map(static fn (mixed $value): string => (
+                (string) $value
+            ), $row);
+            if (count($rows) > 10000) {
+                fclose($stream);
+                throw new StructureAccessException(
+                    "Le CSV {$label} dépasse 10 000 lignes."
+                );
+            }
+        }
+        fclose($stream);
+        return $rows;
+    }
+
+    /** @return array<string,array<string,mixed>> */
+    private function usersByEmail(): array
+    {
+        $users = [];
+        foreach (
+            $this->pdo->query(
+                'SELECT * FROM utilisateurs ORDER BY id'
+            )->fetchAll() as $row
+        ) {
+            $users[mb_strtolower((string) $row['email'])] = $row;
+        }
+        return $users;
+    }
+
+    /** @param list<string> $emails @return list<string> */
+    private function csvAccessAssignments(array $emails): array
+    {
+        if ($emails === []) {
+            return [];
+        }
+        $marks = implode(',', array_fill(0, count($emails), '?'));
+        $sql = <<<SQL
+SELECT lower(u.email) AS email, 'installation' AS scope, 0 AS organisation_id,
+       0 AS dossier_id, ur.role_id
+FROM utilisateur_roles_installation ur
+JOIN utilisateurs u ON u.id = ur.utilisateur_id
+WHERE lower(u.email) IN ({$marks})
+UNION ALL
+SELECT lower(u.email), 'organisation', ur.organisation_id, 0, ur.role_id
+FROM utilisateur_roles_organisation ur
+JOIN utilisateurs u ON u.id = ur.utilisateur_id
+WHERE lower(u.email) IN ({$marks})
+UNION ALL
+SELECT lower(u.email), 'dossier', d.organisation_id, ur.dossier_id, ur.role_id
+FROM utilisateur_roles_dossier ur
+JOIN utilisateurs u ON u.id = ur.utilisateur_id
+JOIN dossiers d ON d.id = ur.dossier_id
+WHERE lower(u.email) IN ({$marks})
+SQL;
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute([...$emails, ...$emails, ...$emails]);
+        return array_map(static fn (array $row): string => implode('|', [
+            $row['email'],
+            $row['scope'],
+            (int) $row['organisation_id'],
+            (int) $row['dossier_id'],
+            (int) $row['role_id'],
+        ]), $stmt->fetchAll());
+    }
+
+    private function csvVersion(): string
+    {
+        $users = $this->pdo->query(
+            'SELECT id, email, mot_de_passe, prenom, nom, actif
+             FROM utilisateurs ORDER BY id'
+        )->fetchAll(PDO::FETCH_NUM);
+        $assignments = [
+            'installation' => $this->pdo->query(
+                'SELECT utilisateur_id, role_id
+                 FROM utilisateur_roles_installation
+                 ORDER BY utilisateur_id, role_id'
+            )->fetchAll(PDO::FETCH_NUM),
+            'organisation' => $this->pdo->query(
+                'SELECT utilisateur_id, organisation_id, role_id
+                 FROM utilisateur_roles_organisation
+                 ORDER BY utilisateur_id, organisation_id, role_id'
+            )->fetchAll(PDO::FETCH_NUM),
+            'dossier' => $this->pdo->query(
+                'SELECT utilisateur_id, dossier_id, role_id
+                 FROM utilisateur_roles_dossier
+                 ORDER BY utilisateur_id, dossier_id, role_id'
+            )->fetchAll(PDO::FETCH_NUM),
+        ];
+        return $this->hash([
+            'users' => $users,
+            'assignments' => $assignments,
+        ]);
     }
 
     /** @param array<string,mixed> $data */

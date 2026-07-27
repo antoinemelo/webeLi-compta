@@ -219,6 +219,24 @@ export type StructureAccessPreview = {
   } | [];
 };
 
+export type UserAccessCsvPreview = {
+  users: {
+    total: number;
+    created: number;
+    updated: number;
+    unchanged: number;
+  };
+  access: {
+    total: number;
+    added: number;
+    removed: number;
+  };
+  mode: 'replace_for_imported_users';
+  version: string;
+  confirmation_token: string;
+  applied?: boolean;
+};
+
 export type DossierAccessCopyPreview = {
   organisation_id: number;
   source_dossier_id: number;

@@ -8,7 +8,8 @@ import type {
   OrganisationRegistryDetail,
   OrganisationRegistryPayload,
   StructureAccessMatrix,
-  StructureAccessPreview
+  StructureAccessPreview,
+  UserAccessCsvPreview
 } from '@/api/contracts';
 
 export const useOrganisationRegistryStore = defineStore('organisationRegistry', {
@@ -20,6 +21,7 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
     creationSummary: null as DossierInitializationSummary | null,
     accessMatrix: null as StructureAccessMatrix | null,
     accessPreview: null as StructureAccessPreview | null,
+    accessCsvPreview: null as UserAccessCsvPreview | null,
     copyPreview: null as DossierAccessCopyPreview | null,
     loading: false,
     saving: false,
@@ -199,6 +201,43 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
         )).data;
       } catch (error) {
         this.copyPreview = null;
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    },
+    async previewAccessCsv(usersCsv: string, accessCsv: string): Promise<void> {
+      this.saving = true;
+      this.error = '';
+      this.accessCsvPreview = null;
+      try {
+        this.accessCsvPreview = (await api.post<UserAccessCsvPreview>(
+          '/structures/access/csv-preview',
+          { users_csv: usersCsv, access_csv: accessCsv }
+        )).data;
+      } catch (error) {
+        this.error = errorMessage(error);
+        throw error;
+      } finally {
+        this.saving = false;
+      }
+    },
+    async importAccessCsv(usersCsv: string, accessCsv: string): Promise<void> {
+      if (!this.accessCsvPreview) return;
+      this.saving = true;
+      this.error = '';
+      try {
+        this.accessCsvPreview = (await api.post<UserAccessCsvPreview>(
+          '/structures/access/csv-import',
+          {
+            users_csv: usersCsv,
+            access_csv: accessCsv,
+            confirmation_token: this.accessCsvPreview.confirmation_token
+          }
+        )).data;
+        if (this.accessMatrix) await this.loadAccess(this.accessMatrix.scope);
+      } catch (error) {
         this.error = errorMessage(error);
         throw error;
       } finally {
