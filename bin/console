@@ -15,6 +15,7 @@ use Compta\Modules\Dossiers\DossierRegistryService;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Compta\PlanSeeder;
+use Compta\Modules\Configuration\Application\ConfigurationService;
 use Compta\Modules\Configuration\Application\ModuleAccessService;
 use Compta\Modules\Pedagogie\PedagogyService;
 use Compta\Modules\Tresorerie\BankImportService;
@@ -61,6 +62,7 @@ try {
         'db:migrate' => migrate($config, $pdo, $migrations, $options),
         'db:integrity' => integrity($pdo),
         'instance:init' => initializeInstance($pdo, $root, $options),
+        'pedagogie:ready' => ensurePedagogyReady($pdo, $options),
         'user:create-admin' => createAdmin($pdo, $options),
         'organisation:create' => createOrganisation($pdo, $options),
         'dossier:create' => createDossier($pdo, $options),
@@ -100,6 +102,7 @@ Compta — commandes du socle
   db:migrate --apply --backup
   db:integrity
   instance:init --admin-email=admin@example.test --organisation="Mon organisation" --nature=reelle --dossier="Comptabilité" --slug=comptabilite --type=reel --monnaie=CHF --exercice=2026 --debut=2026-01-01 --fin=2026-12-31 --modules=liquidites,facturation,comptabilite,salaires [--pedagogie] [--organisation-pedagogique="École WebeLi"] [--dossier-pedagogique="Démonstration guidée"]
+  pedagogie:ready --organisation=2 --dossier=2 --acteur=1
   user:create-admin --email=admin@example.test
   organisation:create --nom="École" --nature=pedagogique
   dossier:create --organisation=1 --nom="Mandat" --slug=mandat --type=exercice
@@ -271,9 +274,19 @@ function initializeInstance(PDO $pdo, string $root, array $options): int
         );
         $pedagogy = null;
         if (isset($options['pedagogie'])) {
+            $pedagogyModules = array_values(array_unique([
+                ...$modules,
+                'apprentissage',
+            ]));
             if (optionString($options, 'nature') === 'pedagogique') {
                 $pedagogyOrganisationId = $organisationId;
                 $pedagogyDossier = $dossier;
+                $moduleAccess->configureSelection(
+                    $pedagogyOrganisationId,
+                    (int) $pedagogyDossier['id'],
+                    $pedagogyModules,
+                    $userId
+                );
             } else {
                 $pedagogyOrganisationId = $scopes->createOrganisation(
                     optionString(
@@ -298,7 +311,7 @@ function initializeInstance(PDO $pdo, string $root, array $options): int
                     ),
                     'demo',
                     optionString($options, 'monnaie'),
-                    $modules,
+                    $pedagogyModules,
                     optionString($options, 'variante'),
                     isset($options['association']),
                     [
@@ -342,6 +355,78 @@ function initializeInstance(PDO $pdo, string $root, array $options): int
         'dossier_id' => $dossier['id'],
         'summary' => $dossier['summary'],
         'pedagogy' => $pedagogy,
+    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
+function ensurePedagogyReady(PDO $pdo, array $options): int
+{
+    $organisationId = optionInt($options, 'organisation');
+    $dossierId = optionInt($options, 'dossier');
+    $actorId = optionInt($options, 'acteur');
+    $scope = $pdo->prepare(
+        'SELECT o.nature, d.type
+         FROM organisations o
+         JOIN dossiers d ON d.organisation_id = o.id
+         WHERE o.id = ? AND d.id = ? AND o.actif = 1 AND d.actif = 1'
+    );
+    $scope->execute([$organisationId, $dossierId]);
+    $context = $scope->fetch();
+    if (
+        !is_array($context)
+        || $context['nature'] !== 'pedagogique'
+        || $context['type'] === 'reel'
+    ) {
+        throw new RuntimeException(
+            'Le contexte doit être un dossier actif d’une organisation pédagogique.'
+        );
+    }
+    $audit = new AuditLogger($pdo);
+    $modules = new ModuleAccessService($pdo);
+    $pdo->beginTransaction();
+    try {
+        $module = $pdo->prepare(
+            'SELECT actif, version FROM modules_dossier
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND module_code = \'apprentissage\''
+        );
+        $module->execute([$organisationId, $dossierId]);
+        $state = $module->fetch();
+        if (!is_array($state)) {
+            throw new RuntimeException('Module Apprentissage absent du dossier.');
+        }
+        if ((int) $state['actif'] !== 1) {
+            (new ConfigurationService($pdo, $audit, $modules))->setModule(
+                $organisationId,
+                $dossierId,
+                'apprentissage',
+                true,
+                (int) $state['version'],
+                $actorId
+            );
+        }
+        $catalog = (new PedagogyService(
+            $pdo,
+            $audit,
+            new EntryService($pdo, $audit)
+        ))->installTargetedCatalog(
+            $organisationId,
+            $dossierId,
+            $actorId
+        );
+        $pdo->commit();
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $exception;
+    }
+    echo json_encode([
+        'organisation_id' => $organisationId,
+        'dossier_id' => $dossierId,
+        'module_apprentissage' => true,
+        'catalogue' => $catalog,
     ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
     return 0;
 }
