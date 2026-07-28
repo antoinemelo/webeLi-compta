@@ -85,6 +85,12 @@ final class PayrollService
                 $month
             );
             $rateSnapshot = $this->rateSnapshot($rates) + $effective;
+            if ($employee['lpp_ppm'] !== null) {
+                $rateSnapshot['lpp_ppm'] = (int) $employee['lpp_ppm'];
+            }
+            if ($employee['emp_lpp_ppm'] !== null) {
+                $rateSnapshot['emp_lpp_ppm'] = (int) $employee['emp_lpp_ppm'];
+            }
             $employeeCalculation = [
                 'supplement_vacances_ppm' => $vacationPpm
                     ?? (int) $employee['supplement_vacances_ppm'],

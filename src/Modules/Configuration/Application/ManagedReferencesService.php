@@ -383,6 +383,70 @@ final class ManagedReferencesService
         );
     }
 
+    /** @return array{codes:int,regimes:int} */
+    public function clearVatConfiguration(
+        int $organisationId,
+        int $dossierId,
+        int $actorId,
+    ): array {
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $actorId
+        ): array {
+            $periods = $this->pdo->prepare(
+                'SELECT COUNT(*) FROM tva_periodes
+                 WHERE organisation_id = ? AND dossier_id = ?'
+            );
+            $periods->execute([$organisationId, $dossierId]);
+            if ((int) $periods->fetchColumn() > 0) {
+                throw new ConfigurationException(
+                    'La configuration TVA possède des périodes historiques. '
+                    . 'Elle doit être conservée pour la traçabilité.'
+                );
+            }
+
+            $codes = $this->pdo->prepare(
+                'SELECT id FROM tva_codes
+                 WHERE organisation_id = ? AND dossier_id = ?
+                 ORDER BY id'
+            );
+            $codes->execute([$organisationId, $dossierId]);
+            $codeIds = array_map('intval', $codes->fetchAll(PDO::FETCH_COLUMN));
+            foreach ($codeIds as $codeId) {
+                $this->vat->deleteCode(
+                    $organisationId,
+                    $dossierId,
+                    $codeId,
+                    $actorId
+                );
+            }
+
+            $regimes = $this->pdo->prepare(
+                'DELETE FROM tva_regimes
+                 WHERE organisation_id = ? AND dossier_id = ?'
+            );
+            $regimes->execute([$organisationId, $dossierId]);
+            $regimeCount = $regimes->rowCount();
+            $this->audit->log(
+                'configuration.tva_effacee',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'configuration_tva',
+                (string) $dossierId,
+                [
+                    'codes' => count($codeIds),
+                    'regimes' => $regimeCount,
+                ]
+            );
+            return [
+                'codes' => count($codeIds),
+                'regimes' => $regimeCount,
+            ];
+        });
+    }
+
     /** @param array<string,mixed> $data */
     public function savePayrollRates(
         int $organisationId,

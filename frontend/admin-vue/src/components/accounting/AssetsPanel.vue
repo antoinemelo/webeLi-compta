@@ -5,11 +5,13 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import type { AssetCategory, AssetRecord } from '@/api/contracts';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { useAssetStore } from '@/stores/assets';
 import { useContextStore } from '@/stores/context';
 
 const props = defineProps<{ exerciseId: number; currency: string }>();
 const assets = useAssetStore();
+useToastFeedback(assets);
 const context = useContextStore();
 const section = ref<'register' | 'schedule' | 'reconciliation' | 'categories'>('register');
 const selectedAssetId = ref(0);
@@ -337,7 +339,6 @@ async function reverseDisposal(): Promise<void> {
 <template>
   <section class="stack assets-workspace">
     <ErrorSummary :message="assets.error" />
-    <p v-if="assets.notice" class="notice success" role="status">{{ assets.notice }}</p>
     <SkeletonBlock v-if="assets.loading && !workspace" :lines="9" />
 
     <template v-if="workspace">

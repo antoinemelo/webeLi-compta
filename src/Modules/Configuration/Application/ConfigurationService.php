@@ -474,6 +474,17 @@ final class ConfigurationService
         ], $stmt->fetchAll());
     }
 
+    public function clearAudit(int $organisationId, int $dossierId): int
+    {
+        $this->assertScope($organisationId, $dossierId);
+        $stmt = $this->pdo->prepare(
+            'DELETE FROM audit_events
+             WHERE organisation_id = ? AND dossier_id = ?'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return $stmt->rowCount();
+    }
+
     /** @param array<string,mixed> $data @return array<string,string> */
     private function validateIdentity(array $data): array
     {

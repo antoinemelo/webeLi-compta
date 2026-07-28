@@ -6,11 +6,13 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import type { Exercise } from '@/api/contracts';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { useContextStore } from '@/stores/context';
 import { useDashboardStore } from '@/stores/dashboard';
 
 const context = useContextStore();
 const dashboard = useDashboardStore();
+useToastFeedback(dashboard, false);
 const exerciseId = ref(0);
 const asOfDate = ref('');
 let initializedDossierId = 0;

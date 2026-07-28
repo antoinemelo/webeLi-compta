@@ -1,6 +1,6 @@
 # Compta
 
-Socle PHP 8.2 / SQLite du projet défini dans `SPECS/`.
+Socle PHP 8.2 / SQLite.
 
 ## Installation locale
 
@@ -13,7 +13,7 @@ php -S 127.0.0.1:8080 -t public
 ```
 
 En production, le webroot doit être `public/`. `storage/`, `config/`, `src/`,
-`database/`, `templates/` et `SPECS/` ne doivent pas être servis par le serveur web.
+`database/` et `templates/` ne doivent pas être servis par le serveur web.
 
 ## Contrôles
 
@@ -263,3 +263,8 @@ python3 tools/python/compta.py
 Le lancement sans argument ouvre le menu interactif. Les sous-commandes
 documentées par `--help` restent utilisables pour l’automatisation. Voir
 [le guide d’administration Python](docs/administration-python.md).
+
+Le menu permet aussi de choisir un dossier local et un dossier FTP/FTPS
+d’arrivée pour installer directement le runtime minimal d’un nouveau site.
+`vendor` peut rester propre à l’instance, être mutualisé dans le répertoire
+parent ou ne pas être retransféré s’il existe déjà sur le serveur.

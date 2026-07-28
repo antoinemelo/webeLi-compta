@@ -5,9 +5,11 @@ withDefaults(defineProps<{
   title: string;
   description?: string;
   wide?: boolean;
+  extraWide?: boolean;
 }>(), {
   description: '',
-  wide: false
+  wide: false,
+  extraWide: false
 });
 
 const dialog = ref<HTMLDialogElement | null>(null);
@@ -34,7 +36,7 @@ defineExpose({ open, close });
 <template>
   <dialog
     ref="dialog"
-    :class="['form-dialog', { wide }]"
+    :class="['form-dialog', { wide, 'extra-wide': extraWide }]"
     :aria-labelledby="titleId"
     @cancel="close"
     @close="emit('closed')"

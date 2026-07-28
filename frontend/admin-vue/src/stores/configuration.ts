@@ -44,6 +44,9 @@ export const useConfigurationStore = defineStore('configuration', {
     async deleteVatCode(id: number): Promise<void> {
       await this.mutateReference('/configuration/references/vat-codes/delete', { id });
     },
+    async clearVatConfiguration(): Promise<void> {
+      await this.mutateReference('/configuration/references/vat/clear', {});
+    },
     async savePayrollRates(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/payroll-rates', data);
     },
@@ -104,6 +107,9 @@ export const useConfigurationStore = defineStore('configuration', {
         condition_id: conditionId,
         valid_from: validFrom
       });
+    },
+    async clearAudit(): Promise<void> {
+      await this.mutate('/configuration/audit/clear', {});
     },
     async mutate(path: string, data: Record<string, unknown>): Promise<void> {
       this.saving = true;

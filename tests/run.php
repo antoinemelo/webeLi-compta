@@ -491,9 +491,9 @@ final class Tests
         [$pdo, $runner, $databasePath] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            ['001', '002', '003'],
+            ['001', '002', '003', '004'],
             $applied,
-            'base initiale, gouvernance et lien contact-employé appliqués'
+            'base initiale et migrations complémentaires appliquées'
         );
         $this->same([], $runner->apply(), 'rejeu idempotent');
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité SQLite');
@@ -517,7 +517,7 @@ final class Tests
         $this->true(true, 'écriture concurrente possible après libération du verrou');
 
         $this->same(
-            3,
+            4,
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM schema_migrations"
             )->fetchColumn(),
@@ -4036,6 +4036,83 @@ final class Tests
             json: ['data' => ['id' => $vatCodeId]]
         ));
         $this->same(200, $vatDeleted->status, 'code TVA inutilisé supprimé depuis Vue');
+        $vatClearDossier = (new ScopeManager($pdo, $httpAudit))->createDossier(
+            $ids['organisation_a'],
+            'Effacement TVA et plan',
+            'effacement-tva-plan',
+            'reel'
+        );
+        (new PlanSeeder(
+            $pdo,
+            dirname(__DIR__) . '/database/seeds'
+        ))->installForDossier(
+            $ids['organisation_a'],
+            $vatClearDossier
+        );
+        $vatInstaller = new DefaultVatCodeInstaller($pdo, $httpAudit);
+        $vatInstaller->install($ids['organisation_a'], $vatClearDossier);
+        $vatInstaller->installDefaultRegime(
+            $ids['organisation_a'],
+            $vatClearDossier,
+            '2026-01-01'
+        );
+        $beforeVatClear = $httpChart->previewReset(
+            $ids['organisation_a'],
+            $vatClearDossier
+        );
+        $this->same(
+            5,
+            array_sum(array_map(
+                static fn (array $blocker): int =>
+                    $blocker['source'] === 'tva_regimes'
+                        ? (int) $blocker['count']
+                        : 0,
+                $beforeVatClear['blockers']
+            )),
+            'le régime TVA initial référence cinq comptes'
+        );
+        $session->set('user_id', $registryAdminId);
+        $session->set('dossier_id', $vatClearDossier);
+        $vatCleared = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/vat/clear',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => []]
+        ));
+        $this->same(
+            200,
+            $vatCleared->status,
+            'codes et régime TVA inutilisés effacés atomiquement'
+        );
+        $this->same(
+            '0|0',
+            (string) $pdo->query(
+                "SELECT
+                    (SELECT COUNT(*) FROM tva_codes
+                     WHERE dossier_id = {$vatClearDossier})
+                    || '|' ||
+                    (SELECT COUNT(*) FROM tva_regimes
+                     WHERE dossier_id = {$vatClearDossier})"
+            )->fetchColumn(),
+            'aucune référence TVA au plan ne subsiste'
+        );
+        $afterVatClear = $httpChart->previewReset(
+            $ids['organisation_a'],
+            $vatClearDossier
+        );
+        $this->true(
+            (bool) $afterVatClear['allowed'],
+            'plan comptable effaçable après effacement TVA'
+        );
+        $httpChart->reset(
+            $ids['organisation_a'],
+            $vatClearDossier,
+            (string) $afterVatClear['fingerprint'],
+            'EFFACER',
+            $userId
+        );
+        $session->set('user_id', $userId);
+        $session->set('dossier_id', $ids['dossier_a']);
         $payrollPayload = [
             'year' => 2026,
             'avs_ppm' => 53000,
@@ -4610,6 +4687,132 @@ final class Tests
             )->fetchColumn(),
             'montant API conservé rigoureusement en centimes'
         );
+        $draftEntry = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'exercise_id' => $exerciseId,
+                'journal_id' => $httpJournal,
+                'date' => '2026-05-10',
+                'label' => 'Brouillon à reprendre',
+                'reference' => 'DRAFT-REPRISE',
+                'attachment_reference' => 'PIECE-1',
+                'validate' => false,
+                'lines' => [
+                    ['account_id' => $entryCash, 'label' => 'Débit initial', 'debit_cents' => 1750, 'credit_cents' => 0],
+                    ['account_id' => $entrySales, 'label' => 'Crédit initial', 'debit_cents' => 0, 'credit_cents' => 1750],
+                ],
+            ]]
+        ));
+        $draftEntryId = (int) (
+            $this->responseJson($draftEntry)['data']['id'] ?? 0
+        );
+        $draftRead = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/entries/draft',
+            query: ['entry_id' => (string) $draftEntryId]
+        ));
+        $draftData = $this->responseJson($draftRead)['data'] ?? [];
+        $this->true(
+            $draftRead->status === 200
+            && ($draftData['reference'] ?? '') === 'DRAFT-REPRISE'
+            && count($draftData['lines'] ?? []) === 2,
+            'brouillon manuel relu avec ses lignes pour reprise'
+        );
+        $draftFinalized = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $draftEntryId,
+                'version' => (int) ($draftData['version'] ?? 0),
+                'exercise_id' => $exerciseId,
+                'journal_id' => $httpJournal,
+                'date' => '2026-05-10',
+                'label' => 'Brouillon finalisé',
+                'reference' => 'DRAFT-REPRISE',
+                'attachment_reference' => 'PIECE-2',
+                'validate' => true,
+                'lines' => [
+                    ['account_id' => $entryCash, 'label' => 'Débit final', 'debit_cents' => 1800, 'credit_cents' => 0],
+                    ['account_id' => $entrySales, 'label' => 'Crédit final', 'debit_cents' => 0, 'credit_cents' => 1800],
+                ],
+            ]]
+        ));
+        $this->true(
+            $draftFinalized->status === 200
+            && (string) $pdo->query(
+                "SELECT statut FROM ecritures WHERE id = {$draftEntryId}"
+            )->fetchColumn() === 'validee'
+            && (int) $pdo->query(
+                "SELECT COUNT(*) FROM ecritures WHERE reference = 'DRAFT-REPRISE'"
+            )->fetchColumn() === 1,
+            'reprise finalise le brouillon sans créer de doublon'
+        );
+        $deletableDraft = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'exercise_id' => $exerciseId,
+                'journal_id' => $httpJournal,
+                'date' => '2026-05-12',
+                'label' => 'Brouillon à supprimer',
+                'reference' => 'DRAFT-DELETE',
+                'attachment_reference' => '',
+                'validate' => false,
+                'lines' => [
+                    ['account_id' => $entryCash, 'label' => '', 'debit_cents' => 900, 'credit_cents' => 0],
+                    ['account_id' => $entrySales, 'label' => '', 'debit_cents' => 0, 'credit_cents' => 900],
+                ],
+            ]]
+        ));
+        $deletableDraftId = (int) (
+            $this->responseJson($deletableDraft)['data']['id'] ?? 0
+        );
+        $deletableDraftRead = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/entries/draft',
+            query: ['entry_id' => (string) $deletableDraftId]
+        ));
+        $deletableDraftVersion = (int) (
+            $this->responseJson($deletableDraftRead)['data']['version'] ?? 0
+        );
+        $deleteDraftWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries/delete',
+            json: ['data' => [
+                'id' => $deletableDraftId,
+                'version' => $deletableDraftVersion,
+            ]]
+        ));
+        $this->same(
+            403,
+            $deleteDraftWithoutCsrf->status,
+            'suppression de brouillon sans CSRF refusée'
+        );
+        $deleteDraft = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/entries/delete',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $deletableDraftId,
+                'version' => $deletableDraftVersion,
+            ]]
+        ));
+        $this->true(
+            $deleteDraft->status === 200
+            && ($this->responseJson($deleteDraft)['data']['deleted'] ?? false) === true
+            && (int) $pdo->query(
+                "SELECT COUNT(*) FROM ecritures WHERE id = {$deletableDraftId}"
+            )->fetchColumn() === 0
+            && (int) $pdo->query(
+                "SELECT COUNT(*) FROM lignes_ecriture
+                 WHERE ecriture_id = {$deletableDraftId}"
+            )->fetchColumn() === 0,
+            'brouillon et toutes ses lignes supprimés explicitement'
+        );
         $sameAccountEntry = $app->handle(new Request(
             'POST',
             '/api/v1/accounting/entries',
@@ -4722,6 +4925,49 @@ final class Tests
                 $archiveDownload->body
             ) === ($archiveDownload->headers['X-Content-SHA256'] ?? ''),
             'archive téléchargée avec empreinte vérifiée'
+        );
+        $archiveSnapshot = json_decode($archiveDownload->body, true);
+        $this->true(
+            is_array($archiveSnapshot)
+            && isset(
+                $archiveSnapshot['payload']['journal']['items'],
+                $archiveSnapshot['payload']['journal']['total_entries'],
+                $archiveSnapshot['payload']['journal']['total_debit_cents']
+            )
+            && ($archiveSnapshot['payload']['journal']['total_entries'] ?? 0) > 0,
+            'archive financière inclut le journal complet de l’exercice'
+        );
+        $archiveDeletePayload = ['data' => ['archive_id' => $archiveId]];
+        $archiveDeleteWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/archives/delete',
+            json: $archiveDeletePayload
+        ));
+        $this->same(
+            403,
+            $archiveDeleteWithoutCsrf->status,
+            'suppression d’archive sans CSRF refusée'
+        );
+        $archiveDelete = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/archives/delete',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: $archiveDeletePayload
+        ));
+        $this->true(
+            $archiveDelete->status === 200
+            && ($this->responseJson($archiveDelete)['data']['deleted'] ?? false) === true,
+            'archive financière supprimée explicitement depuis Vue'
+        );
+        $archiveMissing = $app->handle(new Request(
+            'GET',
+            '/api/v1/accounting/archives/download',
+            query: ['archive_id' => (string) $archiveId]
+        ));
+        $this->same(
+            422,
+            $archiveMissing->status,
+            'archive supprimée non téléchargeable'
         );
         $grandLivreGateway = $app->handle(new Request('GET', '/compta/grand-livre'));
         $this->same(303, $grandLivreGateway->status, 'ancien grand livre redirigé');
@@ -5849,6 +6095,39 @@ final class Tests
         $this->true(
             str_contains($seeder->attributions()[0]['attribution'], 'veb.ch'),
             'attribution VEB visible'
+        );
+        $this->same(
+            '173|123|50',
+            (string) $pdo->query(
+                "SELECT
+                    (SELECT COUNT(*) FROM comptes
+                     WHERE dossier_id = {$ids['dossier_b']})
+                    || '|' ||
+                    (SELECT COUNT(*) FROM comptes
+                     WHERE dossier_id = {$ids['dossier_b']} AND imputable = 1)
+                    || '|' ||
+                    (SELECT COUNT(*) FROM rubriques_comptables
+                     WHERE dossier_id = {$ids['dossier_b']})"
+            )->fetchColumn(),
+            'seed aligné sur les 123 comptes et 50 rubriques du plan de base'
+        );
+        $this->same(
+            6,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM comptes
+                 WHERE dossier_id = {$ids['dossier_b']}
+                   AND numero IN ('1010', '2280', '2810', '3001', '3002', '3003')"
+            )->fetchColumn(),
+            'éléments ajoutés du plan comptable de base installés'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM comptes
+                 WHERE dossier_id = {$ids['dossier_b']}
+                   AND numero IN ('1441', '2269', '3710', '3901')"
+            )->fetchColumn(),
+            'éléments absents du plan comptable de base non installés'
         );
         $this->same(
             'charge',
@@ -7110,6 +7389,53 @@ final class Tests
             )->fetchColumn(),
             'fermeture archive automatiquement ses rapports et contrôles'
         );
+        $closing->deleteArchive(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $archiveChanged,
+            $reportActorId
+        );
+        $this->same(
+            2,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM archives_rapports_financiers
+                 WHERE exercice_id = {$nextExercise} AND type = 'cloture'"
+            )->fetchColumn(),
+            'archive financière en double supprimable explicitement'
+        );
+        $this->throws(
+            fn () => $closing->archiveContent(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $archiveChanged
+            ),
+            'archive supprimée absente du dossier'
+        );
+        $setup->setExerciseStatus(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $nextExercise,
+            1,
+            'ferme',
+            $reportActorId
+        );
+        $this->throws(
+            fn () => $closing->deleteArchive(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $archiveA,
+                $reportActorId
+            ),
+            'archive d’un exercice fermé protégée contre la suppression'
+        );
+        $this->same(
+            2,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM archives_rapports_financiers
+                 WHERE exercice_id = {$nextExercise} AND type = 'cloture'"
+            )->fetchColumn(),
+            'refus de suppression conserve toutes les archives fermées'
+        );
 
         $chart = new ChartOfAccountsService($pdo, $audit);
         $adminVersion = (int) $pdo->query(
@@ -7706,7 +8032,7 @@ final class Tests
             2026,
             $rates
         );
-        $socialPayable = $account('2270');
+        $socialPayable = $account('2280');
         $configuration->saveMapping(
             $organisationId,
             $dossierId,
@@ -10552,8 +10878,8 @@ final class Tests
             [
                 'id' => $payable,
                 'number' => '2000',
-                'label' => "Dettes résultant de l'achat de biens et de "
-                    . 'prestations de services (Créanciers)',
+                'label' => "Dettes résultant d'achat et prestations de "
+                    . 'services (créanciers)',
             ],
             $created['collective_account'],
             'détail de dépense expose le compte de paiement fournisseur'

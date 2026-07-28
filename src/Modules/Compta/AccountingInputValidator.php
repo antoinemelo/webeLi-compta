@@ -262,6 +262,28 @@ final class AccountingInputValidator
         ];
     }
 
+    public function archiveDeletion(Request $request): int
+    {
+        $data = $this->only($request, ['archive_id']);
+        return $this->positiveInteger(
+            $data['archive_id'] ?? null,
+            'archive_id'
+        );
+    }
+
+    /** @return array{id:int,version:int} */
+    public function entryDeletion(Request $request): array
+    {
+        $data = $this->only($request, ['id', 'version']);
+        return [
+            'id' => $this->positiveInteger($data['id'] ?? null, 'id'),
+            'version' => $this->positiveInteger(
+                $data['version'] ?? null,
+                'version'
+            ),
+        ];
+    }
+
     public function queryId(Request $request, string $field): int
     {
         $this->rejectUnknown(array_keys($request->query), [$field]);
@@ -314,10 +336,22 @@ final class AccountingInputValidator
     public function entry(Request $request): array
     {
         $data = $this->only($request, [
-            'exercise_id', 'journal_id', 'date', 'label', 'reference',
+            'id', 'version', 'exercise_id', 'journal_id', 'date', 'label', 'reference',
             'attachment_reference', 'validate', 'lines',
         ]);
         $errors = [];
+        $entryId = $data['id'] ?? 0;
+        $version = $data['version'] ?? 0;
+        if (!is_int($entryId) || $entryId < 0) {
+            $errors['id'][] = 'Identifiant positif ou nul requis.';
+        }
+        if (
+            !is_int($version)
+            || $version < 0
+            || ($entryId > 0 && $version < 1)
+        ) {
+            $errors['version'][] = 'Version positive requise pour un brouillon existant.';
+        }
         foreach (['exercise_id', 'journal_id'] as $field) {
             if (!is_int($data[$field] ?? null) || $data[$field] < 1) {
                 $errors[$field][] = 'Identifiant positif requis.';
@@ -374,6 +408,8 @@ final class AccountingInputValidator
         }
         $this->fail($errors);
         return [
+            'id' => (int) $entryId,
+            'version' => (int) $version,
             'exercise_id' => (int) $data['exercise_id'],
             'journal_id' => (int) $data['journal_id'],
             'date' => $date,

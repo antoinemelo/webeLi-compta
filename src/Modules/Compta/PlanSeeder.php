@@ -9,11 +9,12 @@ use Throwable;
 final class PlanSeeder
 {
     private const VEB_CODE = 'veb-pme-fr';
-    private const VEB_VERSION = '2024-08-12';
+    private const VEB_VERSION = '2026-07-28-base';
     private const VEB_URL = 'https://www.kmu.admin.ch/dam/fr/sd-web/ddOMnlBEN93Z/'
         . '240812%20Schulkontenrahmen%20VEB%20-%20FR.pdf';
-    private const VEB_ATTRIBUTION = 'Plan comptable suisse PME '
-        . '(Mattle/Helbling/Pfaff), version officielle de référence du 12 août 2024 — © veb.ch, Zürich';
+    private const VEB_ATTRIBUTION = 'Plan comptable de base WebeLi, adapté du '
+        . 'Plan comptable suisse PME (Mattle/Helbling/Pfaff), '
+        . 'référence du 12 août 2024 — © veb.ch, Zürich';
 
     public function __construct(
         private readonly PDO $pdo,

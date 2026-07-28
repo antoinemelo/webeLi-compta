@@ -50,8 +50,8 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
     { key: 'annual', label: 'Annuels', path: '/salaires/annuels' }
   ],
   settings: [
-    { key: 'entity', label: 'Entité', path: '/configuration' },
     { key: 'modules', label: 'Modules', path: '/configuration/modules' },
+    { key: 'entity', label: 'Entité', path: '/configuration' },
     { key: 'payments', label: 'Paiements', path: '/configuration/paiements' },
     {
       key: 'references',

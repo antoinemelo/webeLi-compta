@@ -9,6 +9,7 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { runtimeConfig } from '@/config';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { subNavigation } from '@/router/navigation';
 import { useContextStore } from '@/stores/context';
 import { usePayrollStore } from '@/stores/payroll';
@@ -16,6 +17,7 @@ import { usePayrollStore } from '@/stores/payroll';
 const route = useRoute();
 const context = useContextStore();
 const store = usePayrollStore();
+useToastFeedback(store);
 const today = new Date().toISOString().slice(0, 10);
 const currentYear = new Date().getFullYear();
 const year = ref(currentYear);
@@ -25,7 +27,8 @@ const employee = reactive({
   id: 0, version: 0,
   first_name: '', last_name: '', avs: '', email: '', birth_date: '',
   address: '', postal_code: '', city: '',
-  procedure: 'ordinaire', vacation: '8.33', sourceTax: '0', active: true
+  procedure: 'ordinaire', vacation: '8.33', sourceTax: '0',
+  lpp: '', employerLpp: '', active: true
 });
 const contract = reactive({
   id: 0, version: 0,
@@ -54,6 +57,8 @@ const payrollPreview = ref<{
 } | null>(null);
 const employeeDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const contractDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const contractHistoryDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const contractHistoryEmployeeId = ref(0);
 const paymentsDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const posting = reactive({ exercise_id: 0, journal_id: 0, date: today });
 const payment = reactive({
@@ -62,9 +67,16 @@ const payment = reactive({
 });
 const allocation = reactive({ payment_id: 0, liability_id: 0, amount: '' });
 const ocasVerifiedOn = ref(today);
+const ocasSourceCsv = ref('');
+const ocasSourceName = ref('');
 const activeEmployees = computed(() => (
   workspace.value?.employees.filter((row) =>
     n(row, 'actif') === 1 && n(row, 'profil_incomplet') !== 1
+  ) || []
+));
+const contractHistory = computed(() => (
+  workspace.value?.catalog.contracts.filter(
+    (row) => n(row, 'employe_id') === contractHistoryEmployeeId.value
   ) || []
 ));
 const periodPayrolls = computed(() => (
@@ -258,7 +270,8 @@ function resetEmployeeEditor(): void {
     id: 0, version: 0,
     first_name: '', last_name: '', avs: '', email: '', birth_date: '',
     address: '', postal_code: '', city: '',
-    procedure: 'ordinaire', vacation: '8.33', sourceTax: '0', active: true
+    procedure: 'ordinaire', vacation: '8.33', sourceTax: '0',
+    lpp: '', employerLpp: '', active: true
   });
 }
 function createEmployee(): void {
@@ -280,6 +293,8 @@ function editEmployee(row: Record<string, unknown>): void {
     procedure: s(row, 'procedure'),
     vacation: percentage(n(row, 'supplement_vacances_ppm')),
     sourceTax: percentage(n(row, 'impot_source_ppm')),
+    lpp: row.lpp_ppm === null ? '' : percentage(n(row, 'lpp_ppm')),
+    employerLpp: row.emp_lpp_ppm === null ? '' : percentage(n(row, 'emp_lpp_ppm')),
     active: n(row, 'actif') === 1
   });
   void employeeDialog.value?.open();
@@ -287,9 +302,15 @@ function editEmployee(row: Record<string, unknown>): void {
 async function saveEmployee(): Promise<void> {
   let vacationPpm: number;
   let sourceTaxPpm: number;
+  let lppPpm: number | null;
+  let employerLppPpm: number | null;
   try {
     vacationPpm = ppm(employee.vacation);
     sourceTaxPpm = ppm(employee.sourceTax);
+    lppPpm = employee.lpp.trim() === '' ? null : ppm(employee.lpp);
+    employerLppPpm = employee.employerLpp.trim() === ''
+      ? null
+      : ppm(employee.employerLpp);
   } catch (error) {
     store.error = error instanceof Error ? error.message : 'Pourcentage invalide.';
     return;
@@ -309,6 +330,8 @@ async function saveEmployee(): Promise<void> {
     procedure: employee.procedure,
     vacation_ppm: vacationPpm,
     source_tax_ppm: sourceTaxPpm,
+    lpp_ppm: lppPpm,
+    emp_lpp_ppm: employerLppPpm,
     active: employee.active
   }, editing ? 'Données de l’employé mises à jour.' : 'Employé créé.');
   if (saved) {
@@ -356,6 +379,15 @@ function resetContractEditor(): void {
 function createContract(): void {
   resetContractEditor();
   void contractDialog.value?.open();
+}
+function createContractForEmployee(employeeId: number): void {
+  resetContractEditor();
+  contract.employee_id = employeeId;
+  void contractDialog.value?.open();
+}
+function openContractHistory(employeeId: number): void {
+  contractHistoryEmployeeId.value = employeeId;
+  void contractHistoryDialog.value?.open();
 }
 function editContract(row: Record<string, unknown>): void {
   Object.assign(contract, {
@@ -528,8 +560,19 @@ async function confirmOcas(): Promise<void> {
   if (!store.ocas) return;
   await mutate('/salaires/taux-ocas/confirmer', {
     year: store.ocas.year, fingerprint: store.ocas.fingerprint,
-    verified_on: ocasVerifiedOn.value
+    verified_on: ocasVerifiedOn.value,
+    source_csv: ocasSourceCsv.value
   }, 'Taux OCAS contrôlés et importés.');
+}
+async function readOcasSource(event: Event): Promise<void> {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  ocasSourceCsv.value = await file.text();
+  ocasSourceName.value = file.name;
+  store.ocas = null;
+}
+async function previewOcas(): Promise<void> {
+  await store.previewOcas(year.value, ocasSourceCsv.value);
 }
 async function certificate(action: 'preparer' | 'controler', employeeId: number): Promise<void> {
   await mutate(`/salaires/certificats/${action}`, {
@@ -564,7 +607,6 @@ onMounted(() => reload());
   </header>
   <CompactTabs :items="subNavigation.payroll" label="Navigation des salaires" />
   <ErrorSummary :message="store.error" />
-  <p v-if="store.notice" class="notice success" role="status">{{ store.notice }}</p>
   <SkeletonBlock v-if="store.loading && !workspace" :lines="8" />
 
   <template v-if="workspace">
@@ -622,6 +664,12 @@ onMounted(() => reload());
           <label>Procédure<select v-model="employee.procedure"><option value="ordinaire">Ordinaire</option><option value="simplifiee">Simplifiée</option><option value="ordinaire_impot_source">Impôt à la source</option></select></label>
           <label>Vacances (%)<input v-model="employee.vacation" inputmode="decimal"></label>
           <label>Impôt source (%)<input v-model="employee.sourceTax" inputmode="decimal"></label>
+          <label>LPP employé particulière (%)
+            <input v-model="employee.lpp" inputmode="decimal" placeholder="Taux annuel par défaut">
+          </label>
+          <label>LPP employeur particulière (%)
+            <input v-model="employee.employerLpp" inputmode="decimal" placeholder="Taux annuel par défaut">
+          </label>
           <label class="checkbox-field">
             <input v-model="employee.active" type="checkbox">
             Employé actif
@@ -700,6 +748,7 @@ onMounted(() => reload());
                   >{{ n(row,'profil_incomplet') === 1 ? 'À compléter' : (n(row,'actif') === 1 ? 'Actif' : 'Inactif') }}</span>
                 </td>
                 <td class="button-row">
+                  <button class="button secondary small" type="button" @click="openContractHistory(n(row,'id'))">Contrats</button>
                   <button class="button small" :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving" @click="editEmployee(row)">Modifier</button>
                   <button
                     class="button danger small"
@@ -713,18 +762,22 @@ onMounted(() => reload());
           </table>
         </div>
       </section>
-      <section class="panel">
+      <ModalDialog
+        ref="contractHistoryDialog"
+        :title="`Historique des contrats · ${employeeName(contractHistoryEmployeeId)}`"
+        description="Les contrats utilisés par une fiche restent protégés ; ils peuvent être désactivés mais pas supprimés."
+        wide
+      >
         <div class="section-heading">
-          <h2>Historique des contrats</h2>
-          <button class="button primary" type="button" :disabled="!workspace.capabilities.manage || !activeEmployees.length" @click="createContract">Nouveau contrat</button>
+          <h3>Contrats datés</h3>
+          <button class="button primary" type="button" :disabled="!workspace.capabilities.manage" @click="createContractForEmployee(contractHistoryEmployeeId)">Nouveau contrat</button>
         </div>
         <p>Les contrats utilisés par une fiche restent protégés ; ils peuvent être désactivés mais pas supprimés.</p>
         <div class="table-scroll">
           <table>
-            <thead><tr><th>Employé</th><th>Type</th><th>Début</th><th>Fin</th><th>Valeur</th><th>Activité</th><th>État</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Type</th><th>Début</th><th>Fin</th><th>Valeur</th><th>Activité</th><th>État</th><th>Actions</th></tr></thead>
             <tbody>
-              <tr v-for="row in workspace.catalog.contracts" :key="n(row,'id')">
-                <td>{{ employeeName(n(row,'employe_id')) }}</td>
+              <tr v-for="row in contractHistory" :key="n(row,'id')">
                 <td>{{ s(row,'type') }}</td>
                 <td>{{ s(row,'date_debut') }}</td>
                 <td>{{ s(row,'date_fin') || 'Sans fin' }}</td>
@@ -736,11 +789,11 @@ onMounted(() => reload());
                   <button class="button danger small" :disabled="!workspace.capabilities.manage || store.saving" @click="deleteContract(row)">Supprimer</button>
                 </td>
               </tr>
-              <tr v-if="!workspace.catalog.contracts.length"><td colspan="8">Aucun contrat.</td></tr>
+              <tr v-if="!contractHistory.length"><td colspan="7">Aucun contrat pour cet employé.</td></tr>
             </tbody>
           </table>
         </div>
-      </section>
+      </ModalDialog>
     </template>
 
     <template v-else-if="tab === 'calculs'">
@@ -1020,7 +1073,37 @@ onMounted(() => reload());
     <template v-else>
       <section class="metric-strip"><span><small>Brut annuel</small><strong>{{ money(Number(workspace.annual.employer.gross_cents || 0)) }}</strong></span><span><small>Retenues</small><strong>{{ money(Number(workspace.annual.employer.deductions_cents || 0)) }}</strong></span><span><small>Charges employeur</small><strong>{{ money(Number(workspace.annual.employer.employer_charges_cents || 0)) }}</strong></span><span><small>Coût total</small><strong>{{ money(Number(workspace.annual.employer.total_cost_cents || 0)) }}</strong></span></section>
       <section class="panel"><h2>Récapitulatifs et certificats</h2><div class="table-scroll"><table><thead><tr><th>Employé</th><th>Fiches</th><th>Brut</th><th>Net</th><th>Certificat</th></tr></thead><tbody><tr v-for="row in workspace.annual.employees" :key="n(row,'employe_id')"><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ n(row,'fiches') }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td class="button-row"><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii || n(row,'fiches') === 0" @click="certificate('preparer',n(row,'employe_id'))">Préparer</button><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii" @click="certificate('controler',n(row,'employe_id'))">Contrôler</button><a class="button small" :href="certificateUrl(n(row,'employe_id'))">Exporter</a></td></tr></tbody></table></div><p class="notice warning">{{ workspace.definitions.certificate }}</p></section>
-      <section class="panel"><h2>Import annuel OCAS</h2><div class="button-row"><button class="button" :disabled="store.saving" @click="store.previewOcas(year)">Prévisualiser sans écrire</button><label>Contrôlé le <input v-model="ocasVerifiedOn" type="date"></label><button v-if="store.ocas?.available" class="button primary" :disabled="store.ocas.missing_keys.length > 0" @click="confirmOcas">Confirmer l’import</button></div><p v-if="store.ocas" :class="['notice', store.ocas.available ? 'success' : 'warning']">{{ store.ocas.message }}</p><p v-if="store.ocas?.missing_keys.length">Clés manquantes : {{ store.ocas.missing_keys.join(', ') }}</p><div v-if="store.ocas?.rows.length" class="table-scroll"><table><thead><tr><th>Clé OCAS</th><th>Cible COMPTA</th><th>Valeur</th><th>Décision</th></tr></thead><tbody><tr v-for="row in store.ocas.rows" :key="s(row,'key')"><td>{{ s(row,'key') }}</td><td>{{ s(row,'target') || 'Non applicable' }}</td><td>{{ s(row,'value') }}</td><td>{{ s(row,'status') }} {{ s(row,'reason') }}</td></tr></tbody></table></div></section>
+      <section class="panel">
+        <div class="section-heading">
+          <div><p class="eyebrow">Source contrôlée</p><h2>Import annuel OCAS</h2></div>
+        </div>
+        <p>
+          Choisissez un CSV OCAS (<code>cle;valeur</code> ou
+          <code>annee;cle;valeur</code>). Sans fichier, la source serveur configurée
+          par <code>OCAS_DB_PATH</code> reste utilisée.
+        </p>
+        <div class="form-grid three">
+          <label>Fichier OCAS
+            <input type="file" accept=".csv,text/csv" @change="readOcasSource">
+            <small>{{ ocasSourceName || 'Source serveur configurée' }}</small>
+          </label>
+          <label>Contrôlé le<input v-model="ocasVerifiedOn" type="date"></label>
+          <button class="button" :disabled="store.saving" @click="previewOcas">
+            Prévisualiser sans écrire
+          </button>
+        </div>
+        <div v-if="store.ocas" class="permission-preview">
+          <p>{{ store.ocas.message }}</p>
+          <p v-if="store.ocas.missing_keys.length">Clés manquantes : {{ store.ocas.missing_keys.join(', ') }}</p>
+          <button
+            v-if="store.ocas.available"
+            class="button primary"
+            :disabled="store.ocas.missing_keys.length > 0"
+            @click="confirmOcas"
+          >Confirmer l’import</button>
+        </div>
+        <div v-if="store.ocas?.rows.length" class="table-scroll"><table><thead><tr><th>Clé OCAS</th><th>Cible COMPTA</th><th>Valeur</th><th>Décision</th></tr></thead><tbody><tr v-for="row in store.ocas.rows" :key="s(row,'key')"><td>{{ s(row,'key') }}</td><td>{{ s(row,'target') || 'Non applicable' }}</td><td>{{ s(row,'value') }}</td><td>{{ s(row,'status') }} {{ s(row,'reason') }}</td></tr></tbody></table></div>
+      </section>
     </template>
   </template>
   <EmptyState v-else-if="!store.loading" title="Salaires indisponibles" description="Sélectionnez un dossier autorisé." />

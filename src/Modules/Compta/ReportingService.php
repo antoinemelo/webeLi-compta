@@ -55,7 +55,7 @@ final class ReportingService
             : 'e.date_comptable, e.id';
         $query = $this->pdo->prepare(
             "SELECT e.id, e.numero, e.date_comptable, e.libelle, e.reference,
-                    e.statut, j.code AS journal,
+                    e.statut, e.source_type, j.code AS journal,
                     GROUP_CONCAT(DISTINCT CASE
                       WHEN l.debit_centimes > 0 THEN c.numero END) AS comptes_debit,
                     GROUP_CONCAT(DISTINCT CASE

@@ -760,6 +760,7 @@ export type AccountingWorkspace = {
       libelle: string;
       reference: string;
       statut: string;
+      source_type: string;
       journal: string;
       comptes_debit: string;
       comptes_credit: string;

@@ -3,21 +3,37 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
+import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { markUnsavedChanges } from '@/composables/unsavedChanges';
+import { useToastFeedback } from '@/composables/toastFeedback';
+import { cantonLabel } from '@/data/swissCantons';
 import { referenceNavigation, subNavigation } from '@/router/navigation';
 import { useConfigurationStore } from '@/stores/configuration';
 import { useContextStore } from '@/stores/context';
 import { useNotificationStore } from '@/stores/notifications';
+import { exerciseStatusLabel, periodStatusLabel } from '@/utils/statusLabels';
 
 const route = useRoute();
 const context = useContextStore();
 const store = useConfigurationStore();
+useToastFeedback(store, false);
 const notifications = useNotificationStore();
+const paymentTermDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const treasuryDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const exchangeRateDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const contactDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const vatDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const payrollRatesDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const exerciseDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const periodDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const clearAuditDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const clearVatDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const tabs = subNavigation.settings;
 const activeTab = computed(() => (
   route.name === 'managed-reference'
@@ -134,6 +150,15 @@ const payrollRateFields = [
   { key: 'emp_cpe_ppm', label: 'CPE employeur' },
   { key: 'emp_lfp_ppm', label: 'LFP employeur' },
   { key: 'emp_lpp_ppm', label: 'LPP employeur' }
+] as const;
+const payrollCsvColumns = [
+  { key: 'year', header: 'annee' },
+  { key: 'source', header: 'source' },
+  { key: 'verified_on', header: 'verifie_le' },
+  ...payrollRateFields.map((field) => ({
+    key: field.key,
+    header: `${field.key.replace(/_ppm$/, '')}_pct`
+  }))
 ] as const;
 payrollRateFields.forEach(({ key }) => { payrollDraft[key] = ''; });
 const payrollSettings = reactive({
@@ -334,14 +359,163 @@ function parseScaledPercent(value: string | number, scale: 100 | 10000): number 
   return result;
 }
 
+function csvCell(value: unknown): string {
+  const text = String(value ?? '');
+  return /[;"\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function parseSemicolonCsv(contents: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let index = 0; index < contents.length; index += 1) {
+    const character = contents[index];
+    if (quoted) {
+      if (character === '"' && contents[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        cell += character;
+      }
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+    } else if (character === ';') {
+      row.push(cell.trim());
+      cell = '';
+    } else if (character === '\n') {
+      row.push(cell.trim());
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else if (character !== '\r') {
+      cell += character;
+    }
+  }
+  if (quoted) throw new Error('Le fichier CSV contient une cellule non refermée.');
+  if (cell.length || row.length) {
+    row.push(cell.trim());
+    rows.push(row);
+  }
+  return rows.filter((candidate) => candidate.some((value) => value !== ''));
+}
+
+function validIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function exportPayrollRates(): void {
+  const rates = managedReferences.value?.payroll.rates ?? [];
+  const header = payrollCsvColumns.map((column) => csvCell(column.header)).join(';');
+  const rows = rates.map((rate) => payrollCsvColumns.map((column) => {
+    if (column.key === 'year') return csvCell(rate.year);
+    if (column.key === 'source') return csvCell(rate.source);
+    if (column.key === 'verified_on') return csvCell(rate.verified_on);
+    return csvCell(percentFromPpm(Number(rate[column.key] || 0)));
+  }).join(';'));
+  const blob = new Blob(
+    [`\uFEFF${[header, ...rows].join('\r\n')}\r\n`],
+    { type: 'text/csv;charset=utf-8' }
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `taux-charges-sociales-${today}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  notifications.push(
+    rates.length
+      ? `${rates.length} millésime(s) exporté(s) en CSV.`
+      : 'Modèle CSV des taux annuels exporté.',
+    'success'
+  );
+}
+
+async function importPayrollRates(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    if (file.size > 1_000_000) {
+      throw new Error('Le fichier CSV dépasse la taille maximale de 1 Mo.');
+    }
+    const rows = parseSemicolonCsv((await file.text()).replace(/^\uFEFF/, ''));
+    if (rows.length < 2) throw new Error('Le fichier CSV ne contient aucun millésime.');
+    const expectedHeaders = payrollCsvColumns.map((column) => column.header);
+    if (
+      rows[0].length !== expectedHeaders.length
+      || rows[0].some((header, index) => header !== expectedHeaders[index])
+    ) {
+      throw new Error(`En-têtes CSV attendus : ${expectedHeaders.join(';')}`);
+    }
+
+    const years = new Set<number>();
+    const payloads = rows.slice(1).map((row, rowIndex) => {
+      if (row.length !== expectedHeaders.length) {
+        throw new Error(`Ligne ${rowIndex + 2} : ${expectedHeaders.length} colonnes requises.`);
+      }
+      const values = Object.fromEntries(
+        payrollCsvColumns.map((column, index) => [column.key, row[index]])
+      ) as Record<string, string>;
+      const year = Number(values.year);
+      if (!Number.isInteger(year) || year < 2000 || year > 9999) {
+        throw new Error(`Ligne ${rowIndex + 2} : année invalide.`);
+      }
+      if (years.has(year)) {
+        throw new Error(`Ligne ${rowIndex + 2} : le millésime ${year} est présent deux fois.`);
+      }
+      years.add(year);
+      if (!values.source) throw new Error(`Ligne ${rowIndex + 2} : source requise.`);
+      if (!validIsoDate(values.verified_on)) {
+        throw new Error(`Ligne ${rowIndex + 2} : date de vérification invalide.`);
+      }
+      const payload: Record<string, unknown> = {
+        year,
+        source: values.source,
+        verified_on: values.verified_on
+      };
+      payrollRateFields.forEach(({ key }) => {
+        try {
+          payload[key] = parseScaledPercent(values[key], 10000);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'pourcentage invalide';
+          throw new Error(`Ligne ${rowIndex + 2}, ${key.replace(/_ppm$/, '_pct')} : ${message}`);
+        }
+      });
+      return payload;
+    });
+
+    for (const payload of payloads) await store.savePayrollRates(payload);
+    notifications.push(
+      `${payloads.length} millésime(s) importé(s) après validation du CSV.`,
+      'success'
+    );
+  } catch (error) {
+    if (!store.error) {
+      notifications.push(
+        error instanceof Error ? error.message : 'Import des taux annuels impossible.',
+        'error'
+      );
+    }
+  } finally {
+    input.value = '';
+  }
+}
+
 function syncVatRate(): void {
   if (!vatTreatmentsWithRate.includes(vatDraft.treatment)) {
     vatDraft.legal_rate_id = 0;
   }
 }
 
-async function createContact(): Promise<void> {
-  await store.createContact({ ...contactDraft, roles: [...contactDraft.roles] });
+function resetContactDraft(): void {
   Object.assign(contactDraft, {
     id: 0,
     version: 0,
@@ -361,6 +535,12 @@ async function createContact(): Promise<void> {
     city: '',
     country: 'CH'
   });
+}
+
+async function createContact(): Promise<void> {
+  await store.createContact({ ...contactDraft, roles: [...contactDraft.roles] });
+  resetContactDraft();
+  contactDialog.value?.close();
   notifications.push('Contact enregistré dans le registre unique.', 'success');
 }
 
@@ -386,6 +566,7 @@ function editContact(
     city: contact.city,
     country: contact.country
   });
+  void contactDialog.value?.open();
 }
 
 async function deleteContact(
@@ -456,6 +637,7 @@ function editVatCode(
     valid_from: code.valid_from,
     valid_until: code.valid_until || ''
   });
+  void vatDialog.value?.open();
 }
 
 function vatPayload(
@@ -522,8 +704,82 @@ async function saveVatCode(): Promise<void> {
       edited ? 'Code TVA modifié.' : 'Code TVA daté créé.',
       'success'
     );
+    vatDialog.value?.close();
   } catch (error) {
     if (error instanceof Error && !store.error) store.error = error.message;
+  }
+}
+
+function exportVatReferences(): void {
+  if (!managedReferences.value) return;
+  const payload = {
+    format: 'compta-vat-references-v1',
+    exported_at: new Date().toISOString(),
+    legal_rates: managedReferences.value.vat.legal_rates,
+    codes: managedReferences.value.vat.codes
+  };
+  const blob = new Blob(
+    [JSON.stringify(payload, null, 2)],
+    { type: 'application/json;charset=utf-8' }
+  );
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `references-tva-${today}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  notifications.push('Références TVA exportées.', 'success');
+}
+
+async function importVatReferences(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text()) as {
+      format?: string;
+      codes?: Array<Record<string, unknown>>;
+    };
+    if (payload.format !== 'compta-vat-references-v1' || !Array.isArray(payload.codes)) {
+      throw new Error('Fichier de références TVA incompatible.');
+    }
+    for (const code of payload.codes) {
+      await store.saveVatCode({
+        id: 0,
+        active: Boolean(code.active),
+        code: String(code.code || ''),
+        label: String(code.label || ''),
+        treatment: String(code.treatment || ''),
+        nature: String(code.nature || ''),
+        legal_rate_id: Number(code.legal_rate_id || 0) || null,
+        deduction_right: Boolean(code.deduction_right),
+        default_deduction_bp: Number(code.default_deduction_bp || 0),
+        afc_box: String(code.afc_box || ''),
+        account_id: Number(code.account_id || 0) || null,
+        valid_from: String(code.valid_from || ''),
+        valid_until: String(code.valid_until || '')
+      });
+    }
+    notifications.push(`${payload.codes.length} référence(s) TVA importée(s).`, 'success');
+  } catch (error) {
+    notifications.push(
+      error instanceof Error ? error.message : 'Import TVA impossible.',
+      'error'
+    );
+  } finally {
+    input.value = '';
+  }
+}
+
+async function clearVatReferences(): Promise<void> {
+  try {
+    await store.clearVatConfiguration();
+    notifications.push(
+      'Les codes et paramètres TVA inutilisés du dossier ont été effacés.',
+      'success'
+    );
+  } catch {
+    // Le message détaillé est affiché par le système de notifications.
   }
 }
 
@@ -534,6 +790,7 @@ function loadPayrollRates(source: Record<string, string | number | null>): void 
   payrollRateFields.forEach(({ key }) => {
     payrollDraft[key] = percentFromPpm(Number(source[key] || 0));
   });
+  void payrollRatesDialog.value?.open();
 }
 
 async function savePayrollRates(): Promise<void> {
@@ -551,6 +808,7 @@ async function savePayrollRates(): Promise<void> {
       'Taux salariaux annuels enregistrés avec leur source.',
       'success'
     );
+    payrollRatesDialog.value?.close();
   } catch (error) {
     if (error instanceof Error && !store.error) store.error = error.message;
   }
@@ -575,11 +833,13 @@ function editTreasuryAccount(
   account: NonNullable<typeof managedReferences.value>['treasury']['accounts'][number]
 ): void {
   Object.assign(treasuryDraft, account);
+  void treasuryDialog.value?.open();
 }
 
 async function saveTreasuryAccount(): Promise<void> {
   await store.saveTreasuryAccount({ ...treasuryDraft });
   resetTreasuryDraft();
+  treasuryDialog.value?.close();
   notifications.push('Compte de trésorerie enregistré.', 'success');
 }
 
@@ -590,6 +850,7 @@ async function saveCurrency(): Promise<void> {
 
 async function saveExchangeRate(): Promise<void> {
   await store.saveExchangeRate({ ...exchangeRateDraft });
+  exchangeRateDialog.value?.close();
   notifications.push('Taux daté et sourcé enregistré.', 'success');
 }
 
@@ -623,12 +884,14 @@ async function saveJournal(): Promise<void> {
 
 async function createExercise(): Promise<void> {
   await store.saveExercise({ ...exerciseDraft });
+  await context.loadExercises();
   Object.assign(exerciseDraft, {
     id: 0,
     version: 0,
     label: '',
     status: 'ouvert'
   });
+  exerciseDialog.value?.close();
   notifications.push('Exercice comptable créé.', 'success');
 }
 
@@ -636,7 +899,11 @@ async function toggleExercise(
   exercise: NonNullable<typeof managedReferences.value>['accounting_setup']['exercises'][number]
 ): Promise<void> {
   await store.saveExercise({
-    ...exercise,
+    id: exercise.id,
+    version: exercise.version,
+    label: exercise.label,
+    start_date: exercise.start_date,
+    end_date: exercise.end_date,
     status: exercise.status === 'ouvert' ? 'ferme' : 'ouvert'
   });
   await context.load();
@@ -651,6 +918,7 @@ async function createPeriod(): Promise<void> {
     label: '',
     status: 'ouverte'
   });
+  periodDialog.value?.close();
   notifications.push('Période comptable créée.', 'success');
 }
 
@@ -658,7 +926,12 @@ async function togglePeriod(
   period: NonNullable<typeof managedReferences.value>['accounting_setup']['periods'][number]
 ): Promise<void> {
   await store.savePeriod({
-    ...period,
+    id: period.id,
+    version: period.version,
+    exercise_id: period.exercise_id,
+    label: period.label,
+    start_date: period.start_date,
+    end_date: period.end_date,
     status: period.status === 'ouverte' ? 'fermee' : 'ouverte'
   });
   notifications.push('Statut de la période mis à jour.', 'success');
@@ -717,6 +990,7 @@ async function createTerm(): Promise<void> {
   await store.createPaymentTerm({ ...paymentTerm });
   paymentTerm.code = '';
   paymentTerm.label = '';
+  paymentTermDialog.value?.close();
   notifications.push('Condition de paiement datée créée.', 'success');
 }
 
@@ -726,6 +1000,11 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
   if (!conditionId) return;
   await store.savePaymentDefault(direction, conditionId, validFrom);
   notifications.push('Nouveau défaut daté enregistré sans effet rétroactif.', 'success');
+}
+
+async function clearAudit(): Promise<void> {
+  await store.clearAudit();
+  notifications.push('L’audit du dossier a été entièrement effacé.', 'success');
 }
 </script>
 
@@ -775,55 +1054,39 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             l’historique daté du registre des organisations
           </RouterLink>.
         </p>
+        <section class="entity-readonly-card" aria-label="Identité juridique active">
+          <div>
+            <span>Raison sociale</span>
+            <strong>{{ identity.legal_name || 'Non renseignée' }}</strong>
+          </div>
+          <div>
+            <span>Forme juridique</span>
+            <strong>{{ identity.legal_form || '—' }}</strong>
+          </div>
+          <div>
+            <span>IDE / UID</span>
+            <strong>{{ identity.uid || '—' }}</strong>
+          </div>
+          <div class="entity-address">
+            <span>Adresse légale</span>
+            <strong>
+              {{ [identity.address_line1, identity.address_line2].filter(Boolean).join(', ') || '—' }}
+            </strong>
+            <small>{{ identity.postal_code }} {{ identity.city }}</small>
+          </div>
+          <div>
+            <span>Canton</span>
+            <strong>{{ cantonLabel(identity.canton) }} ({{ identity.canton || '—' }})</strong>
+          </div>
+          <div>
+            <span>Pays</span>
+            <strong>{{ identity.country || '—' }}</strong>
+          </div>
+        </section>
         <div class="configuration-grid">
           <FormField id="organization-name" label="Nom usuel">
             <template #default="{ describedBy }">
               <input id="organization-name" v-model="identity.name" :aria-describedby="describedBy" required>
-            </template>
-          </FormField>
-          <FormField id="legal-name" label="Raison sociale">
-            <template #default="{ describedBy }">
-              <input id="legal-name" v-model="identity.legal_name" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="legal-form" label="Forme juridique">
-            <template #default="{ describedBy }">
-              <input id="legal-form" v-model="identity.legal_form" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="uid" label="Numéro IDE / UID">
-            <template #default="{ describedBy }">
-              <input id="uid" v-model="identity.uid" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="address-line1" label="Adresse">
-            <template #default="{ describedBy }">
-              <input id="address-line1" v-model="identity.address_line1" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="address-line2" label="Complément">
-            <template #default="{ describedBy }">
-              <input id="address-line2" v-model="identity.address_line2" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="postal-code" label="NPA">
-            <template #default="{ describedBy }">
-              <input id="postal-code" v-model="identity.postal_code" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="city" label="Localité">
-            <template #default="{ describedBy }">
-              <input id="city" v-model="identity.city" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="canton" label="Canton">
-            <template #default="{ describedBy }">
-              <input id="canton" v-model="identity.canton" maxlength="2" readonly :aria-describedby="describedBy">
-            </template>
-          </FormField>
-          <FormField id="country" label="Pays ISO">
-            <template #default="{ describedBy }">
-              <input id="country" v-model="identity.country" maxlength="2" readonly :aria-describedby="describedBy">
             </template>
           </FormField>
           <FormField id="phone" label="Téléphone">
@@ -913,13 +1176,22 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
       </section>
 
       <section v-else-if="activeTab === 'paiements'" class="configuration-stack">
-        <form class="panel configuration-form" @submit.prevent="createTerm">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Valeurs datées</p>
-              <h2>Nouvelle condition de paiement</h2>
-            </div>
+        <div class="section-toolbar">
+          <div>
+            <p class="eyebrow">Valeurs datées</p>
+            <h2>Conditions de paiement</h2>
           </div>
+          <button class="button primary" type="button" @click="paymentTermDialog?.open()">
+            Nouvelle condition
+          </button>
+        </div>
+        <ModalDialog
+          ref="paymentTermDialog"
+          title="Nouvelle condition de paiement"
+          description="Définissez une règle datée applicable aux clients, aux fournisseurs ou aux deux."
+          wide
+        >
+          <form class="configuration-form" @submit.prevent="createTerm">
           <div class="configuration-grid">
             <FormField id="term-code" label="Code">
               <template #default="{ describedBy }">
@@ -955,16 +1227,21 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                 <input id="term-until" v-model="paymentTerm.valid_until" type="date" :aria-describedby="describedBy">
               </template>
             </FormField>
-            <label class="checkbox-field">
+            <label class="option-card">
               <input v-model="paymentTerm.end_of_month" type="checkbox">
-              Reporter au dernier jour du mois obtenu
+              <span>
+                <strong>Fin de mois</strong>
+                <small>Reporter l’échéance au dernier jour du mois obtenu.</small>
+              </span>
             </label>
           </div>
           <p class="field-hint">{{ configuration.definitions.payment_due_date }}</p>
           <div class="form-actions">
             <button class="button primary" type="submit" :disabled="store.saving">Créer la condition</button>
+            <button class="button secondary" type="button" @click="paymentTermDialog?.close()">Annuler</button>
           </div>
-        </form>
+          </form>
+        </ModalDialog>
 
         <article class="panel">
           <div class="panel-heading">
@@ -1042,17 +1319,22 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </nav>
 
         <template v-if="managedReferences && referenceSection === 'treasury'">
-          <form
-            v-if="managedReferences.capabilities.treasury"
-            class="panel configuration-form"
-            @submit.prevent="saveTreasuryAccount"
+          <div class="section-toolbar">
+            <div><p class="eyebrow">Grand livre lié</p><h2>Comptes de trésorerie</h2></div>
+            <button
+              v-if="managedReferences.capabilities.treasury"
+              class="button primary"
+              type="button"
+              @click="resetTreasuryDraft(); treasuryDialog?.open()"
+            >Nouveau compte de trésorerie</button>
+          </div>
+          <ModalDialog
+            ref="treasuryDialog"
+            :title="treasuryDraft.id ? 'Modifier le compte de trésorerie' : 'Nouveau compte de trésorerie'"
+            description="Chaque compte de trésorerie est relié à un compte unique du grand livre."
+            wide
           >
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Grand livre lié</p>
-                <h2>{{ treasuryDraft.id ? 'Modifier le compte' : 'Nouveau compte de trésorerie' }}</h2>
-              </div>
-            </div>
+            <form class="configuration-form" @submit.prevent="saveTreasuryAccount">
             <div class="configuration-grid">
               <label>Compte comptable
                 <AccountCombobox
@@ -1105,8 +1387,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               >
                 Annuler la modification
               </button>
+              <button v-else class="button secondary" type="button" @click="treasuryDialog?.close()">
+                Annuler
+              </button>
             </div>
-          </form>
+            </form>
+          </ModalDialog>
           <article class="panel">
             <div class="panel-heading">
               <div><p class="eyebrow">Source unique</p><h2>Comptes de trésorerie</h2></div>
@@ -1151,27 +1437,72 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                 <h2>Devises autorisées</h2>
               </div>
             </div>
-            <form v-if="managedReferences.capabilities.currencies" class="configuration-grid" @submit.prevent="saveCurrency">
-              <label>Code ISO
-                <input v-model="currencyDraft.currency" maxlength="3" required>
+            <form v-if="managedReferences.capabilities.currencies" class="currency-editor" @submit.prevent="saveCurrency">
+              <label class="currency-code-control">
+                <span>Code ISO</span>
+                <input
+                  v-model="currencyDraft.currency"
+                  aria-label="Code ISO"
+                  maxlength="3"
+                  placeholder="EUR"
+                  required
+                >
               </label>
-              <label class="checkbox-field">
-                <input v-model="currencyDraft.active" type="checkbox"> Devise active
+              <label class="currency-toggle">
+                <input v-model="currencyDraft.active" type="checkbox">
+                <span class="currency-switch" aria-hidden="true"></span>
+                <span class="currency-toggle-copy">
+                  <strong>Devise active</strong>
+                  <small>Disponible pour les nouvelles opérations.</small>
+                </span>
               </label>
               <button class="button primary" type="submit" :disabled="store.saving">Enregistrer</button>
             </form>
-            <ul class="summary-list">
-              <li v-for="item in managedReferences.currencies.currencies" :key="item.code">
-                <strong>{{ item.code }}</strong>
-                <span>{{ item.is_base ? 'Devise de base' : item.active ? 'Active' : 'Inactive' }}</span>
+            <ul class="currency-list" aria-label="Devises configurées">
+              <li
+                v-for="item in managedReferences.currencies.currencies"
+                :key="item.code"
+                class="currency-card"
+                :class="{ 'currency-card-base': item.is_base, 'currency-card-inactive': !item.active }"
+              >
+                <span class="currency-code">{{ item.code }}</span>
+                <span class="currency-details">
+                  <strong>{{ item.is_base ? 'Devise de base' : `Devise ${item.code}` }}</strong>
+                  <small>
+                    {{ item.is_base
+                      ? 'Monnaie fonctionnelle du dossier'
+                      : item.active
+                        ? 'Disponible pour les nouvelles opérations'
+                        : 'Conservée pour l’historique uniquement' }}
+                  </small>
+                </span>
+                <span
+                  class="currency-status"
+                  :class="item.active ? 'currency-status-active' : 'currency-status-inactive'"
+                >
+                  <span aria-hidden="true"></span>
+                  {{ item.is_base ? 'Toujours active' : item.active ? 'Active' : 'Inactive' }}
+                </span>
               </li>
             </ul>
           </article>
 
-          <form v-if="managedReferences.capabilities.currencies" class="panel configuration-form" @submit.prevent="saveExchangeRate">
-            <div class="panel-heading">
-              <div><p class="eyebrow">Sans flottants</p><h2>Nouveau taux daté</h2></div>
-            </div>
+          <div class="section-toolbar">
+            <div><p class="eyebrow">Historique exact</p><h2>Taux de change datés</h2></div>
+            <button
+              v-if="managedReferences.capabilities.currencies"
+              class="button primary"
+              type="button"
+              @click="exchangeRateDialog?.open()"
+            >Nouveau taux daté</button>
+          </div>
+          <ModalDialog
+            ref="exchangeRateDialog"
+            title="Nouveau taux daté"
+            description="Le ratio exact et sa source restent traçables sans nombre flottant."
+            wide
+          >
+            <form class="configuration-form" @submit.prevent="saveExchangeRate">
             <div class="configuration-grid">
               <label>Devise source
                 <select v-model="exchangeRateDraft.source_currency" required>
@@ -1185,8 +1516,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               <label>Vérifié le<input v-model="exchangeRateDraft.verified_on" type="date" required></label>
             </div>
             <p class="form-help">Le ratio signifie : centimes {{ managedReferences.currencies.base_currency }} par centime de la devise source.</p>
-            <button class="button primary" type="submit" :disabled="store.saving">Ajouter le taux</button>
-          </form>
+            <div class="form-actions">
+              <button class="button primary" type="submit" :disabled="store.saving">Ajouter le taux</button>
+              <button class="button secondary" type="button" @click="exchangeRateDialog?.close()">Annuler</button>
+            </div>
+            </form>
+          </ModalDialog>
 
           <article class="panel">
             <div class="table-wrap">
@@ -1223,17 +1558,23 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'contacts'">
-          <form
-            v-if="managedReferences.capabilities.contacts"
-            class="panel configuration-form"
-            @submit.prevent="createContact"
+          <div class="section-toolbar">
+            <div><p class="eyebrow">Registre partagé</p><h2>Débiteurs et créanciers</h2></div>
+            <button
+              v-if="managedReferences.capabilities.contacts"
+              class="button primary"
+              type="button"
+              @click="resetContactDraft(); contactDialog?.open()"
+            >Nouveau débiteur ou créancier</button>
+          </div>
+          <ModalDialog
+            ref="contactDialog"
+            :title="contactDraft.id ? 'Modifier le contact' : 'Nouveau débiteur ou créancier'"
+            description="Un même contact peut cumuler plusieurs rôles sans être dupliqué."
+            wide
+            @closed="resetContactDraft"
           >
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Registre partagé</p>
-                <h2>{{ contactDraft.id ? 'Modifier le contact' : 'Nouveau débiteur ou créancier' }}</h2>
-              </div>
-            </div>
+            <form class="configuration-form" @submit.prevent="createContact">
             <div class="configuration-grid">
               <label>Type
                 <select v-model="contactDraft.type">
@@ -1297,8 +1638,10 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               <button class="button primary" type="submit" :disabled="store.saving">
                 {{ contactDraft.id ? 'Enregistrer le contact' : 'Créer le contact' }}
               </button>
+              <button class="button secondary" type="button" @click="contactDialog?.close()">Annuler</button>
             </div>
-          </form>
+            </form>
+          </ModalDialog>
           <article class="panel">
             <div class="panel-heading">
               <div><p class="eyebrow">Facturation</p><h2>Débiteurs et créanciers</h2></div>
@@ -1339,17 +1682,32 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'vat'">
-          <form
-            v-if="managedReferences.capabilities.vat"
-            class="panel configuration-form"
-            @submit.prevent="saveVatCode"
-          >
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Valeur datée</p>
-                <h2>{{ vatDraft.id ? 'Modifier le code TVA' : 'Nouveau code TVA' }}</h2>
-              </div>
+          <div class="section-toolbar">
+            <div><p class="eyebrow">Valeurs datées</p><h2>Références TVA</h2></div>
+            <div v-if="managedReferences.capabilities.vat" class="button-row">
+              <button class="button primary" type="button" @click="resetVatCode(); vatDialog?.open()">
+                Nouveau code TVA
+              </button>
+              <button class="button secondary" type="button" @click="exportVatReferences">
+                Exporter tout
+              </button>
+              <label class="button secondary file-button">
+                Importer
+                <input type="file" accept=".json,application/json" @change="importVatReferences">
+              </label>
+              <button class="button danger" type="button" @click="clearVatDialog?.open()">
+                Tout effacer
+              </button>
             </div>
+          </div>
+          <ModalDialog
+            ref="vatDialog"
+            :title="vatDraft.id ? 'Modifier le code TVA' : 'Nouveau code TVA'"
+            description="Le code relie un traitement fiscal daté à son taux légal et à son compte."
+            wide
+            @closed="resetVatCode"
+          >
+            <form class="configuration-form" @submit.prevent="saveVatCode">
             <div class="configuration-grid">
               <label>Code
                 <input v-model="vatDraft.code" maxlength="20" required>
@@ -1424,14 +1782,14 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                 {{ vatDraft.id ? 'Enregistrer les modifications' : 'Créer le code TVA' }}
               </button>
               <button
-                v-if="vatDraft.id"
                 class="button secondary"
                 type="button"
                 :disabled="store.saving"
-                @click="resetVatCode"
+                @click="vatDialog?.close()"
               >Annuler</button>
             </div>
-          </form>
+            </form>
+          </ModalDialog>
           <article class="panel">
             <div class="panel-heading">
               <div><p class="eyebrow">Référence légale</p><h2>Taux TVA suisses</h2></div>
@@ -1499,21 +1857,56 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'payroll'">
-          <form
-            v-if="managedReferences.capabilities.payroll"
-            class="panel configuration-form"
-            @submit.prevent="savePayrollRates"
+          <div class="section-toolbar">
+            <div><p class="eyebrow">Genève · valeurs en pourcentage</p><h2>Charges sociales</h2></div>
+            <button
+              v-if="managedReferences.capabilities.payroll"
+              class="button primary"
+              type="button"
+              @click="payrollRatesDialog?.open()"
+            >Taux annuels des charges sociales</button>
+          </div>
+          <ModalDialog
+            ref="payrollRatesDialog"
+            title="Taux annuels des charges sociales"
+            description="Enregistrez un millésime contrôlé avec sa source et sa date de vérification."
+            wide
           >
-            <div class="panel-heading">
-              <div>
-                <p class="eyebrow">Genève · valeurs en pourcentage</p>
-                <h2>Taux annuels des charges sociales</h2>
-              </div>
-            </div>
+            <form class="configuration-form" @submit.prevent="savePayrollRates">
             <p class="field-hint">
               Saisissez ici un millésime contrôlé manuellement ou utilisez
               Salaires → Annuels pour prévisualiser les taux OCAS sans écriture.
             </p>
+            <div class="csv-transfer">
+              <div>
+                <strong>Import et export CSV</strong>
+                <small>
+                  Les pourcentages utilisent jusqu’à quatre décimales. Toutes les
+                  lignes sont contrôlées avant l’enregistrement.
+                </small>
+              </div>
+              <div class="button-row">
+                <button
+                  class="button secondary"
+                  type="button"
+                  @click="exportPayrollRates"
+                >
+                  Exporter les taux CSV
+                </button>
+                <label
+                  v-if="managedReferences.capabilities.payroll"
+                  class="button secondary file-button"
+                >
+                  Importer des taux CSV
+                  <input
+                    aria-label="Fichier CSV des taux annuels"
+                    type="file"
+                    accept=".csv,text/csv"
+                    @change="importPayrollRates"
+                  >
+                </label>
+              </div>
+            </div>
             <div class="configuration-grid">
               <label>Année
                 <input v-model.number="payrollDraft.year" type="number" min="2000" max="9999" required>
@@ -1533,8 +1926,10 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               <button class="button primary" type="submit" :disabled="store.saving">
                 Enregistrer les taux annuels
               </button>
+              <button class="button secondary" type="button" @click="payrollRatesDialog?.close()">Annuler</button>
             </div>
-          </form>
+            </form>
+          </ModalDialog>
           <article class="panel">
             <div class="panel-heading">
               <div><p class="eyebrow">Historique immuable après usage</p><h2>Millésimes configurés</h2></div>
@@ -1643,23 +2038,23 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'exercises'">
-          <article class="panel">
-            <div class="panel-heading">
-              <div><p class="eyebrow">Organisation temporelle</p><h2>Exercices et périodes</h2></div>
+          <div class="section-toolbar">
+            <div><p class="eyebrow">Dossier</p><h2>Exercices comptables</h2></div>
+            <div v-if="managedReferences.capabilities.accounting_setup" class="button-row">
+              <button class="button primary" type="button" @click="exerciseDialog?.open()">Nouvel exercice comptable</button>
+              <button class="button secondary" type="button" @click="periodDialog?.open()">Nouvelle période</button>
             </div>
-            <p>
-              L’exercice délimite l’année de reporting et de clôture. Ses périodes
-              découpent cette enveloppe pour ouvrir ou verrouiller les saisies.
-            </p>
-          </article>
-          <form
-            v-if="managedReferences.capabilities.accounting_setup"
-            class="panel configuration-form"
-            @submit.prevent="createExercise"
+          </div>
+          <p>
+            L’exercice délimite l’année de reporting et de clôture. Ses périodes
+            découpent cette enveloppe pour ouvrir ou verrouiller les saisies.
+          </p>
+          <ModalDialog
+            ref="exerciseDialog"
+            title="Nouvel exercice comptable"
+            description="Définissez l’enveloppe annuelle de reporting et de clôture."
           >
-            <div class="panel-heading">
-              <div><p class="eyebrow">Périmètre temporel</p><h2>Nouvel exercice comptable</h2></div>
-            </div>
+            <form class="configuration-form" @submit.prevent="createExercise">
             <div class="configuration-grid">
               <label>Libellé
                 <input v-model="exerciseDraft.label" required>
@@ -1675,8 +2070,10 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               <button class="button primary" type="submit" :disabled="store.saving">
                 Créer l’exercice
               </button>
+              <button class="button secondary" type="button" @click="exerciseDialog?.close()">Annuler</button>
             </div>
-          </form>
+            </form>
+          </ModalDialog>
           <article class="panel">
             <div class="panel-heading">
               <div><p class="eyebrow">Dossier</p><h2>Exercices comptables</h2></div>
@@ -1689,7 +2086,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                     <td><strong>{{ exercise.label }}</strong></td>
                     <td>{{ exercise.start_date }}</td>
                     <td>{{ exercise.end_date }}</td>
-                    <td>{{ exercise.status }}</td>
+                    <td>
+                      <span
+                        class="status-badge"
+                        :class="exercise.status === 'ouvert' ? 'status-ouvert' : 'status-ferme'"
+                      >{{ exerciseStatusLabel(exercise.status) }}</span>
+                    </td>
                     <td>
                       <button
                         class="button secondary compact"
@@ -1705,14 +2107,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               </table>
             </div>
           </article>
-          <form
-            v-if="managedReferences.capabilities.accounting_setup"
-            class="panel configuration-form"
-            @submit.prevent="createPeriod"
+          <ModalDialog
+            ref="periodDialog"
+            title="Nouvelle période"
+            description="Découpez un exercice pour ouvrir ou verrouiller les saisies."
           >
-            <div class="panel-heading">
-              <div><p class="eyebrow">Verrouillage comptable</p><h2>Nouvelle période</h2></div>
-            </div>
+            <form class="configuration-form" @submit.prevent="createPeriod">
             <div class="configuration-grid">
               <label>Exercice
                 <select v-model.number="periodDraft.exercise_id" required>
@@ -1740,8 +2140,10 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
               <button class="button primary" type="submit" :disabled="store.saving">
                 Créer la période
               </button>
+              <button class="button secondary" type="button" @click="periodDialog?.close()">Annuler</button>
             </div>
-          </form>
+            </form>
+          </ModalDialog>
           <article class="panel">
             <div class="panel-heading">
               <div><p class="eyebrow">Contrôle de saisie</p><h2>Périodes comptables</h2></div>
@@ -1754,7 +2156,12 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                     <td><strong>{{ period.label }}</strong></td>
                     <td>{{ period.exercise }}</td>
                     <td>{{ period.start_date }} — {{ period.end_date }}</td>
-                    <td>{{ period.status }}</td>
+                    <td>
+                      <span
+                        class="status-badge"
+                        :class="period.status === 'ouverte' ? 'status-ouvert' : 'status-fermee'"
+                      >{{ periodStatusLabel(period.status) }}</span>
+                    </td>
                     <td>
                       <button
                         class="button secondary compact"
@@ -1797,54 +2204,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
                 : 'À enregistrer' }}
             </span>
           </div>
-          <p class="field-hint">
-            L’identité et les coordonnées ci-dessous proviennent de
-            <RouterLink to="/configuration">Configuration → Entité</RouterLink>.
-            Elles sont reprises automatiquement dans les calculs et les futures fiches.
-          </p>
           <div class="configuration-grid">
-            <label>Employeur
-              <input
-                :value="managedReferences.payroll.employer.name"
-                readonly
-                aria-readonly="true"
-              >
-            </label>
-            <label>Adresse
-              <input
-                :value="managedReferences.payroll.employer.address"
-                readonly
-                aria-readonly="true"
-              >
-            </label>
-            <label>NPA
-              <input
-                :value="managedReferences.payroll.employer.postal_code"
-                readonly
-                aria-readonly="true"
-              >
-            </label>
-            <label>Localité
-              <input
-                :value="managedReferences.payroll.employer.city"
-                readonly
-                aria-readonly="true"
-              >
-            </label>
-            <label>E-mail
-              <input
-                :value="managedReferences.payroll.employer.email"
-                readonly
-                aria-readonly="true"
-              >
-            </label>
-            <label>Téléphone
-              <input
-                :value="managedReferences.payroll.employer.phone"
-                readonly
-                aria-readonly="true"
-              >
-            </label>
             <label>Heures hebdomadaires
               <input
                 v-model="payrollSettings.weekly_hours"
@@ -1903,6 +2263,9 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             <p class="eyebrow">Traçabilité</p>
             <h2>Dernières modifications sensibles</h2>
           </div>
+          <button class="button danger" type="button" @click="clearAuditDialog?.open()">
+            Effacer tout l’audit
+          </button>
         </div>
         <DataTable
           caption="Vingt derniers événements d’audit du dossier"
@@ -1912,7 +2275,7 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
             { key: 'action', label: 'Action' },
             { key: 'target', label: 'Cible' }
           ]"
-          :rows="auditRows"
+        :rows="auditRows"
         />
       </section>
 
@@ -1922,5 +2285,23 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
         description="Choisissez un onglet de configuration disponible."
       />
     </template>
+    <ConfirmDialog
+      ref="clearVatDialog"
+      title="Effacer toutes les références TVA ?"
+      confirm-label="Tout effacer"
+      tone="danger"
+      @confirm="clearVatReferences"
+    >
+      <p>Cette action supprime ensemble les codes et le régime TVA technique du dossier. Toute période ou écriture TVA historique bloque l’opération afin de préserver la traçabilité.</p>
+    </ConfirmDialog>
+    <ConfirmDialog
+      ref="clearAuditDialog"
+      title="Effacer tout l’audit du dossier ?"
+      confirm-label="Effacer définitivement"
+      tone="danger"
+      @confirm="clearAudit"
+    >
+      <p>Les événements d’audit du dossier ne pourront pas être récupérés.</p>
+    </ConfirmDialog>
   </template>
 </template>

@@ -1,9 +1,15 @@
 <?php
 declare(strict_types=1);
 
-$composerAutoload = dirname(__DIR__) . '/vendor/autoload.php';
-if (is_file($composerAutoload)) {
-    require_once $composerAutoload;
+$root = dirname(__DIR__);
+foreach ([
+    $root . '/vendor/autoload.php',
+    dirname($root) . '/vendor/autoload.php',
+] as $composerAutoload) {
+    if (is_file($composerAutoload)) {
+        require_once $composerAutoload;
+        break;
+    }
 }
 
 spl_autoload_register(static function (string $class): void {

@@ -5,10 +5,13 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { runtimeConfig } from '@/config';
+import { useToastFeedback } from '@/composables/toastFeedback';
+import { swissCantons } from '@/data/swissCantons';
 import { useConsolidationStore } from '@/stores/consolidation';
 import { useContextStore } from '@/stores/context';
 
 const consolidation = useConsolidationStore();
+useToastFeedback(consolidation);
 const context = useContextStore();
 const section = ref<'balance' | 'setup' | 'reconciliation' | 'eliminations' | 'legal'>('balance');
 const selectedGroupId = ref(0);
@@ -185,7 +188,6 @@ async function mutate(path: string, data: Record<string, unknown>, notice: strin
   try {
     await consolidation.mutate(path, data, notice);
     await load();
-    consolidation.notice = notice;
   } catch {
     // Le store expose l’erreur structurée.
   }
@@ -407,7 +409,6 @@ function organisationLabel(organisationId: number): string {
 <template>
   <section class="stack">
     <ErrorSummary :message="consolidation.error" />
-    <p v-if="consolidation.notice" class="notice success" role="status">{{ consolidation.notice }}</p>
     <SkeletonBlock v-if="consolidation.loading && !workspace" :lines="7" />
     <template v-else-if="workspace">
       <section class="panel">
@@ -799,7 +800,14 @@ function organisationLabel(organisationId: number): string {
             <label>Complément<input v-model="legalDraft.line2"></label>
             <label>NPA<input v-model="legalDraft.postal_code"></label>
             <label>Localité<input v-model="legalDraft.city"></label>
-            <label>Canton<input v-model="legalDraft.canton"></label>
+            <label>Canton
+              <select v-model="legalDraft.canton">
+                <option value="">Choisir…</option>
+                <option v-for="canton in swissCantons" :key="canton.code" :value="canton.code">
+                  {{ canton.code }} — {{ canton.label }}
+                </option>
+              </select>
+            </label>
             <label>Pays<input v-model="legalDraft.country" maxlength="2"></label>
             <button class="button primary" :disabled="!context.can('compta.setup')">Versionner</button>
           </form>

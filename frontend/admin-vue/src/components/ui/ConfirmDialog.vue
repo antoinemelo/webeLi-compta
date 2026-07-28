@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue';
+import { nextTick, ref, useId } from 'vue';
 
 const props = withDefaults(defineProps<{
   title: string;
@@ -12,6 +12,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{ confirm: [] }>();
 const dialog = ref<HTMLDialogElement | null>(null);
 const cancel = ref<HTMLButtonElement | null>(null);
+const titleId = useId();
 
 async function open(): Promise<void> {
   dialog.value?.showModal();
@@ -32,9 +33,9 @@ defineExpose({ open, close });
 </script>
 
 <template>
-  <dialog ref="dialog" class="confirm-dialog" @cancel="close">
+  <dialog ref="dialog" class="confirm-dialog" :aria-labelledby="titleId" @cancel="close">
     <form method="dialog" @submit.prevent>
-      <h2>{{ title }}</h2>
+      <h2 :id="titleId">{{ title }}</h2>
       <div class="dialog-content"><slot /></div>
       <div class="dialog-actions">
         <button ref="cancel" type="button" class="button secondary" @click="close">Annuler</button>

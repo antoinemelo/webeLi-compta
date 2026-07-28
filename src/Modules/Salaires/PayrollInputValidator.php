@@ -45,6 +45,12 @@ final class PayrollInputValidator
             'impot_source_ppm' => $this->int(
                 $d['source_tax_ppm'] ?? 0, 'source_tax_ppm', 0, 1_000_000
             ),
+            'lpp_ppm' => ($d['lpp_ppm'] ?? null) === null
+                ? null
+                : $this->int($d['lpp_ppm'], 'lpp_ppm', 0, 1_000_000),
+            'emp_lpp_ppm' => ($d['emp_lpp_ppm'] ?? null) === null
+                ? null
+                : $this->int($d['emp_lpp_ppm'], 'emp_lpp_ppm', 0, 1_000_000),
             'actif' => ($d['active'] ?? true) ? 1 : 0,
         ];
     }
@@ -203,6 +209,9 @@ final class PayrollInputValidator
                 ? $this->int($d['employee_id'], 'employee_id') : 0,
             'fingerprint' => trim((string) ($d['fingerprint'] ?? '')),
             'verified_on' => trim((string) ($d['verified_on'] ?? '')),
+            'source_csv' => is_string($d['source_csv'] ?? null)
+                ? (string) $d['source_csv']
+                : '',
         ];
     }
 

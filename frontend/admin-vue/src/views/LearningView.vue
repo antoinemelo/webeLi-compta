@@ -7,6 +7,7 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { runtimeConfig } from '@/config';
 import { subNavigation } from '@/router/navigation';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { useContextStore } from '@/stores/context';
 import { usePedagogyStore } from '@/stores/pedagogy';
 import type { PedagogyAssignment, PedagogyCatalogItem } from '@/api/contracts';
@@ -14,6 +15,7 @@ import type { PedagogyAssignment, PedagogyCatalogItem } from '@/api/contracts';
 const route = useRoute();
 const context = useContextStore();
 const pedagogy = usePedagogyStore();
+useToastFeedback(pedagogy);
 const entryByStep = reactive<Record<number, number>>({});
 const tab = computed(() => String(route.params.tab || 'catalogue'));
 const allowed = computed(() =>
@@ -267,7 +269,6 @@ watch(
   </section>
   <template v-else>
     <ErrorSummary :message="localError || pedagogy.error" />
-    <p v-if="pedagogy.notice" class="notice success" role="status">{{ pedagogy.notice }}</p>
     <SkeletonBlock v-if="pedagogy.loading && !workspace" :lines="6" />
     <EmptyState
       v-else-if="workspace && !workspace.available"

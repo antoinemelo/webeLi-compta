@@ -437,14 +437,21 @@ final class AccountingWorkspaceService
         );
         $closingSnapshot = $closing['closing'];
         unset($closingSnapshot['archives']);
+        $journal = $this->journalDetails(
+            $organisationId,
+            $dossierId,
+            $exerciseId
+        );
         $payload = $type === 'cloture'
             ? [
                 'reports' => $reports,
+                'journal' => $journal,
                 'vat' => $vat,
                 'closing' => $closingSnapshot,
             ]
             : [
                 'reports' => $reports,
+                'journal' => $journal,
                 'vat' => $vat,
                 'tax_file' => $closing['tax_file'],
             ];
@@ -470,6 +477,20 @@ final class AccountingWorkspaceService
             $organisationId,
             $dossierId,
             $archiveId
+        );
+    }
+
+    public function deleteArchive(
+        int $organisationId,
+        int $dossierId,
+        int $archiveId,
+        int $actorId,
+    ): void {
+        $this->closing->deleteArchive(
+            $organisationId,
+            $dossierId,
+            $archiveId,
+            $actorId
         );
     }
 
@@ -630,7 +651,7 @@ final class AccountingWorkspaceService
         array $data,
         int $actorId,
     ): array {
-        $entryId = $this->entries->createDraft([
+        $command = [
             'organisation_id' => $organisationId,
             'dossier_id' => $dossierId,
             'exercice_id' => $data['exercise_id'],
@@ -648,7 +669,20 @@ final class AccountingWorkspaceService
                 ],
                 $data['lines']
             ),
-        ], $actorId);
+        ];
+        $entryId = (int) ($data['id'] ?? 0);
+        if ($entryId > 0) {
+            $this->entries->replaceDraft(
+                $organisationId,
+                $dossierId,
+                $entryId,
+                (int) ($data['version'] ?? 0),
+                $command,
+                $actorId
+            );
+        } else {
+            $entryId = $this->entries->createDraft($command, $actorId);
+        }
         $number = '';
         if ($data['validate']) {
             $number = $this->entries->validate(
@@ -659,6 +693,35 @@ final class AccountingWorkspaceService
             );
         }
         return ['id' => $entryId, 'number' => $number];
+    }
+
+    /** @return array<string,mixed> */
+    public function draft(
+        int $organisationId,
+        int $dossierId,
+        int $entryId,
+    ): array {
+        return $this->entries->draft(
+            $organisationId,
+            $dossierId,
+            $entryId
+        );
+    }
+
+    public function deleteDraft(
+        int $organisationId,
+        int $dossierId,
+        int $entryId,
+        int $expectedVersion,
+        int $actorId,
+    ): void {
+        $this->entries->deleteDraft(
+            $organisationId,
+            $dossierId,
+            $entryId,
+            $expectedVersion,
+            $actorId
+        );
     }
 
     /** @param list<array{id:int,label:string,version:int}> $rows */

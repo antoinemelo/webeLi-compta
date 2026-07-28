@@ -267,7 +267,13 @@ final class PayrollApiController
     {
         $this->scope('salaires.manage');
         $data = $this->validator->yearAction($request);
-        return $this->execute($request, fn (): array => $this->ocas->preview($data['year']));
+        return $this->execute(
+            $request,
+            fn (): array => $this->ocas->preview(
+                $data['year'],
+                $data['source_csv']
+            )
+        );
     }
 
     public function confirmOcas(Request $request): Response
@@ -276,7 +282,7 @@ final class PayrollApiController
         $data = $this->validator->yearAction($request);
         return $this->execute($request, fn (): array => $this->ocas->confirm(
             $organisationId, $dossierId, $data['year'], $data['fingerprint'],
-            $data['verified_on'], $userId
+            $data['verified_on'], $userId, $data['source_csv']
         ));
     }
 

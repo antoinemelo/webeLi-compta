@@ -16,6 +16,40 @@ SPEC.loader.exec_module(ADMIN)
 
 
 class ComptaAdminTests(unittest.TestCase):
+    @staticmethod
+    def make_runtime_source(root: Path) -> None:
+        files = {
+            ".htaccess": "Options -Indexes\n",
+            "index.php": "<?php\n",
+            "VERSION": "1.2.3\n",
+            "composer.json": "{}\n",
+            "composer.lock": '{"packages": []}\n',
+            "bootstrap/app.php": "<?php\n",
+            "config/app.php": "<?php return [];\n",
+            "config/local.php": "<?php return ['secret' => 'refusé'];\n",
+            "database/migrations/001_initial.sql": "SELECT 1;\n",
+            "public/.htaccess": "Options -Indexes\n",
+            "public/index.php": "<?php\n",
+            "public/app/index.html": "<main></main>\n",
+            "public/app/.vite/manifest.json": (
+                '{"entry":{"file":"assets/app.js","isEntry":true}}\n'
+            ),
+            "public/app/assets/app.js": "console.log('runtime');\n",
+            "public/app/assets/ancienne.js": "console.log('obsolète');\n",
+            "src/Core/App.php": "<?php\n",
+            "templates/layout.php": "<?php\n",
+            "vendor/autoload.php": "<?php\n",
+            "vendor/composer/installed.json": '{"packages": []}\n',
+            "frontend/admin-vue/src/App.vue": "<template />\n",
+            "tests/run.php": "<?php\n",
+            "tools/private.py": "print('outil')\n",
+            "storage/database/app.sqlite": "données privées",
+        }
+        for path, content in files.items():
+            target = root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
     def test_no_argument_opens_interactive_menu(self) -> None:
         self.assertIsNone(ADMIN.parser().parse_args([]).command)
         with patch("builtins.input", return_value="0"):
@@ -45,6 +79,246 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertIn("public/app/index.html", uploads)
         self.assertIn("vendor/autoload.php", uploads)
         self.assertGreater(len(uploads), 500)
+
+    def test_direct_ftp_install_selects_only_executable_runtime_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_runtime_source(root)
+            inventory = ADMIN.direct_install_files(root)
+            self.assertIn("public/app/assets/app.js", inventory)
+            self.assertNotIn("public/app/assets/ancienne.js", inventory)
+            self.assertIn("vendor/autoload.php", inventory)
+            self.assertIn("database/migrations/001_initial.sql", inventory)
+            self.assertNotIn("config/local.php", inventory)
+            self.assertNotIn("storage/database/app.sqlite", inventory)
+            self.assertNotIn("frontend/admin-vue/src/App.vue", inventory)
+            self.assertNotIn("tests/run.php", inventory)
+            self.assertNotIn("tools/private.py", inventory)
+            manifest = ADMIN.direct_install_manifest(root, inventory)
+            self.assertEqual(
+                "complete-runtime-install",
+                manifest["deployment_kind"],
+            )
+            self.assertTrue(ADMIN.direct_manifest_is_valid(
+                manifest,
+                manifest["source_fingerprint"],
+                inventory,
+            ))
+            self.assertNotIn(str(root), json.dumps(manifest))
+
+    def test_direct_ftp_install_rejects_incomplete_build_and_unsafe_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_runtime_source(root)
+            (root / "public/app/assets/app.js").unlink()
+            with self.assertRaisesRegex(ADMIN.AdminError, "build Vue est incomplet"):
+                ADMIN.direct_install_files(root)
+        self.assertEqual(
+            "/www/example/compta",
+            ADMIN.normalize_remote_root("/www//example/compta/"),
+        )
+        with self.assertRaises(ADMIN.AdminError):
+            ADMIN.normalize_remote_root("www/example/compta")
+        with self.assertRaises(ADMIN.AdminError):
+            ADMIN.normalize_remote_root("/www/../compta")
+
+    def test_vendor_is_found_in_parent_and_can_be_shared_or_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / "instance"
+            self.make_runtime_source(root)
+            local_vendor = root / "vendor"
+            shared_vendor = parent / "vendor"
+            local_vendor.rename(shared_vendor)
+            mode, detected = ADMIN.resolved_vendor_mode(root, "auto")
+            self.assertEqual("shared", mode)
+            self.assertEqual(shared_vendor, detected)
+            with_vendor = ADMIN.direct_install_files(root)
+            self.assertIn("vendor/autoload.php", with_vendor)
+            manifest = ADMIN.direct_install_manifest(
+                root,
+                with_vendor,
+                vendor_mode=mode,
+                vendor=detected,
+            )
+            vendor_entry = next(
+                item
+                for item in manifest["files"]
+                if item["path"] == "vendor/autoload.php"
+            )
+            self.assertEqual(
+                "../vendor/autoload.php",
+                vendor_entry["remote_path"],
+            )
+            without_vendor = ADMIN.direct_install_files(
+                root,
+                include_vendor=False,
+            )
+            self.assertFalse(any(
+                path.startswith("vendor/") for path in without_vendor
+            ))
+
+    def test_direct_ftp_install_uploads_and_verifies_every_file(self) -> None:
+        class FakeFtp:
+            def __init__(self) -> None:
+                self.files: dict[str, bytes] = {}
+
+            def __enter__(self) -> "FakeFtp":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def mkd(self, _path: str) -> None:
+                return None
+
+            def storbinary(self, command: str, stream: object) -> None:
+                path = command.removeprefix("STOR ")
+                self.files[path] = stream.read()
+
+            def retrbinary(self, command: str, callback: object) -> None:
+                path = command.removeprefix("RETR ")
+                if path not in self.files:
+                    raise ADMIN.ftplib.error_perm("550 absent")
+                callback(self.files[path])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_runtime_source(root)
+            inventory = ADMIN.direct_install_files(root)
+            manifest = ADMIN.direct_install_manifest(root, inventory)
+            ftp = FakeFtp()
+            with patch.object(ADMIN, "ftp_connect", return_value=ftp):
+                ADMIN.install_directory_ftp(
+                    {"transport": "ftps"},
+                    root,
+                    "/www/compta",
+                    inventory,
+                    manifest,
+                )
+            self.assertEqual(
+                (root / "index.php").read_bytes(),
+                ftp.files["/www/compta/index.php"],
+            )
+            marker = json.loads(
+                ftp.files[
+                    f"/www/compta/{ADMIN.REMOTE_MANIFEST}"
+                ].decode("utf-8")
+            )
+            self.assertEqual(
+                manifest["source_fingerprint"],
+                marker["source_fingerprint"],
+            )
+
+    def test_direct_ftp_install_protects_an_existing_destination(self) -> None:
+        class ExistingFtp:
+            def __enter__(self) -> "ExistingFtp":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def retrbinary(self, command: str, callback: object) -> None:
+                if command == "RETR /www/compta/index.php":
+                    callback(b"<?php existing")
+                    return
+                raise ADMIN.ftplib.error_perm("550 absent")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_runtime_source(root)
+            inventory = ADMIN.direct_install_files(root)
+            manifest = ADMIN.direct_install_manifest(root, inventory)
+            with patch.object(ADMIN, "ftp_connect", return_value=ExistingFtp()):
+                with self.assertRaisesRegex(
+                    ADMIN.AdminError,
+                    "contient déjà une installation",
+                ):
+                    ADMIN.install_directory_ftp(
+                        {"transport": "ftps"},
+                        root,
+                        "/www/compta",
+                        inventory,
+                        manifest,
+                    )
+
+    def test_direct_ftp_install_can_reuse_parent_vendor_without_uploading_it(
+        self,
+    ) -> None:
+        class SharedVendorFtp:
+            def __init__(self, installed: bytes) -> None:
+                self.files = {
+                    "/www/instances/vendor/autoload.php": b"<?php shared",
+                    "/www/instances/vendor/composer/installed.json": installed,
+                }
+                self.uploaded: list[str] = []
+
+            def __enter__(self) -> "SharedVendorFtp":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def mkd(self, _path: str) -> None:
+                return None
+
+            def storbinary(self, command: str, stream: object) -> None:
+                path = command.removeprefix("STOR ")
+                self.uploaded.append(path)
+                self.files[path] = stream.read()
+
+            def retrbinary(self, command: str, callback: object) -> None:
+                path = command.removeprefix("RETR ")
+                if path not in self.files:
+                    raise ADMIN.ftplib.error_perm("550 absent")
+                callback(self.files[path])
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_runtime_source(root)
+            inventory = ADMIN.direct_install_files(
+                root,
+                include_vendor=False,
+            )
+            vendor = ADMIN.vendor_directory(root)
+            manifest = ADMIN.direct_install_manifest(
+                root,
+                inventory,
+                vendor_mode="skip",
+                vendor=vendor,
+            )
+            ftp = SharedVendorFtp(
+                (vendor / "composer/installed.json").read_bytes()
+            )
+            with patch.object(ADMIN, "ftp_connect", return_value=ftp):
+                ADMIN.install_directory_ftp(
+                    {"transport": "ftps"},
+                    root,
+                    "/www/instances/compta",
+                    inventory,
+                    manifest,
+                )
+            self.assertTrue(
+                "/www/instances/compta/index.php" in ftp.uploaded
+            )
+            self.assertFalse(any(
+                "/vendor/" in path for path in ftp.uploaded
+            ))
+
+    def test_ftp_install_command_exposes_source_and_remote_directories(self) -> None:
+        arguments = ADMIN.parser().parse_args([
+            "ftp-install",
+            "--source",
+            "/tmp/release",
+            "--remote-root",
+            "/www/compta",
+        ])
+        self.assertEqual(Path("/tmp/release"), arguments.source)
+        self.assertEqual("/www/compta", arguments.remote_root)
+        self.assertFalse(arguments.apply)
+        self.assertFalse(arguments.replace_runtime)
+        self.assertIsNone(arguments.vendor_mode)
+        self.assertFalse(arguments.replace_shared_vendor)
 
     def test_only_complete_v2_manifests_are_trusted_for_deltas(self) -> None:
         commit = ADMIN.git("rev-parse", "HEAD")

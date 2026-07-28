@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import ModalDialog from '@/components/ui/ModalDialog.vue';
 import AssetsPanel from '@/components/accounting/AssetsPanel.vue';
 import ConsolidationPanel from '@/components/accounting/ConsolidationPanel.vue';
@@ -10,17 +11,36 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { runtimeConfig } from '@/config';
-import type { AccountingWorkspace } from '@/api/contracts';
+import type { AccountingWorkspace, Exercise } from '@/api/contracts';
 import { api, errorMessage } from '@/api/client';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { referenceNavigation, subNavigation } from '@/router/navigation';
 import { useAccountingStore } from '@/stores/accounting';
 import { useContextStore } from '@/stores/context';
+import { exerciseStatusLabel, periodStatusLabel } from '@/utils/statusLabels';
 
 type EntryLine = {
   account_id: number;
   label: string;
   debit: string;
   credit: string;
+};
+
+type EntryDraft = {
+  id: number;
+  version: number;
+  exercise_id: number;
+  journal_id: number;
+  date: string;
+  label: string;
+  reference: string;
+  attachment_reference: string;
+  lines: Array<{
+    account_id: number;
+    label: string;
+    debit_cents: number;
+    credit_cents: number;
+  }>;
 };
 
 type CashFlowCategory = {
@@ -101,13 +121,49 @@ type JournalDetails = {
   total_credit_cents: number;
 };
 
+type FinancialArchive = AccountingWorkspace['closing']['archives'][number];
+
+type FinancialArchiveSnapshot = {
+  format: 'compta-financial-archive-v1';
+  parameters: {
+    exercise_id: number;
+    date_start: string;
+    date_end: string;
+    type: string;
+  };
+  ledger_hash: string;
+  payload: {
+    reports: AccountingWorkspace['reports'];
+    journal?: JournalDetails;
+  };
+};
+
+type JournalSortKey =
+  | 'date_comptable'
+  | 'numero'
+  | 'comptes_debit'
+  | 'comptes_credit'
+  | 'libelle'
+  | 'debit_centimes'
+  | 'statut';
+
+type JournalDetailSortKey =
+  | 'date_comptable'
+  | 'numero'
+  | 'account_number'
+  | 'line_label'
+  | 'debit_centimes'
+  | 'credit_centimes'
+  | 'statut';
+
 const route = useRoute();
 const context = useContextStore();
 const accounting = useAccountingStore();
+useToastFeedback(accounting);
 const exerciseId = ref(0);
 const selectedAccountId = ref(0);
 const ledgerMode = ref<'list' | 't'>('list');
-const reportSection = ref<'balance' | 'bilan' | 'resultat' | 'flux' | 'grand_livre'>('balance');
+const reportSection = ref<'bilan' | 'resultat' | 'flux' | 'grand_livre' | 'archives'>('grand_livre');
 const statementDisplayMode = ref<'currency' | 'percentage'>('currency');
 const reportStart = ref('');
 const reportEnd = ref('');
@@ -176,6 +232,24 @@ const journalDetailsDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const journalDetails = ref<JournalDetails | null>(null);
 const journalDetailsError = ref('');
 const journalDetailsBusy = ref(false);
+const entryPanel = ref<HTMLElement | null>(null);
+const entryDeleteDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const journalSort = reactive<{
+  key: JournalSortKey;
+  direction: 'asc' | 'desc';
+}>({ key: 'date_comptable', direction: 'desc' });
+const journalDetailSort = reactive<{
+  key: JournalDetailSortKey;
+  direction: 'asc' | 'desc';
+}>({ key: 'date_comptable', direction: 'asc' });
+const archiveViewerDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const archiveViewerItem = ref<FinancialArchive | null>(null);
+const archiveViewerSnapshot = ref<FinancialArchiveSnapshot | null>(null);
+const archiveViewerError = ref('');
+const archiveViewerBusy = ref(false);
+const archiveReportSection = ref<'bilan' | 'resultat' | 'grand_livre' | 'journal'>('bilan');
+const archiveDeleteDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const archivePendingDeletion = ref<FinancialArchive | null>(null);
 const newRubric = reactive({
   code: '',
   label: '',
@@ -190,6 +264,8 @@ const newAccount = reactive({
   rubric_id: null as number | null
 });
 const entry = reactive({
+  id: 0,
+  version: 0,
   date: '',
   journal_id: 0,
   label: '',
@@ -202,7 +278,28 @@ const entry = reactive({
 });
 let initializedDossierId = 0;
 
+function selectExerciseDates(exercise: Exercise | undefined): void {
+  const startDate = exercise?.start_date || '';
+  const endDate = exercise?.end_date || '';
+  entry.date = startDate;
+  reportStart.value = startDate;
+  reportEnd.value = endDate;
+  vatPeriod.start = startDate;
+  vatPeriod.end = endDate;
+  exchangeRevaluation.date = endDate;
+  selectedVatStatementId.value = 0;
+}
+
 const workspace = computed(() => accounting.workspace);
+const selectedExercise = computed(() =>
+  context.exercises.find((exercise) => exercise.id === exerciseId.value)
+);
+const archivedReports = computed(() =>
+  archiveViewerSnapshot.value?.payload.reports ?? null
+);
+const archivedJournal = computed(() =>
+  archiveViewerSnapshot.value?.payload.journal ?? null
+);
 const isChartSettings = computed(() => route.name === 'chart-settings');
 const currentTab = computed(() => {
   if (isChartSettings.value) return 'plan';
@@ -220,6 +317,9 @@ const closingSection = computed(() => {
     : 'control';
 });
 const currency = computed(() => context.selection?.dossier.currency || 'CHF');
+const statementUnitLabel = computed(() =>
+  statementDisplayMode.value === 'percentage' ? 'POURCENT' : currency.value
+);
 const reportEntityName = computed(() =>
   context.selection?.organization.name || 'Organisation'
 );
@@ -284,6 +384,56 @@ const entryTotals = computed(() => entry.lines.reduce(
 ));
 const entryBalanced = computed(() =>
   entryTotals.value.debit > 0 && entryTotals.value.debit === entryTotals.value.credit
+);
+const journalCollator = new Intl.Collator('fr-CH', {
+  numeric: true,
+  sensitivity: 'base'
+});
+const sortedJournalItems = computed(() => {
+  const items = [...(workspace.value?.journal.items ?? [])];
+  const key = journalSort.key;
+  return items.sort((left, right) => {
+    let leftValue: string | number = left[key];
+    let rightValue: string | number = right[key];
+    if (key === 'libelle') {
+      leftValue = left.libelle || left.reference;
+      rightValue = right.libelle || right.reference;
+    } else if (key === 'numero') {
+      leftValue = left.numero || left.id;
+      rightValue = right.numero || right.id;
+    }
+    const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+      ? leftValue - rightValue
+      : journalCollator.compare(String(leftValue), String(rightValue));
+    return journalSort.direction === 'asc' ? comparison : -comparison;
+  });
+});
+function sortJournalDetailRows(items: JournalDetails['items']): JournalDetails['items'] {
+  const key = journalDetailSort.key;
+  return [...items].sort((left, right) => {
+    let leftValue: string | number = left[key];
+    let rightValue: string | number = right[key];
+    if (key === 'numero') {
+      leftValue = left.numero || left.entry_id;
+      rightValue = right.numero || right.entry_id;
+    } else if (key === 'line_label') {
+      leftValue = left.line_label || left.entry_label;
+      rightValue = right.line_label || right.entry_label;
+    }
+    const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
+      ? leftValue - rightValue
+      : journalCollator.compare(String(leftValue), String(rightValue));
+    if (comparison !== 0) {
+      return journalDetailSort.direction === 'asc' ? comparison : -comparison;
+    }
+    return left.entry_id - right.entry_id || left.line_order - right.line_order;
+  });
+}
+const sortedJournalDetailItems = computed(() =>
+  sortJournalDetailRows(journalDetails.value?.items ?? [])
+);
+const sortedArchivedJournalItems = computed(() =>
+  sortJournalDetailRows(archivedJournal.value?.items ?? [])
 );
 const visibleRubrics = computed(() =>
   (workspace.value?.chart.rubrics ?? [])
@@ -410,6 +560,9 @@ watch(
     if (initializedDossierId === dossierId) return;
     initializedDossierId = dossierId;
     exerciseId.value = context.selection?.exercise?.id || exercises[0].id;
+    selectExerciseDates(
+      exercises.find((exercise) => exercise.id === exerciseId.value)
+    );
     void reload();
   },
   { immediate: true, deep: true }
@@ -492,11 +645,7 @@ async function reload(accountId = selectedAccountId.value || undefined): Promise
 
 async function changeExercise(): Promise<void> {
   const exercise = context.exercises.find((item) => item.id === exerciseId.value);
-  reportStart.value = exercise?.start_date || '';
-  reportEnd.value = exercise?.end_date || '';
-  vatPeriod.start = reportStart.value;
-  vatPeriod.end = reportEnd.value;
-  selectedVatStatementId.value = 0;
+  selectExerciseDates(exercise);
   await reload();
 }
 
@@ -580,6 +729,64 @@ function removeLine(index: number): void {
   if (entry.lines.length > 2) entry.lines.splice(index, 1);
 }
 
+function resetEntry(): void {
+  entry.id = 0;
+  entry.version = 0;
+  entry.label = '';
+  entry.reference = '';
+  entry.attachment_reference = '';
+  entry.lines = [
+    { account_id: 0, label: '', debit: '', credit: '' },
+    { account_id: 0, label: '', debit: '', credit: '' }
+  ];
+}
+
+async function requestDraftDeletion(): Promise<void> {
+  if (!entry.id) return;
+  await entryDeleteDialog.value?.open();
+}
+
+async function deleteDraft(): Promise<void> {
+  if (!entry.id) return;
+  try {
+    await accounting.mutate('/accounting/entries/delete', {
+      id: entry.id,
+      version: entry.version
+    }, 'Brouillon supprimé.');
+    resetEntry();
+    await reload();
+  } catch {
+    // Le store diffuse l’erreur par le système de notifications.
+  }
+}
+
+async function editDraft(entryId: number): Promise<void> {
+  try {
+    const draft = (
+      await api.get<EntryDraft>('/accounting/entries/draft', {
+        entry_id: entryId
+      })
+    ).data;
+    entry.id = draft.id;
+    entry.version = draft.version;
+    entry.date = draft.date;
+    entry.journal_id = draft.journal_id;
+    entry.label = draft.label;
+    entry.reference = draft.reference;
+    entry.attachment_reference = draft.attachment_reference;
+    entry.lines = draft.lines.map((line) => ({
+      account_id: line.account_id,
+      label: line.label,
+      debit: centsToInput(line.debit_cents),
+      credit: centsToInput(line.credit_cents)
+    }));
+    entryPanel.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    accounting.notice = `Brouillon #${draft.id} chargé pour modification.`;
+  } catch (error) {
+    accounting.error = errorMessage(error);
+  }
+}
+
 async function submitEntry(validate: boolean): Promise<void> {
   try {
     const lines = entry.lines.map((line) => ({
@@ -589,6 +796,8 @@ async function submitEntry(validate: boolean): Promise<void> {
       credit_cents: parseCents(line.credit || '0')
     }));
     await accounting.mutate('/accounting/entries', {
+      id: entry.id,
+      version: entry.version,
       exercise_id: exerciseId.value,
       journal_id: entry.journal_id,
       date: entry.date,
@@ -597,18 +806,51 @@ async function submitEntry(validate: boolean): Promise<void> {
       attachment_reference: entry.attachment_reference,
       validate,
       lines
-    }, validate ? 'Écriture validée.' : 'Brouillon enregistré.');
-    entry.label = '';
-    entry.reference = '';
-    entry.attachment_reference = '';
-    entry.lines = [
-      { account_id: 0, label: '', debit: '', credit: '' },
-      { account_id: 0, label: '', debit: '', credit: '' }
-    ];
+    }, validate
+      ? 'Écriture finalisée et validée.'
+      : entry.id > 0
+        ? 'Brouillon mis à jour.'
+        : 'Brouillon enregistré.'
+    );
+    resetEntry();
     await reload();
   } catch {
     // Le store expose l’erreur structurée.
   }
+}
+
+function toggleJournalSort(key: JournalSortKey): void {
+  if (journalSort.key === key) {
+    journalSort.direction = journalSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    journalSort.key = key;
+    journalSort.direction = 'asc';
+  }
+}
+
+function toggleJournalDetailSort(key: JournalDetailSortKey): void {
+  if (journalDetailSort.key === key) {
+    journalDetailSort.direction =
+      journalDetailSort.direction === 'asc' ? 'desc' : 'asc';
+  } else {
+    journalDetailSort.key = key;
+    journalDetailSort.direction = 'asc';
+  }
+}
+
+function sortIndicator(
+  active: boolean,
+  direction: 'asc' | 'desc'
+): string {
+  return active ? (direction === 'asc' ? '▲' : '▼') : '↕';
+}
+
+function sortAria(
+  active: boolean,
+  direction: 'asc' | 'desc'
+): 'ascending' | 'descending' | 'none' {
+  if (!active) return 'none';
+  return direction === 'asc' ? 'ascending' : 'descending';
 }
 
 async function saveTypes(): Promise<void> {
@@ -797,7 +1039,6 @@ async function mutateAndReload(
   try {
     await accounting.mutate(path, data, notice);
     await reload();
-    accounting.notice = notice;
   } catch {
     // Le store expose l’erreur structurée.
   }
@@ -1044,8 +1285,14 @@ function senseLabel(side: 'debit' | 'credit'): string {
 }
 
 function selectReportSection(value: string): void {
-  if (['balance', 'bilan', 'resultat', 'flux', 'grand_livre'].includes(value)) {
+  if (['bilan', 'resultat', 'flux', 'grand_livre', 'archives'].includes(value)) {
     reportSection.value = value as typeof reportSection.value;
+  }
+}
+
+function selectArchiveReportSection(value: string): void {
+  if (['bilan', 'resultat', 'grand_livre', 'journal'].includes(value)) {
+    archiveReportSection.value = value as typeof archiveReportSection.value;
   }
 }
 
@@ -1174,6 +1421,60 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
     date_end: reportEnd.value
   }, 'Archive financière immuable créée.');
 }
+
+async function viewFinancialArchive(item: FinancialArchive): Promise<void> {
+  archiveViewerItem.value = item;
+  archiveViewerSnapshot.value = null;
+  archiveViewerError.value = '';
+  archiveViewerBusy.value = true;
+  archiveReportSection.value = 'bilan';
+  await archiveViewerDialog.value?.open();
+  try {
+    const url = new URL(
+      `${runtimeConfig.apiBaseUrl}/accounting/archives/download`,
+      window.location.origin
+    );
+    url.searchParams.set('archive_id', String(item.id));
+    const response = await fetch(`${url.pathname}${url.search}`, {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    if (!response.ok) {
+      throw new Error('L’archive financière ne peut pas être chargée.');
+    }
+    const snapshot = await response.json() as FinancialArchiveSnapshot;
+    if (
+      snapshot.format !== 'compta-financial-archive-v1'
+      || !snapshot.payload?.reports
+    ) {
+      throw new Error('Le contenu de l’archive financière est invalide.');
+    }
+    archiveViewerSnapshot.value = snapshot;
+  } catch (error) {
+    archiveViewerError.value = errorMessage(error);
+  } finally {
+    archiveViewerBusy.value = false;
+  }
+}
+
+async function requestArchiveDeletion(item: FinancialArchive): Promise<void> {
+  if (selectedExercise.value?.status === 'ferme') {
+    accounting.error =
+      'Suppression impossible : l’exercice comptable est fermé.';
+    return;
+  }
+  archivePendingDeletion.value = item;
+  await archiveDeleteDialog.value?.open();
+}
+
+async function deleteFinancialArchive(): Promise<void> {
+  const archive = archivePendingDeletion.value;
+  if (!archive) return;
+  await mutateAndReload('/accounting/archives/delete', {
+    archive_id: archive.id
+  }, 'Archive financière supprimée.');
+  archivePendingDeletion.value = null;
+}
 </script>
 
 <template>
@@ -1186,14 +1487,21 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           : 'Journal et états pilotés par les mêmes services PHP et la même base SQLite.' }}
       </p>
     </div>
-    <label v-if="context.exercises.length" class="compact-control">
-      <span>Exercice</span>
-      <select v-model.number="exerciseId" @change="changeExercise">
-        <option v-for="exercise in context.exercises" :key="exercise.id" :value="exercise.id">
-          {{ exercise.label }}
-        </option>
-      </select>
-    </label>
+    <div v-if="context.exercises.length" class="exercise-control">
+      <label class="compact-control">
+        <span>Exercice consulté</span>
+        <select v-model.number="exerciseId" @change="changeExercise">
+          <option v-for="exercise in context.exercises" :key="exercise.id" :value="exercise.id">
+            {{ exercise.label }} — {{ exerciseStatusLabel(exercise.status) }}
+          </option>
+        </select>
+      </label>
+      <span
+        v-if="selectedExercise"
+        class="status-badge"
+        :class="selectedExercise.status === 'ouvert' ? 'status-ouvert' : 'status-ferme'"
+      >{{ exerciseStatusLabel(selectedExercise.status) }}</span>
+    </div>
   </header>
 
   <CompactTabs
@@ -1204,18 +1512,26 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
 
   <nav
     v-if="allowed && currentTab === 'cloture'"
-    class="subtabs secondary-tabs closing-tabs"
+    class="subtabs secondary-tabs"
     aria-label="Sections de clôture"
   >
     <RouterLink
       v-for="item in [
-        ['control', 'Contrôle'], ['tva', 'TVA'],
-        ['fiscal', 'Dossier fiscal'], ['assets', 'Amortissements']
+        ['assets', 'Amortissements'], ['tva', 'TVA'],
+        ['control', 'Contrôles'], ['fiscal', 'Dossier fiscal']
       ]"
       :key="item[0]"
       :to="{ path: '/compta/cloture', query: item[0] === 'control' ? {} : { section: item[0] } }"
-      :class="{ active: closingSection === item[0] }"
-    >{{ item[1] }}</RouterLink>
+      custom
+      v-slot="{ href, navigate }"
+    >
+      <a
+        :href="href"
+        :class="{ active: closingSection === item[0] }"
+        :aria-current="closingSection === item[0] ? 'page' : undefined"
+        @click="navigate"
+      >{{ item[1] }}</a>
+    </RouterLink>
   </nav>
 
   <nav v-if="allowed && isChartSettings" class="subtabs static-tabs" aria-label="Référentiels gérés">
@@ -1237,16 +1553,15 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
   </section>
   <template v-else>
     <ErrorSummary :message="accounting.error" />
-    <p v-if="accounting.notice" class="notice success" role="status">{{ accounting.notice }}</p>
     <SkeletonBlock v-if="accounting.loading && !workspace" :lines="10" />
 
     <template v-if="workspace">
       <section v-if="currentTab === 'journalisation'" class="workspace-grid">
-        <form class="panel entry-panel" @submit.prevent="submitEntry(false)">
+        <form ref="entryPanel" class="panel entry-panel" @submit.prevent="submitEntry(false)">
           <div class="section-heading">
             <div>
               <p class="eyebrow">Débit / crédit</p>
-              <h2>Nouvelle écriture</h2>
+              <h2>{{ entry.id ? `Modifier le brouillon #${entry.id}` : 'Nouvelle écriture' }}</h2>
             </div>
             <span :class="['status-chip', entryBalanced ? 'ok' : 'warning']">
               {{ entryBalanced ? 'Équilibrée' : 'À équilibrer' }}
@@ -1302,8 +1617,20 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           </div>
           <div class="button-row">
             <button class="button secondary" type="button" @click="addLine">Ajouter une ligne</button>
-            <button class="button" type="submit" :disabled="!canEdit || accounting.saving">Enregistrer le brouillon</button>
-            <button class="button primary" type="button" :disabled="!canValidate || !entryBalanced || accounting.saving" @click="submitEntry(true)">Valider l’écriture</button>
+            <button v-if="entry.id" class="button secondary" type="button" @click="resetEntry">Annuler la modification</button>
+            <button
+              v-if="entry.id"
+              class="button danger"
+              type="button"
+              :disabled="accounting.saving"
+              @click="requestDraftDeletion"
+            >Supprimer le brouillon</button>
+            <button class="button" type="submit" :disabled="!canEdit || accounting.saving">
+              {{ entry.id ? 'Enregistrer les modifications' : 'Enregistrer le brouillon' }}
+            </button>
+            <button class="button primary" type="button" :disabled="!canValidate || !entryBalanced || accounting.saving" @click="submitEntry(true)">
+              {{ entry.id ? 'Finaliser et valider' : 'Valider l’écriture' }}
+            </button>
           </div>
         </form>
 
@@ -1326,13 +1653,32 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           </div>
           <div class="table-scroll">
             <table class="accounting-document-table journal-table">
-              <thead><tr><th>Date</th><th>N°</th><th>Compte débité</th><th>Compte crédité</th><th>Libellé</th><th class="amount">Montant</th><th>Statut</th></tr></thead>
+              <thead>
+                <tr>
+                  <th :aria-sort="sortAria(journalSort.key === 'date_comptable', journalSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalSort('date_comptable')">Date <span>{{ sortIndicator(journalSort.key === 'date_comptable', journalSort.direction) }}</span></button></th>
+                  <th :aria-sort="sortAria(journalSort.key === 'numero', journalSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalSort('numero')">N° <span>{{ sortIndicator(journalSort.key === 'numero', journalSort.direction) }}</span></button></th>
+                  <th :aria-sort="sortAria(journalSort.key === 'comptes_debit', journalSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalSort('comptes_debit')">Compte débité <span>{{ sortIndicator(journalSort.key === 'comptes_debit', journalSort.direction) }}</span></button></th>
+                  <th :aria-sort="sortAria(journalSort.key === 'comptes_credit', journalSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalSort('comptes_credit')">Compte crédité <span>{{ sortIndicator(journalSort.key === 'comptes_credit', journalSort.direction) }}</span></button></th>
+                  <th :aria-sort="sortAria(journalSort.key === 'libelle', journalSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalSort('libelle')">Libellé <span>{{ sortIndicator(journalSort.key === 'libelle', journalSort.direction) }}</span></button></th>
+                  <th class="amount" :aria-sort="sortAria(journalSort.key === 'debit_centimes', journalSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalSort('debit_centimes')">Montant <span>{{ sortIndicator(journalSort.key === 'debit_centimes', journalSort.direction) }}</span></button></th>
+                  <th :aria-sort="sortAria(journalSort.key === 'statut', journalSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalSort('statut')">Statut <span>{{ sortIndicator(journalSort.key === 'statut', journalSort.direction) }}</span></button></th>
+                </tr>
+              </thead>
               <tbody>
-                <tr v-for="row in workspace.journal.items" :key="row.id">
+                <tr v-for="row in sortedJournalItems" :key="row.id">
                   <td>{{ row.date_comptable }}</td><td>{{ row.numero || `#${row.id}` }}</td>
                   <td>{{ row.comptes_debit }}</td><td>{{ row.comptes_credit }}</td><td>{{ row.libelle || row.reference || '—' }}</td>
                   <td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td>
-                  <td><span class="status-chip">{{ row.statut }}</span></td>
+                  <td>
+                    <button
+                      v-if="row.statut === 'brouillon' && ['manuel', 'import_journal'].includes(row.source_type) && canEdit"
+                      class="status-chip status-link"
+                      type="button"
+                      title="Reprendre et finaliser ce brouillon"
+                      @click="editDraft(row.id)"
+                    >Brouillon</button>
+                    <span v-else class="status-chip">{{ row.statut }}</span>
+                  </td>
                 </tr>
                 <tr v-if="!workspace.journal.items.length"><td colspan="7">Aucune écriture pour cet exercice.</td></tr>
               </tbody>
@@ -1344,7 +1690,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           ref="journalDetailsDialog"
           title="Journal détaillé de l’exercice"
           description="Toutes les écritures et toutes leurs lignes, dans l’ordre comptable."
-          wide
+          extra-wide
         >
           <p v-if="journalDetailsBusy">Chargement du journal…</p>
           <ErrorSummary v-if="journalDetailsError" :message="journalDetailsError" />
@@ -1357,9 +1703,19 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
             </div>
             <div class="table-scroll journal-detail-scroll">
               <table class="accounting-document-table journal-table">
-                <thead><tr><th>Date</th><th>N°</th><th>Compte</th><th>Libellé</th><th class="amount">Débit</th><th class="amount">Crédit</th><th>Statut</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'date_comptable', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('date_comptable')">Date <span>{{ sortIndicator(journalDetailSort.key === 'date_comptable', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'numero', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('numero')">N° <span>{{ sortIndicator(journalDetailSort.key === 'numero', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'account_number', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('account_number')">Compte <span>{{ sortIndicator(journalDetailSort.key === 'account_number', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'line_label', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('line_label')">Libellé <span>{{ sortIndicator(journalDetailSort.key === 'line_label', journalDetailSort.direction) }}</span></button></th>
+                    <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('debit_centimes')">Débit <span>{{ sortIndicator(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction) }}</span></button></th>
+                    <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('credit_centimes')">Crédit <span>{{ sortIndicator(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'statut', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('statut')">Statut <span>{{ sortIndicator(journalDetailSort.key === 'statut', journalDetailSort.direction) }}</span></button></th>
+                  </tr>
+                </thead>
                 <tbody>
-                  <tr v-for="line in journalDetails.items" :key="`${line.entry_id}-${line.line_order}`">
+                  <tr v-for="line in sortedJournalDetailItems" :key="`${line.entry_id}-${line.line_order}`">
                     <td>{{ line.date_comptable }}</td>
                     <td>{{ line.numero || `#${line.entry_id}` }}</td>
                     <td>{{ line.account_number }} — {{ line.account_label }}</td>
@@ -1721,28 +2077,19 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           </div>
           <nav class="subtabs secondary-tabs" aria-label="États financiers">
             <button v-for="item in [
-              ['balance', 'Balance'], ['bilan', 'Bilan'], ['resultat', 'Compte de résultat'],
-              ['flux', 'Flux de trésorerie'], ['grand_livre', 'Grand livre']
+              ['grand_livre', 'Balances de vérification'], ['bilan', 'Bilan'],
+              ['resultat', 'Compte de résultat'], ['flux', 'Flux de trésorerie'],
+              ['archives', 'Archives']
             ]" :key="item[0]" :class="{ active: reportSection === item[0] }" type="button" @click="selectReportSection(item[0])">
               {{ item[1] }}
             </button>
           </nav>
         </section>
 
-        <section v-if="reportSection === 'balance'" class="panel financial-report-panel">
-          <div class="section-heading"><h3>Balance de vérification</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('balance')">Exporter CSV</button></div>
-          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCE AU {{ reportDateLabel }} — {{ currency }}</strong></div>
-          <div class="table-scroll"><table class="financial-statement-table financial-ledger-table"><thead><tr><th>Compte</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Solde</th></tr></thead>
-            <tbody><tr v-for="row in workspace.reports.trial_balance.items" :key="row.id"><td><span class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td><td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td></tr>
-              <tr v-if="!workspace.reports.trial_balance.items.length"><td colspan="4">Aucun mouvement validé sur la période.</td></tr></tbody>
-            <tfoot><tr class="statement-total"><th>TOTAUX</th><th class="amount">{{ formatStatementAmount(workspace.reports.trial_balance.total_debit_centimes) }}</th><th class="amount">{{ formatStatementAmount(workspace.reports.trial_balance.total_credit_centimes) }}</th><th></th></tr></tfoot>
-          </table></div>
-        </section>
-
-        <section v-else-if="reportSection === 'bilan'" class="panel financial-report-panel">
-          <div class="section-heading"><h3>Bilan</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du bilan"><button :class="{ active: statementDisplayMode === 'currency' }" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('bilan')">Exporter CSV</button></div></div>
+        <section v-if="reportSection === 'bilan'" class="panel financial-report-panel">
+          <div class="section-heading"><h3>Bilan</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du bilan"><button :class="{ active: statementDisplayMode === 'currency' }" :aria-pressed="statementDisplayMode === 'currency'" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" :aria-pressed="statementDisplayMode === 'percentage'" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('bilan')">Exporter CSV</button></div></div>
           <div class="financial-statement-heading">
-            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BILAN AU {{ reportDateLabel }} — {{ currency }}</strong>
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BILAN AU {{ reportDateLabel }} — {{ statementUnitLabel }}</strong>
           </div>
           <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th>Compte et libellé</th><th class="amount">{{ workspace.reports.balance_sheet.current_label }}</th><th v-if="hasPreviousBalance" class="amount">{{ workspace.reports.balance_sheet.previous_label }}</th></tr></thead>
             <tbody>
@@ -1765,8 +2112,8 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         </section>
 
         <section v-else-if="reportSection === 'resultat'" class="panel financial-report-panel">
-          <div class="section-heading"><h3>Compte de résultat</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du compte de résultat"><button :class="{ active: statementDisplayMode === 'currency' }" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('resultat')">Exporter CSV</button></div></div>
-          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — RÉSULTAT DU {{ reportStartLabel }} AU {{ reportDateLabel }} — {{ currency }}</strong></div>
+          <div class="section-heading"><h3>Compte de résultat</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du compte de résultat"><button :class="{ active: statementDisplayMode === 'currency' }" :aria-pressed="statementDisplayMode === 'currency'" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" :aria-pressed="statementDisplayMode === 'percentage'" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('resultat')">Exporter CSV</button></div></div>
+          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — RÉSULTAT DU {{ reportStartLabel }} AU {{ reportDateLabel }} — {{ statementUnitLabel }}</strong></div>
           <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th>Compte et libellé</th><th class="amount">{{ workspace.reports.income_statement.current.label }}</th><th v-if="hasPreviousIncome" class="amount">{{ workspace.reports.income_statement.previous.label }}</th></tr></thead>
             <tbody>
               <tr class="statement-section"><th :colspan="hasPreviousIncome ? 3 : 2">PRODUITS</th></tr>
@@ -1799,13 +2146,61 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
           </table></div>
         </section>
 
-        <section v-else class="panel financial-report-panel">
-          <div class="section-heading"><h3>Grand livre synthétique</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('grand_livre')">Exporter CSV</button></div>
-          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — GRAND LIVRE AU {{ reportDateLabel }} — {{ currency }}</strong></div>
+        <section v-else-if="reportSection === 'grand_livre'" class="panel financial-report-panel">
+          <div class="section-heading"><h3>Balances de vérification</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('grand_livre')">Exporter CSV</button></div>
+          <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCES DE VÉRIFICATION AU {{ reportDateLabel }} — {{ currency }}</strong></div>
           <div class="table-scroll"><table class="financial-statement-table financial-ledger-table"><thead><tr><th>Compte</th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
             <tbody><tr v-for="row in workspace.reports.general_ledger.items" :key="row.id"><td><span class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td><td class="amount">{{ formatStatementAmount(row.initial_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td></tr>
               <tr v-if="!workspace.reports.general_ledger.items.length"><td colspan="5">Aucun compte mouvementé.</td></tr></tbody>
           </table></div>
+        </section>
+
+        <section v-else class="panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Exercice {{ workspace.exercise.label }}</p>
+              <h3>Archives financières</h3>
+            </div>
+            <span v-if="workspace.closing.archives.length" class="status-chip ok">
+              {{ workspace.closing.archives.length }} archive(s)
+            </span>
+          </div>
+          <p>
+            Consultez le bilan, le compte de résultat et les soldes figés au moment
+            de l’archivage, ou téléchargez la preuve JSON complète.
+          </p>
+          <div class="archive-list">
+            <article v-for="item in workspace.closing.archives" :key="item.id" class="archive-card">
+              <strong>{{ item.type === 'cloture' ? 'Clôture' : 'Dossier fiscal' }} · {{ item.start_date }} – {{ item.end_date }}</strong>
+              <small>Archivée le {{ item.created_at }} · Empreinte {{ item.hash.slice(0, 16) }}…</small>
+              <div class="button-row archive-card-actions">
+                <button class="button primary small" type="button" @click="viewFinancialArchive(item)">
+                  Consulter les états archivés
+                </button>
+                <a
+                  class="button secondary small"
+                  :href="`${runtimeConfig.apiBaseUrl}/accounting/archives/download?archive_id=${item.id}`"
+                >Télécharger le JSON</a>
+                <button
+                  class="button danger small"
+                  type="button"
+                  :disabled="!workspace.capabilities.setup || selectedExercise?.status === 'ferme'"
+                  :title="selectedExercise?.status === 'ferme'
+                    ? 'Une archive d’un exercice fermé est protégée.'
+                    : 'Supprimer cette archive'"
+                  @click="requestArchiveDeletion(item)"
+                >Supprimer</button>
+              </div>
+              <small v-if="selectedExercise?.status === 'ferme'">
+                Archive protégée : cet exercice est fermé.
+              </small>
+            </article>
+          </div>
+          <EmptyState
+            v-if="!workspace.closing.archives.length"
+            title="Aucune archive financière"
+            description="Créez une archive depuis Clôture ou Dossier fiscal pour figer les états de cet exercice."
+          />
         </section>
       </section>
 
@@ -1881,7 +2276,7 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
         </section>
         <section class="panel">
           <div class="section-heading"><h3>Périodes</h3><button class="button secondary" :disabled="!workspace.capabilities.export" @click="createArchive('cloture')">Archiver la clôture</button></div>
-          <div class="table-scroll"><table><thead><tr><th>Période</th><th>Dates</th><th>Statut</th><th>Action</th></tr></thead><tbody><tr v-for="period in workspace.closing.periods" :key="period.id"><td>{{ period.label }}</td><td>{{ period.start_date }} – {{ period.end_date }}</td><td><span class="status-chip">{{ period.status }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.setup || (period.status === 'ouverte' && !workspace.closing.can_close)" @click="togglePeriod(period)">{{ period.status === 'ouverte' ? 'Fermer' : 'Rouvrir' }}</button></td></tr></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>Période</th><th>Dates</th><th>Statut</th><th>Action</th></tr></thead><tbody><tr v-for="period in workspace.closing.periods" :key="period.id"><td>{{ period.label }}</td><td>{{ period.start_date }} – {{ period.end_date }}</td><td><span class="status-chip">{{ periodStatusLabel(period.status) }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.setup || (period.status === 'ouverte' && !workspace.closing.can_close)" @click="togglePeriod(period)">{{ period.status === 'ouverte' ? 'Fermer' : 'Rouvrir' }}</button></td></tr></tbody></table></div>
         </section>
       </section>
 
@@ -1911,5 +2306,202 @@ async function createArchive(type: 'cloture' | 'dossier_fiscal'): Promise<void> 
       <ConsolidationPanel v-else-if="currentTab === 'consolidation'" />
       <EmptyState v-else title="Section inconnue" description="Choisissez un onglet comptable disponible." />
     </template>
+
+    <ModalDialog
+      ref="archiveViewerDialog"
+      :title="`Archive financière${archiveViewerItem ? ` · ${archiveViewerItem.start_date} – ${archiveViewerItem.end_date}` : ''}`"
+      description="Photographie immuable des états au moment de l’archivage."
+      wide
+      :extra-wide="archiveReportSection === 'journal'"
+    >
+      <ErrorSummary :message="archiveViewerError" />
+      <SkeletonBlock v-if="archiveViewerBusy" :lines="8" />
+      <template v-else-if="archivedReports && archiveViewerItem">
+        <div class="section-heading archive-viewer-heading">
+          <nav class="subtabs static-tabs" aria-label="États financiers archivés">
+            <button
+              v-for="item in [
+                ['bilan', 'Bilan'],
+                ['resultat', 'Compte de résultat'],
+                ['grand_livre', 'Balances de vérification'],
+                ['journal', 'Journal complet']
+              ]"
+              :key="item[0]"
+              :class="{ active: archiveReportSection === item[0] }"
+              type="button"
+              @click="selectArchiveReportSection(item[0])"
+            >{{ item[1] }}</button>
+          </nav>
+          <div
+            v-if="!['grand_livre', 'journal'].includes(archiveReportSection)"
+            class="statement-display-toggle"
+            role="group"
+            aria-label="Unité des états archivés"
+          >
+            <button
+              :class="{ active: statementDisplayMode === 'currency' }"
+              :aria-pressed="statementDisplayMode === 'currency'"
+              type="button"
+              @click="statementDisplayMode = 'currency'"
+            >{{ currency }}</button>
+            <button
+              :class="{ active: statementDisplayMode === 'percentage' }"
+              :aria-pressed="statementDisplayMode === 'percentage'"
+              type="button"
+              @click="statementDisplayMode = 'percentage'"
+            >%</button>
+          </div>
+        </div>
+
+        <section v-if="archiveReportSection === 'bilan'" class="financial-report-panel">
+          <div class="financial-statement-heading">
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BILAN ARCHIVÉ AU {{ archiveViewerItem.end_date }} — {{ statementUnitLabel }}</strong>
+          </div>
+          <div class="table-scroll">
+            <table class="financial-statement-table">
+              <thead><tr><th>Compte et libellé</th><th class="amount">{{ archivedReports.balance_sheet.current_label }}</th></tr></thead>
+              <tbody>
+                <tr class="statement-section"><th colspan="2">ACTIF</th></tr>
+                <tr v-for="row in archivedReports.balance_sheet.items.filter((item) => item.type === 'actif')" :key="`archive-actif-${row.numero}`">
+                  <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                  <td class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</td>
+                </tr>
+                <tr class="statement-total"><th>TOTAL DE L’ACTIF</th><th class="amount">{{ formatStatementValue(archivedReports.balance_sheet.total_actif_centimes, archivedReports.balance_sheet.total_actif_centimes) }}</th></tr>
+                <tr class="statement-section"><th colspan="2">PASSIF ET CAPITAUX PROPRES</th></tr>
+                <tr v-for="row in archivedReports.balance_sheet.items.filter((item) => item.type !== 'actif')" :key="`archive-passif-${row.numero}`">
+                  <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                  <td class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</td>
+                </tr>
+                <tr class="statement-total"><th>TOTAL DU PASSIF ET DES CAPITAUX PROPRES</th><th class="amount">{{ formatStatementValue(archivedReports.balance_sheet.total_passif_centimes, archivedReports.balance_sheet.total_actif_centimes) }}</th></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section v-else-if="archiveReportSection === 'resultat'" class="financial-report-panel">
+          <div class="financial-statement-heading">
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — RÉSULTAT ARCHIVÉ DU {{ archiveViewerItem.start_date }} AU {{ archiveViewerItem.end_date }} — {{ statementUnitLabel }}</strong>
+          </div>
+          <div class="table-scroll">
+            <table class="financial-statement-table">
+              <thead><tr><th>Compte et libellé</th><th class="amount">{{ archivedReports.income_statement.current.label }}</th></tr></thead>
+              <tbody>
+                <tr class="statement-section"><th colspan="2">PRODUITS</th></tr>
+                <tr v-for="row in archivedReports.income_statement.items.filter((item) => item.type === 'produit')" :key="`archive-produit-${row.number}`">
+                  <td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td>
+                  <td class="amount">{{ formatStatementValue(row.current_cents, archivedReports.income_statement.current.products_cents) }}</td>
+                </tr>
+                <tr class="statement-subtotal"><th>TOTAL DES PRODUITS</th><th class="amount">{{ formatStatementValue(archivedReports.income_statement.current.products_cents, archivedReports.income_statement.current.products_cents) }}</th></tr>
+                <tr class="statement-section"><th colspan="2">CHARGES</th></tr>
+                <tr v-for="row in archivedReports.income_statement.items.filter((item) => item.type === 'charge')" :key="`archive-charge-${row.number}`">
+                  <td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td>
+                  <td class="amount">{{ formatStatementValue(-row.current_cents, archivedReports.income_statement.current.products_cents) }}</td>
+                </tr>
+                <tr class="statement-subtotal"><th>TOTAL DES CHARGES</th><th class="amount">{{ formatStatementValue(-archivedReports.income_statement.current.expenses_cents, archivedReports.income_statement.current.products_cents) }}</th></tr>
+                <tr class="statement-total"><th>RÉSULTAT NET DE L’EXERCICE</th><th class="amount">{{ formatStatementValue(archivedReports.income_statement.current.result_cents, archivedReports.income_statement.current.products_cents) }}</th></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section v-else-if="archiveReportSection === 'grand_livre'" class="financial-report-panel">
+          <div class="financial-statement-heading">
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCES DE VÉRIFICATION ARCHIVÉES AU {{ archiveViewerItem.end_date }} — {{ currency }}</strong>
+          </div>
+          <div class="table-scroll">
+            <table class="financial-statement-table financial-ledger-table">
+              <thead><tr><th>Compte</th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
+              <tbody>
+                <tr v-for="row in archivedReports.general_ledger.items" :key="`archive-ledger-${row.id}`">
+                  <td><span class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                  <td class="amount">{{ formatStatementAmount(row.initial_centimes) }}</td>
+                  <td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td>
+                  <td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td>
+                  <td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td>
+                </tr>
+                <tr v-if="!archivedReports.general_ledger.items.length"><td colspan="5">Aucun compte mouvementé dans cette archive.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section v-else class="financial-report-panel">
+          <div class="financial-statement-heading">
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — JOURNAL COMPLET ARCHIVÉ DU {{ archiveViewerItem.start_date }} AU {{ archiveViewerItem.end_date }} — {{ currency }}</strong>
+          </div>
+          <template v-if="archivedJournal">
+            <div class="metric-strip">
+              <span><small>Écritures</small><strong>{{ archivedJournal.total_entries }}</strong></span>
+              <span><small>Lignes</small><strong>{{ archivedJournal.total_lines }}</strong></span>
+              <span><small>Débit</small><strong>{{ formatStatementAmount(archivedJournal.total_debit_cents) }}</strong></span>
+              <span><small>Crédit</small><strong>{{ formatStatementAmount(archivedJournal.total_credit_cents) }}</strong></span>
+            </div>
+            <div class="table-scroll journal-detail-scroll">
+              <table class="accounting-document-table journal-table">
+                <thead>
+                  <tr>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'date_comptable', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('date_comptable')">Date <span>{{ sortIndicator(journalDetailSort.key === 'date_comptable', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'numero', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('numero')">N° <span>{{ sortIndicator(journalDetailSort.key === 'numero', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'account_number', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('account_number')">Compte <span>{{ sortIndicator(journalDetailSort.key === 'account_number', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'line_label', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('line_label')">Libellé <span>{{ sortIndicator(journalDetailSort.key === 'line_label', journalDetailSort.direction) }}</span></button></th>
+                    <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('debit_centimes')">Débit <span>{{ sortIndicator(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction) }}</span></button></th>
+                    <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('credit_centimes')">Crédit <span>{{ sortIndicator(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'statut', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('statut')">Statut <span>{{ sortIndicator(journalDetailSort.key === 'statut', journalDetailSort.direction) }}</span></button></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="line in sortedArchivedJournalItems" :key="`archive-journal-${line.entry_id}-${line.line_order}`">
+                    <td>{{ line.date_comptable }}</td>
+                    <td>{{ line.numero || `#${line.entry_id}` }}</td>
+                    <td>{{ line.account_number }} — {{ line.account_label }}</td>
+                    <td>
+                      <strong>{{ line.entry_label || '—' }}</strong>
+                      <small v-if="line.line_label && line.line_label !== line.entry_label" class="table-cell-detail">{{ line.line_label }}</small>
+                      <small v-if="line.reference || line.piece" class="table-cell-detail">
+                        <template v-if="line.reference">Réf. {{ line.reference }}</template>
+                        <template v-if="line.reference && line.piece"> · </template>
+                        <template v-if="line.piece">Pièce {{ line.piece }}</template>
+                      </small>
+                    </td>
+                    <td class="amount">{{ line.debit_centimes ? formatStatementAmount(line.debit_centimes) : '—' }}</td>
+                    <td class="amount">{{ line.credit_centimes ? formatStatementAmount(line.credit_centimes) : '—' }}</td>
+                    <td><span class="status-chip">{{ line.statut }}</span></td>
+                  </tr>
+                  <tr v-if="!archivedJournal.items.length"><td colspan="7">Aucune écriture dans cette archive.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+          <p v-else class="notice">
+            Cette archive a été créée avant l’ajout du journal complet. Créez une nouvelle archive pour le figer.
+          </p>
+        </section>
+      </template>
+    </ModalDialog>
+    <ConfirmDialog
+      ref="entryDeleteDialog"
+      title="Supprimer définitivement ce brouillon ?"
+      confirm-label="Supprimer le brouillon"
+      tone="danger"
+      @confirm="deleteDraft"
+    >
+      <p>
+        L’écriture brouillon #{{ entry.id }} et toutes ses lignes seront
+        supprimées. Cette action ne peut pas être annulée.
+      </p>
+    </ConfirmDialog>
+    <ConfirmDialog
+      ref="archiveDeleteDialog"
+      title="Supprimer cette archive financière ?"
+      confirm-label="Supprimer l’archive"
+      tone="danger"
+      @confirm="deleteFinancialArchive"
+    >
+      <p v-if="archivePendingDeletion">
+        L’archive du {{ archivePendingDeletion.start_date }} au
+        {{ archivePendingDeletion.end_date }} sera supprimée. Le grand livre et
+        les états comptables d’origine ne seront pas modifiés.
+      </p>
+    </ConfirmDialog>
   </template>
 </template>

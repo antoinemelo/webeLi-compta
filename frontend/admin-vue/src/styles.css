@@ -17,6 +17,7 @@
   font-synthesis: none;
   --ink: #20214e;
   --ink-soft: #3e4075;
+  --primary: #20214e;
   --accent: #e95f41;
   --border: #d8dbe8;
   --surface: #ffffff;
@@ -936,6 +937,10 @@ textarea {
   width: min(68rem, calc(100% - 2rem));
 }
 
+.form-dialog.extra-wide {
+  width: min(96rem, calc(100% - 1rem));
+}
+
 .form-dialog::backdrop {
   background: rgba(18, 20, 42, 0.65);
 }
@@ -1021,6 +1026,393 @@ textarea {
 
 .toast-success {
   background: var(--success);
+}
+
+.toast-warning {
+  background: #9a6700;
+}
+
+.toast-error {
+  background: var(--danger);
+}
+
+.section-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.25rem 0;
+}
+
+.section-toolbar h2,
+.section-toolbar p {
+  margin: 0;
+}
+
+.entity-readonly-card {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0;
+  margin: 1.25rem 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+  background: var(--surface-muted);
+}
+
+.entity-readonly-card > div {
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.entity-readonly-card span,
+.entity-readonly-card small {
+  color: var(--muted);
+}
+
+.option-card {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 0.75rem !important;
+  padding: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.option-card input {
+  width: auto;
+  margin-top: 0.2rem;
+}
+
+.option-card span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.option-card small {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.currency-editor {
+  display: grid;
+  grid-template-columns: minmax(12rem, 0.7fr) minmax(21rem, 1.4fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface-muted);
+}
+
+.currency-code-control {
+  display: grid;
+  grid-template-columns: auto minmax(6.5rem, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.currency-code-control input {
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.currency-toggle {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0 0.75rem;
+  cursor: pointer;
+}
+
+.currency-toggle > input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+}
+
+.currency-switch {
+  position: relative;
+  grid-row: 1;
+  width: 2.8rem;
+  height: 1.55rem;
+  border: 1px solid #98a2b3;
+  border-radius: 999px;
+  background: #d0d5dd;
+  transition: 160ms ease;
+}
+
+.currency-switch::after {
+  content: "";
+  position: absolute;
+  top: 0.18rem;
+  left: 0.2rem;
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(16 24 40 / 24%);
+  transition: 160ms ease;
+}
+
+.currency-toggle > input:checked + .currency-switch {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+
+.currency-toggle > input:checked + .currency-switch::after {
+  transform: translateX(1.25rem);
+}
+
+.currency-toggle > input:focus-visible + .currency-switch {
+  outline: 3px solid rgb(54 92 222 / 24%);
+  outline-offset: 2px;
+}
+
+.currency-toggle-copy {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.currency-toggle-copy small {
+  color: var(--muted);
+}
+
+.currency-list {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.currency-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--surface);
+}
+
+.currency-card-base {
+  border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+}
+
+.currency-card-inactive {
+  background: var(--surface-muted);
+}
+
+.currency-code {
+  display: inline-grid;
+  place-items: center;
+  min-width: 3.6rem;
+  min-height: 2.55rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.55rem;
+  color: #fff;
+  background: var(--ink);
+  font-family: "Raleway", system-ui, sans-serif;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.currency-card-base .currency-code {
+  background: var(--primary);
+}
+
+.currency-details {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.currency-details small {
+  color: var(--muted);
+}
+
+.currency-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.currency-status > span {
+  width: 0.48rem;
+  height: 0.48rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.currency-status-active {
+  color: #087443;
+  background: #dcfae6;
+}
+
+.currency-status-inactive {
+  color: #475467;
+  background: #eaecf0;
+}
+
+.csv-transfer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+  background: var(--surface-muted);
+}
+
+.csv-transfer > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.csv-transfer small {
+  color: var(--muted);
+}
+
+.file-button {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.file-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.access-user-link {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.access-user-link small {
+  color: var(--muted);
+}
+
+.access-editor-modal,
+.effective-access-summary,
+.access-role-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.effective-access-summary dl {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+}
+
+.effective-access-summary dl > div {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.effective-access-summary dt {
+  font-weight: 700;
+}
+
+.effective-access-summary dd {
+  margin: 0;
+}
+
+.effective-role-list {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.effective-role-list label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-weight: 700;
+}
+
+.effective-role-list small {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.access-role-grid label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+}
+
+.access-role-grid label span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.access-role-grid small {
+  color: var(--muted);
+}
+
+.access-overview-list {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+}
+
+.access-overview-list > section > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.access-overview-list > section:last-child > div:last-child {
+  border-bottom: 0;
+}
+
+.access-overview-organization {
+  background: #f7f8fb;
+}
+
+.access-overview-list > section > div:not(.access-overview-organization) {
+  padding-left: 1.5rem;
+}
+
+.access-overview-list span {
+  display: grid;
+  gap: 0.2rem;
 }
 
 .skeleton {
@@ -1288,6 +1680,17 @@ textarea {
 
 .compact-control {
   min-width: 14rem;
+}
+
+.exercise-control {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.65rem;
+}
+
+.exercise-control .status-badge {
+  margin-bottom: 0.65rem;
+  white-space: nowrap;
 }
 
 .wide-control {
@@ -1897,6 +2300,25 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .currency-editor {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .currency-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .currency-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .csv-transfer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .module-card,
   .module-state {
     align-items: flex-start;
@@ -2234,12 +2656,72 @@ textarea {
   font-size: 0.78rem;
 }
 
+.table-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.table-sort-button.amount {
+  justify-content: flex-end;
+}
+
+.table-sort-button span {
+  color: var(--accent);
+  font-size: 0.68rem;
+}
+
+.status-link {
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.16rem;
+  cursor: pointer;
+}
+
+.journal-detail-scroll .journal-table {
+  min-width: 88rem;
+}
+
+.journal-detail-scroll .journal-table th:nth-child(1),
+.journal-detail-scroll .journal-table td:nth-child(1),
+.journal-detail-scroll .journal-table th:nth-child(2),
+.journal-detail-scroll .journal-table td:nth-child(2),
+.journal-detail-scroll .journal-table th:nth-child(3),
+.journal-detail-scroll .journal-table td:nth-child(3),
+.journal-detail-scroll .journal-table th:nth-child(5),
+.journal-detail-scroll .journal-table td:nth-child(5),
+.journal-detail-scroll .journal-table th:nth-child(6),
+.journal-detail-scroll .journal-table td:nth-child(6),
+.journal-detail-scroll .journal-table th:nth-child(7),
+.journal-detail-scroll .journal-table td:nth-child(7) {
+  white-space: nowrap;
+}
+
+.journal-detail-scroll .journal-table th:nth-child(4),
+.journal-detail-scroll .journal-table td:nth-child(4) {
+  min-width: 26rem;
+}
+
 .statement-display-toggle {
   display: inline-flex;
   padding: 0.15rem;
-  border: 1px solid var(--border);
+  border: 2px solid var(--ink);
   border-radius: 999px;
-  background: var(--surface-muted);
+  background: #eef0f7;
 }
 
 .statement-display-toggle button {
@@ -2253,8 +2735,9 @@ textarea {
 }
 
 .statement-display-toggle button.active {
-  background: var(--primary);
+  background: var(--ink);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(32, 33, 78, 0.35);
 }
 
 .control-grid,
@@ -2298,6 +2781,20 @@ textarea {
   overflow-wrap: anywhere;
   padding: 0.8rem;
   text-decoration: none;
+}
+
+.archive-card-actions {
+  justify-content: flex-start;
+  margin-top: 0.5rem;
+}
+
+.archive-viewer-heading {
+  align-items: flex-end;
+}
+
+.archive-viewer-heading .subtabs {
+  position: static;
+  margin: 0;
 }
 
 .span-all {

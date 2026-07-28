@@ -345,10 +345,10 @@ $payrollConfiguration->saveMapping(
         'charge_laa_id' => $accountId('5700'),
         'charge_lpp_id' => $accountId('5700'),
         'dette_net_id' => $accountId('2000'),
-        'dette_ocas_id' => $accountId('2270'),
-        'dette_laa_id' => $accountId('2270'),
-        'dette_lpp_id' => $accountId('2270'),
-        'dette_impot_id' => $accountId('2270'),
+        'dette_ocas_id' => $accountId('2280'),
+        'dette_laa_id' => $accountId('2280'),
+        'dette_lpp_id' => $accountId('2280'),
+        'dette_impot_id' => $accountId('2280'),
     ],
     $administratorId
 );

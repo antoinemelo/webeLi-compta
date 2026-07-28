@@ -36,12 +36,12 @@ final class OcasRateImportService
     }
 
     /** @return array<string,mixed> */
-    public function preview(int $year): array
+    public function preview(int $year, string $sourceCsv = ''): array
     {
         if ($year < 2000 || $year > 9999) {
             throw new PayrollException('Année de taux OCAS invalide.');
         }
-        if ($this->databasePath === '' || !is_file($this->databasePath)) {
+        if ($sourceCsv === '' && ($this->databasePath === '' || !is_file($this->databasePath))) {
             return [
                 'available' => false,
                 'year' => $year,
@@ -54,30 +54,34 @@ final class OcasRateImportService
                 'fingerprint' => '',
             ];
         }
-        try {
-            $source = new PDO('sqlite:' . $this->databasePath, null, null, [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            ]);
-            $table = $source->query(
-                "SELECT 1 FROM sqlite_master
-                 WHERE type = 'table' AND name = 'taux_par_annee'"
-            )->fetchColumn();
-            if ($table === false) {
-                throw new PayrollException(
-                    'La table des taux annuels OCAS est absente.'
+        if ($sourceCsv !== '') {
+            $sourceRows = $this->parseCsv($sourceCsv, $year);
+        } else {
+            try {
+                $source = new PDO('sqlite:' . $this->databasePath, null, null, [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                ]);
+                $table = $source->query(
+                    "SELECT 1 FROM sqlite_master
+                     WHERE type = 'table' AND name = 'taux_par_annee'"
+                )->fetchColumn();
+                if ($table === false) {
+                    throw new PayrollException(
+                        'La table des taux annuels OCAS est absente.'
+                    );
+                }
+                $stmt = $source->prepare(
+                    'SELECT cle, valeur FROM taux_par_annee
+                     WHERE annee = ? ORDER BY cle'
                 );
+                $stmt->execute([$year]);
+                $sourceRows = $stmt->fetchAll();
+            } catch (PayrollException $exception) {
+                throw $exception;
+            } catch (Throwable) {
+                throw new PayrollException('La source OCAS ne peut pas être lue.');
             }
-            $stmt = $source->prepare(
-                'SELECT cle, valeur FROM taux_par_annee
-                 WHERE annee = ? ORDER BY cle'
-            );
-            $stmt->execute([$year]);
-            $sourceRows = $stmt->fetchAll();
-        } catch (PayrollException $exception) {
-            throw $exception;
-        } catch (Throwable) {
-            throw new PayrollException('La source OCAS ne peut pas être lue.');
         }
         $rates = [];
         $rows = [];
@@ -116,7 +120,7 @@ final class OcasRateImportService
         return [
             'available' => true,
             'year' => $year,
-            'source' => $this->databasePath,
+            'source' => $sourceCsv !== '' ? 'Fichier CSV transmis' : $this->databasePath,
             'message' => $sourceRows === []
                 ? 'Aucun taux OCAS pour ce millésime.'
                 : 'Prévisualisation sans écriture.',
@@ -136,8 +140,9 @@ final class OcasRateImportService
         string $fingerprint,
         string $verifiedOn,
         ?int $actorId = null,
+        string $sourceCsv = '',
     ): array {
-        $preview = $this->preview($year);
+        $preview = $this->preview($year, $sourceCsv);
         if (
             !$preview['available']
             || $preview['fingerprint'] === ''
@@ -170,7 +175,9 @@ final class OcasRateImportService
         } catch (PayrollException) {
         }
         $data = $preview['rates'];
-        $data['source'] = 'OCAS — taux annuels — ' . $this->databasePath;
+        $data['source'] = $sourceCsv !== ''
+            ? 'OCAS — fichier CSV contrôlé'
+            : 'OCAS — taux annuels — ' . $this->databasePath;
         $data['source_annee'] = $year;
         $data['source_empreinte'] = $fingerprint;
         $data['importe_le'] = gmdate('Y-m-d H:i:s');
@@ -196,6 +203,44 @@ final class OcasRateImportService
             ]
         );
         return ['id' => $id, 'idempotent' => false, 'year' => $year];
+    }
+
+    /** @return list<array{cle:string,valeur:string}> */
+    private function parseCsv(string $csv, int $year): array
+    {
+        if (strlen($csv) > 200_000) {
+            throw new PayrollException('Le fichier OCAS dépasse 200 Ko.');
+        }
+        $rows = [];
+        $lines = preg_split('/\R/', trim($csv)) ?: [];
+        foreach ($lines as $index => $line) {
+            if (trim($line) === '') {
+                continue;
+            }
+            $columns = str_getcsv($line, ';');
+            if (count($columns) < 2) {
+                throw new PayrollException(
+                    'CSV OCAS invalide à la ligne ' . ($index + 1) . '.'
+                );
+            }
+            if ($index === 0 && mb_strtolower(trim($columns[0])) === 'cle') {
+                continue;
+            }
+            $rowYear = count($columns) >= 3 ? trim($columns[0]) : (string) $year;
+            $key = trim($columns[count($columns) >= 3 ? 1 : 0]);
+            $value = trim($columns[count($columns) >= 3 ? 2 : 1]);
+            if ($rowYear !== (string) $year) {
+                continue;
+            }
+            if ($key === '' || $value === '') {
+                throw new PayrollException(
+                    'CSV OCAS incomplet à la ligne ' . ($index + 1) . '.'
+                );
+            }
+            $rows[] = ['cle' => $key, 'valeur' => $value];
+        }
+        usort($rows, static fn (array $a, array $b): int => $a['cle'] <=> $b['cle']);
+        return $rows;
     }
 
     private function fractionToPpm(string $value, string $key): int

@@ -10,6 +10,7 @@ import FormField from '@/components/ui/FormField.vue';
 import MarketLineChart from '@/components/ui/MarketLineChart.vue';
 import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { subNavigation } from '@/router/navigation';
 import { useContextStore } from '@/stores/context';
 import { useExpensesStore } from '@/stores/expenses';
@@ -21,18 +22,20 @@ const route = useRoute();
 const context = useContextStore();
 const store = useExpensesStore();
 const treasury = useTreasuryStore();
+useToastFeedback(store, false);
+useToastFeedback(treasury, false);
 const notifications = useNotificationStore();
 const activeTab = computed(() => String(route.params.tab || 'use'));
 const workspace = computed(() => store.workspace);
 const exchangeMode = ref<'moyenne' | 'fin_mois'>('moyenne');
 const selectedInterestCode = ref('');
 const reconciliationSection = ref<'import' | 'suggestion' | 'matching'>('import');
-const matchingSection = ref<'payment' | 'allocation'>('payment');
 const ratesSection = ref<'exchange' | 'interest'>('exchange');
 const today = new Date().toISOString().slice(0, 10);
 const selectedId = ref(0);
 const expenseDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const recurrenceDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const paymentDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const attachment = ref<{ name: string; content_base64: string } | null>(null);
 const statement = ref<{ name: string; content_base64: string } | null>(null);
 const importPreview = ref<Record<string, unknown> | null>(null);
@@ -148,6 +151,19 @@ function openExpenseDialog(): void {
 function openRecurrenceDialog(): void {
   resetRecurrenceDraft();
   recurrenceDialog.value?.open();
+}
+
+function openPaymentDialog(): void {
+  Object.assign(paymentDraft, {
+    contact_id: 0,
+    direction: 'encaissement',
+    date: today,
+    amount: '',
+    reference: '',
+    treasury_account_id: 0,
+    bank_line_id: 0
+  });
+  paymentDialog.value?.open();
 }
 
 const expenseRows = computed(() => (workspace.value?.expenses ?? []).map((item) => ({
@@ -502,6 +518,7 @@ async function createPayment(): Promise<void> {
       bank_line_id: paymentDraft.bank_line_id || null,
       currency: treasuryAccount.currency
     });
+    paymentDialog.value?.close();
     notifications.push('Paiement créé indépendamment des factures.', 'success');
   } catch {
     notifications.push(treasury.error, 'warning');
@@ -723,7 +740,6 @@ async function toggleRecurrence(item: {
     <template v-else-if="workspace && activeTab === 'use'">
       <div class="toolbar">
         <div>
-          <h2>Utilisation des liquidités</h2>
           <p>La création reste toujours en brouillon. Paiement et allocation sont séparés.</p>
         </div>
         <div class="button-row">
@@ -997,7 +1013,6 @@ async function toggleRecurrence(item: {
     <template v-else-if="workspace && treasury.workspace && activeTab === 'rapprochement'">
       <div class="toolbar">
         <div>
-          <h2>Rapprochement bancaire</h2>
           <p>Le relevé, ses empreintes et le grand livre restent des sources distinctes.</p>
         </div>
       </div>
@@ -1194,38 +1209,9 @@ async function toggleRecurrence(item: {
 
     <template v-else-if="workspace && treasury.workspace && activeTab === 'lettrage'">
       <div class="toolbar">
-        <div><h2>Lettrage des paiements</h2><p>Un paiement reste indépendant et peut couvrir plusieurs documents.</p></div>
+        <div><p>Un paiement reste indépendant et peut couvrir plusieurs documents.</p></div>
       </div>
-      <nav class="subtabs secondary-tabs section-tabs" aria-label="Étapes du lettrage">
-        <button :class="{ active: matchingSection === 'payment' }" type="button" @click="matchingSection = 'payment'">Nouveau paiement</button>
-        <button :class="{ active: matchingSection === 'allocation' }" type="button" @click="matchingSection = 'allocation'">Allouer à un document ouvert</button>
-      </nav>
-      <form v-if="matchingSection === 'payment' && treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="createPayment">
-        <h3>Nouveau paiement</h3>
-        <div class="form-grid">
-          <FormField id="matching-contact" label="Contact"><template #default="{ describedBy }"><select id="matching-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.catalog.contacts" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
-          <FormField id="matching-direction" label="Sens"><template #default="{ describedBy }"><select id="matching-direction" v-model="paymentDraft.direction" :aria-describedby="describedBy"><option value="encaissement">Encaissement</option><option value="decaissement">Décaissement</option></select></template></FormField>
-          <FormField id="matching-date" label="Date"><template #default="{ describedBy }"><input id="matching-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
-          <FormField id="matching-amount" label="Montant"><template #default="{ describedBy }"><input id="matching-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
-          <FormField id="matching-reference" label="Référence"><template #default="{ describedBy }"><input id="matching-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy"></template></FormField>
-          <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="matching-account" v-model="paymentDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="ledger_label" :aria-describedby="describedBy" required /></template></FormField>
-          <FormField id="matching-bank-line" label="Ligne bancaire facultative" hint="Le montant cumulé et le sens sont contrôlés côté serveur.">
-            <template #default="{ describedBy }">
-              <select id="matching-bank-line" v-model.number="paymentDraft.bank_line_id" :aria-describedby="describedBy">
-                <option :value="0">Paiement sans ligne bancaire</option>
-                <option
-                  v-for="line in treasury.workspace.bank_lines.filter((item) => paymentDraft.direction === 'encaissement' ? item.amount_cents > 0 : item.amount_cents < 0)"
-                  :key="line.id"
-                  :value="line.id"
-                >{{ line.booking_date }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
-              </select>
-            </template>
-          </FormField>
-        </div>
-        <button class="button primary" :disabled="treasury.saving">Créer le paiement</button>
-      </form>
-
-      <form v-if="matchingSection === 'allocation' && treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
+      <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
         <h3>Allouer à un document ouvert</h3>
         <div class="form-grid">
           <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.payments.filter((entry) => entry.non_alloue_centimes > 0)" :key="item.id" :value="item.id">{{ item.date_paiement }} · {{ item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes) }}</option></select></template></FormField>
@@ -1236,7 +1222,7 @@ async function toggleRecurrence(item: {
       </form>
 
       <DataTable
-        v-if="matchingSection === 'allocation' && treasury.workspace.allocations.length"
+        v-if="treasury.workspace.allocations.length"
         caption="Allocations et délettrages"
         :columns="[
           { key: 'document_numero', label: 'Document' },
@@ -1255,8 +1241,49 @@ async function toggleRecurrence(item: {
 
     <template v-else-if="workspace && treasury.workspace && activeTab === 'paiements'">
       <div class="toolbar">
-        <div><h2>Paiements sortants</h2><p>Préparation, export pain.001 non transmis, puis confirmation par relevé.</p></div>
+        <div><p>Préparation, export pain.001 non transmis, puis confirmation par relevé.</p></div>
+        <button
+          v-if="treasury.workspace.capabilities.match"
+          class="button primary"
+          type="button"
+          @click="openPaymentDialog"
+        >
+          Saisir un paiement
+        </button>
       </div>
+      <ModalDialog
+        v-if="treasury.workspace.capabilities.match"
+        ref="paymentDialog"
+        title="Saisir un paiement"
+        description="Le paiement reste indépendant des factures jusqu’à son lettrage."
+        wide
+      >
+        <form class="modal-editor" @submit.prevent="createPayment">
+          <div class="form-grid">
+            <FormField id="matching-contact" label="Contact"><template #default="{ describedBy }"><select id="matching-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.catalog.contacts" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
+            <FormField id="matching-direction" label="Sens"><template #default="{ describedBy }"><select id="matching-direction" v-model="paymentDraft.direction" :aria-describedby="describedBy"><option value="encaissement">Encaissement</option><option value="decaissement">Décaissement</option></select></template></FormField>
+            <FormField id="matching-date" label="Date"><template #default="{ describedBy }"><input id="matching-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
+            <FormField id="matching-amount" label="Montant"><template #default="{ describedBy }"><input id="matching-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
+            <FormField id="matching-reference" label="Référence"><template #default="{ describedBy }"><input id="matching-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy"></template></FormField>
+            <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="matching-account" v-model="paymentDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="ledger_label" :aria-describedby="describedBy" required /></template></FormField>
+            <FormField id="matching-bank-line" label="Ligne bancaire facultative" hint="Le montant cumulé et le sens sont contrôlés côté serveur.">
+              <template #default="{ describedBy }">
+                <select id="matching-bank-line" v-model.number="paymentDraft.bank_line_id" :aria-describedby="describedBy">
+                  <option :value="0">Paiement sans ligne bancaire</option>
+                  <option
+                    v-for="line in treasury.workspace.bank_lines.filter((item) => paymentDraft.direction === 'encaissement' ? item.amount_cents > 0 : item.amount_cents < 0)"
+                    :key="line.id"
+                    :value="line.id"
+                  >{{ line.booking_date }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
+                </select>
+              </template>
+            </FormField>
+          </div>
+          <div class="button-row">
+            <button class="button primary" :disabled="treasury.saving">Créer le paiement</button>
+          </div>
+        </form>
+      </ModalDialog>
       <form v-if="treasury.workspace.capabilities.prepare_payments" class="editor-card" @submit.prevent="prepareBatch">
         <h3>Dettes approuvées et comptabilisées</h3>
         <div class="form-grid">
@@ -1310,8 +1337,6 @@ async function toggleRecurrence(item: {
       </nav>
       <div v-if="ratesSection === 'exchange'" class="toolbar">
         <div>
-          <p class="eyebrow">Référentiel public partagé</p>
-          <h2>Taux de change</h2>
           <p v-if="treasury.exchangeHistory">
             {{ treasury.exchangeHistory.exercise.label }} ·
             {{ periodLabel(treasury.exchangeHistory.window.start) }} à
@@ -1441,8 +1466,6 @@ async function toggleRecurrence(item: {
 
       <div v-if="ratesSection === 'interest'" class="toolbar">
         <div>
-          <p class="eyebrow">Référentiel public partagé</p>
-          <h2>Taux d’intérêt</h2>
           <p v-if="treasury.interestHistory">
             {{ treasury.interestHistory.exercise.label }} ·
             {{ periodLabel(treasury.interestHistory.window.start) }} à

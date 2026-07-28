@@ -140,3 +140,72 @@ Pour une cible montée localement, le même protocole se teste avec :
   "target": "/chemin/vers/la/cible"
 }
 ```
+
+## Installer directement un nouveau site par FTP/FTPS
+
+Le menu interactif propose également **Installer un nouveau site depuis un
+dossier par FTP/FTPS**. Il demande explicitement :
+
+1. le répertoire local de départ ;
+2. le fichier contenant la connexion FTP/FTPS ;
+3. le répertoire FTP absolu d’arrivée ;
+4. une confirmation après présentation du volume à envoyer.
+
+La même opération est automatisable :
+
+```bash
+python3 tools/python/compta.py ftp-install \
+  --source /chemin/vers/compta \
+  --remote-root /www/nouveau-site/compta
+
+python3 tools/python/compta.py ftp-install \
+  --source /chemin/vers/compta \
+  --remote-root /www/nouveau-site/compta \
+  --vendor-mode auto \
+  --list-files \
+  --apply
+```
+
+Cette installation ne dépend pas de Git : elle inspecte directement le dossier
+choisi. Elle exige une livraison complète comprenant le code PHP, les
+migrations, les templates, `vendor/autoload.php` et un build Vue cohérent. Les
+assets référencés par le manifeste Vite doivent tous exister.
+
+Le répertoire Composer est recherché d’abord sous `./vendor`, puis
+automatiquement sous `../vendor`. Le choix `--vendor-mode` détermine son
+traitement :
+
+- `auto` reproduit la disposition locale : `./vendor` reste propre à
+  l’instance, tandis qu’un `../vendor` détecté est mutualisé dans le parent
+  distant ;
+- `local` transfère les dépendances dans le `vendor` de l’instance ;
+- `shared` les transfère dans le `vendor` du répertoire parent ;
+- `skip` n’envoie aucune dépendance et exige qu’un `./vendor` ou `../vendor`
+  compatible soit déjà présent sur le serveur.
+
+Le menu interactif présente les mêmes choix sous forme de questions « avec ou
+sans vendor ». Lorsqu’un vendor mutualisé compatible existe déjà, son transfert
+est automatiquement évité. Un vendor partagé utilisant d’autres versions est
+protégé ; `--replace-shared-vendor` est nécessaire pour l’écraser explicitement.
+Le choix peut aussi être conservé dans le fichier de connexion avec
+`"vendor_mode": "shared"` ou `"vendor_mode": "skip"`.
+
+Seuls les fichiers nécessaires à l’exécution sont envoyés. Sont notamment
+exclus `frontend/`, `tests/`, `tools/`, `.git/`, `node_modules/`,
+`config/local.php`, les bases SQLite, les journaux et tout `storage/`. Aucun
+fichier distant n’est supprimé. Après l’envoi, chaque fichier est relu par FTP
+et comparé à son empreinte SHA-256 ; le marqueur de livraison est écrit en
+dernier.
+
+Une destination contenant déjà `index.php` ou un marqueur Compta est refusée
+par défaut. Une mise à jour normale doit passer par `deploy`. L’option experte
+`--replace-runtime` permet uniquement de confirmer le remplacement des fichiers
+applicatifs existants ; elle ne supprime toujours aucune donnée distante.
+
+Le transfert installe le moteur d’un nouveau site, sans copier les secrets ni
+les données d’une autre instance. La configuration locale de production et la
+base initiale doivent ensuite être provisionnées pour ce nouveau site. Une
+instance utilisant un vendor mutualisé peut être rafraîchie sans le retransférer
+avec `ftp-install --replace-runtime --vendor-mode skip`. Le déploiement
+incrémental `deploy` reste disponible pour les installations dont le vendor
+demeure propre à chaque instance.

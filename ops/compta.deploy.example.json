@@ -6,5 +6,6 @@
   "password": "CHANGE_ME",
   "timeout": 30,
   "passive": true,
+  "vendor_mode": "auto",
   "remote_root": "/www/webe.li/compta"
 }

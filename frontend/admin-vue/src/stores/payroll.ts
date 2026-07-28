@@ -40,13 +40,13 @@ export const usePayrollStore = defineStore('payroll', {
         this.saving = false;
       }
     },
-    async previewOcas(year: number): Promise<void> {
+    async previewOcas(year: number, sourceCsv = ''): Promise<void> {
       this.saving = true;
       this.error = '';
       try {
         this.ocas = (await api.post<OcasRatePreview>(
           '/salaires/taux-ocas/previsualiser',
-          { year }
+          { year, source_csv: sourceCsv }
         )).data;
       } catch (error) {
         this.error = errorMessage(error);

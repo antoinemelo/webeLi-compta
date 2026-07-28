@@ -140,6 +140,12 @@ final class ApiRouteRegistry
             );
             $this->add(
                 $router,
+                'POST',
+                '/api/v1/configuration/audit/clear',
+                $this->configuration->clearAudit(...)
+            );
+            $this->add(
+                $router,
                 'GET',
                 '/api/v1/configuration/references',
                 $this->configuration->references(...)
@@ -185,6 +191,12 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/configuration/references/vat-codes/delete',
                 $this->configuration->deleteVatCode(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/vat/clear',
+                $this->configuration->clearVatConfiguration(...)
             );
             $this->add(
                 $router,
@@ -241,6 +253,18 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/accounting/entries',
                 $this->accounting->createEntry(...)
+            );
+            $this->add(
+                $router,
+                'GET',
+                '/api/v1/accounting/entries/draft',
+                $this->accounting->draft(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/accounting/entries/delete',
+                $this->accounting->deleteDraft(...)
             );
             $this->add(
                 $router,
@@ -333,6 +357,7 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/accounting/tax-file/adjustments', $this->accounting->createTaxAdjustment(...));
             $this->add($router, 'POST', '/api/v1/accounting/tax-file/adjustments/status', $this->accounting->setTaxAdjustmentStatus(...));
             $this->add($router, 'POST', '/api/v1/accounting/archives', $this->accounting->archive(...));
+            $this->add($router, 'POST', '/api/v1/accounting/archives/delete', $this->accounting->deleteArchive(...));
             $this->add($router, 'GET', '/api/v1/accounting/archives/download', $this->accounting->downloadArchive(...));
         }
         if ($this->consolidation !== null) {

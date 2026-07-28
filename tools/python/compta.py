@@ -29,6 +29,7 @@ DEFAULT_DEPLOY_CONFIG = ROOT / "ops" / "compta.deploy.json"
 REMOTE_MANIFEST = "storage/deployments/current.json"
 REMOTE_RELEASES = "storage/deployments/releases"
 DEPLOY_MANIFEST_SCHEMA = 2
+DIRECT_INSTALL_MANIFEST_SCHEMA = 1
 
 RUNTIME_FILES = {
     ".htaccess",
@@ -62,6 +63,24 @@ EXCLUDED_PREFIXES = (
     "tests/",
     "tools/",
     "vendor/",
+)
+DIRECT_INSTALL_REQUIRED_FILES = {
+    ".htaccess",
+    "index.php",
+    "VERSION",
+    "composer.json",
+    "composer.lock",
+    "bootstrap/app.php",
+    "config/app.php",
+    "public/.htaccess",
+    "public/index.php",
+    "public/app/index.html",
+    "public/app/.vite/manifest.json",
+}
+DIRECT_INSTALL_REQUIRED_PREFIXES = (
+    "database/migrations/",
+    "src/",
+    "templates/",
 )
 
 
@@ -632,11 +651,27 @@ def runtime_files_at(commit: str) -> list[str]:
     })
 
 
+def vendor_directory(root: Path) -> Path:
+    project = root.expanduser().resolve()
+    candidates = (project / "vendor", project.parent / "vendor")
+    for candidate in candidates:
+        if (
+            (candidate / "autoload.php").is_file()
+            and (candidate / "composer/installed.json").is_file()
+        ):
+            return candidate
+    raise AdminError(
+        "Dépendances PHP absentes. vendor a été recherché dans "
+        f"{candidates[0]} puis {candidates[1]}."
+    )
+
+
 def ensure_vendor_ready(commit: str) -> None:
     lock = git_bytes(commit, "composer.lock")
     local_lock = ROOT / "composer.lock"
-    installed = ROOT / "vendor" / "composer" / "installed.json"
-    autoload = ROOT / "vendor" / "autoload.php"
+    vendor = vendor_directory(ROOT)
+    installed = vendor / "composer" / "installed.json"
+    autoload = vendor / "autoload.php"
     if not local_lock.is_file() or local_lock.read_bytes() != lock:
         raise AdminError(
             "Le composer.lock local ne correspond pas au commit ciblé."
@@ -673,9 +708,9 @@ def ensure_vendor_ready(commit: str) -> None:
 
 
 def vendor_files() -> list[str]:
-    root = ROOT / "vendor"
+    root = vendor_directory(ROOT)
     return sorted(
-        path.relative_to(ROOT).as_posix()
+        f"vendor/{path.relative_to(root).as_posix()}"
         for path in root.rglob("*")
         if path.is_file()
     )
@@ -721,11 +756,440 @@ def git_bytes(commit: str, path: str) -> bytes:
 
 def deployment_bytes(commit: str, path: str) -> bytes:
     if path.startswith("vendor/"):
-        source = ROOT / path
+        source = vendor_directory(ROOT) / path.removeprefix("vendor/")
         if not source.is_file():
             raise AdminError(f"Dépendance PHP locale introuvable : {path}")
         return source.read_bytes()
     return git_bytes(commit, path)
+
+
+def is_direct_install_path(path: str) -> bool:
+    normalized = str(PurePosixPath(path))
+    return (
+        normalized.startswith("vendor/")
+        or is_runtime_path(normalized)
+    )
+
+
+def resolved_vendor_mode(source: Path, requested: str) -> tuple[str, Path]:
+    if requested not in {"auto", "local", "shared", "skip"}:
+        raise AdminError("Le mode vendor doit valoir auto, local, shared ou skip.")
+    root = source.expanduser().resolve()
+    vendor = vendor_directory(root)
+    if requested == "auto":
+        requested = "local" if vendor.parent == root else "shared"
+    return requested, vendor
+
+
+def direct_source_path(source: Path, path: str, vendor: Path) -> Path:
+    if path.startswith("vendor/"):
+        return vendor / path.removeprefix("vendor/")
+    return source.expanduser().resolve() / path
+
+
+def direct_remote_path(path: str, vendor_mode: str) -> str:
+    if path.startswith("vendor/") and vendor_mode == "shared":
+        return f"../vendor/{path.removeprefix('vendor/')}"
+    return path
+
+
+def direct_install_files(
+    source: Path,
+    *,
+    include_vendor: bool = True,
+) -> list[str]:
+    root = source.expanduser().resolve()
+    if not root.is_dir():
+        raise AdminError(f"Répertoire source introuvable : {root}")
+    vendor = vendor_directory(root)
+    files: list[str] = []
+    for candidate in root.rglob("*"):
+        if candidate.is_symlink():
+            relative = candidate.relative_to(root).as_posix()
+            if is_direct_install_path(relative):
+                raise AdminError(
+                    f"Lien symbolique refusé dans la livraison : {relative}"
+                )
+            continue
+        if not candidate.is_file():
+            continue
+        relative = candidate.relative_to(root).as_posix()
+        if relative.startswith("vendor/"):
+            continue
+        if is_direct_install_path(relative):
+            files.append(relative)
+    if include_vendor:
+        for candidate in vendor.rglob("*"):
+            if candidate.is_symlink():
+                relative = candidate.relative_to(vendor).as_posix()
+                raise AdminError(
+                    f"Lien symbolique refusé dans vendor : {relative}"
+                )
+            if candidate.is_file():
+                files.append(
+                    f"vendor/{candidate.relative_to(vendor).as_posix()}"
+                )
+    inventory = sorted(set(files))
+    missing = sorted(DIRECT_INSTALL_REQUIRED_FILES - set(inventory))
+    if include_vendor and "vendor/autoload.php" not in inventory:
+        missing.append("vendor/autoload.php")
+    for prefix in DIRECT_INSTALL_REQUIRED_PREFIXES:
+        if not any(path.startswith(prefix) for path in inventory):
+            missing.append(f"{prefix}*")
+    if missing:
+        raise AdminError(
+            "Le dossier source n’est pas une livraison Compta exécutable. "
+            "Éléments manquants : " + ", ".join(missing)
+        )
+    try:
+        vite = json.loads(
+            (root / "public/app/.vite/manifest.json").read_text(encoding="utf-8")
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AdminError("Le manifeste du build Vue est invalide.") from error
+    assets: set[str] = set()
+    for entry in vite.values():
+        if not isinstance(entry, dict):
+            continue
+        if isinstance(entry.get("file"), str):
+            assets.add(f"public/app/{entry['file']}")
+        for key in ("css", "assets"):
+            values = entry.get(key, [])
+            if isinstance(values, list):
+                assets.update(
+                    f"public/app/{path}"
+                    for path in values
+                    if isinstance(path, str)
+                )
+    missing_assets = sorted(assets - set(inventory))
+    if missing_assets:
+        raise AdminError(
+            "Le build Vue est incomplet. Assets absents : "
+            + ", ".join(missing_assets)
+        )
+    inventory = [
+        path
+        for path in inventory
+        if not path.startswith("public/app/assets/") or path in assets
+    ]
+    return inventory
+
+
+def direct_install_manifest(
+    source: Path,
+    inventory: list[str],
+    *,
+    vendor_mode: str = "local",
+    vendor: Path | None = None,
+) -> dict[str, Any]:
+    root = source.expanduser().resolve()
+    resolved_vendor = vendor or vendor_directory(root)
+    fingerprint = hashlib.sha256()
+    files: list[dict[str, Any]] = []
+    for path in inventory:
+        source_path = direct_source_path(root, path, resolved_vendor)
+        content = source_path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        remote_path = direct_remote_path(path, vendor_mode)
+        fingerprint.update(path.encode("utf-8"))
+        fingerprint.update(b"\0")
+        fingerprint.update(remote_path.encode("utf-8"))
+        fingerprint.update(b"\0")
+        fingerprint.update(digest.encode("ascii"))
+        fingerprint.update(b"\0")
+        files.append({
+            "path": path,
+            "size": len(content),
+            "sha256": digest,
+            "source": "directory",
+            "remote_path": remote_path,
+        })
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    return {
+        "schema": DIRECT_INSTALL_MANIFEST_SCHEMA,
+        "application": "webeli-compta",
+        "deployment_kind": "complete-runtime-install",
+        "vendor_mode": vendor_mode,
+        "vendor_source": (
+            "none"
+            if vendor_mode == "skip"
+            else "parent"
+            if resolved_vendor.parent != root
+            else "local"
+        ),
+        "source_fingerprint": fingerprint.hexdigest(),
+        "version": version,
+        "deployed_at": datetime.now(timezone.utc).isoformat(),
+        "files": files,
+        "uploads": inventory,
+        "deletions": [],
+    }
+
+
+def normalize_remote_root(value: str) -> str:
+    candidate = value.strip()
+    if not candidate.startswith("/"):
+        raise AdminError("Le répertoire FTP d’arrivée doit être un chemin absolu.")
+    if any(part in {".", ".."} for part in candidate.split("/")):
+        raise AdminError("Le répertoire FTP d’arrivée contient un segment interdit.")
+    if "\r" in candidate or "\n" in candidate:
+        raise AdminError("Le répertoire FTP d’arrivée est invalide.")
+    normalized = "/" + "/".join(part for part in candidate.split("/") if part)
+    return normalized if normalized != "" else "/"
+
+
+def direct_manifest_is_valid(
+    manifest: dict[str, Any] | None,
+    expected_fingerprint: str,
+    expected_paths: list[str],
+) -> bool:
+    if not manifest:
+        return False
+    files = manifest.get("files")
+    return (
+        manifest.get("schema") == DIRECT_INSTALL_MANIFEST_SCHEMA
+        and manifest.get("application") == "webeli-compta"
+        and manifest.get("deployment_kind") == "complete-runtime-install"
+        and manifest.get("source_fingerprint") == expected_fingerprint
+        and isinstance(files, list)
+        and sorted(
+            str(item.get("path"))
+            for item in files
+            if isinstance(item, dict)
+        ) == sorted(expected_paths)
+    )
+
+
+def install_directory_ftp(
+    config: dict[str, Any],
+    source: Path,
+    remote_root: str,
+    inventory: list[str],
+    manifest: dict[str, Any],
+    replace_runtime: bool = False,
+    replace_shared_vendor: bool = False,
+) -> None:
+    root = source.expanduser().resolve()
+    vendor = vendor_directory(root)
+    entries = {
+        str(item["path"]): item
+        for item in manifest["files"]
+    }
+    expected = {
+        path: str(item["sha256"])
+        for path, item in entries.items()
+    }
+    vendor_mode = str(manifest.get("vendor_mode", "local"))
+
+    def remote_path(path: str) -> str:
+        relative = str(entries[path].get("remote_path", path))
+        return posixpath.normpath(posixpath.join(remote_root, relative))
+
+    with ftp_connect(config) as client:
+        if not replace_runtime:
+            existing_marker = ftp_read_bytes(
+                client,
+                posixpath.join(remote_root, REMOTE_MANIFEST),
+                missing_ok=True,
+            )
+            existing_entry = ftp_read_bytes(
+                client,
+                posixpath.join(remote_root, "index.php"),
+                missing_ok=True,
+            )
+            if existing_marker is not None or existing_entry is not None:
+                raise AdminError(
+                    "Le répertoire FTP d’arrivée contient déjà une installation. "
+                    "Utilisez deploy pour une mise à jour, ou --replace-runtime "
+                    "pour remplacer explicitement ses fichiers applicatifs."
+                )
+        skipped_vendor: set[str] = set()
+        local_installed = (vendor / "composer/installed.json").read_bytes()
+        if vendor_mode == "skip":
+            dependency_roots = (
+                posixpath.join(remote_root, "vendor"),
+                posixpath.join(posixpath.dirname(remote_root), "vendor"),
+            )
+            selected = ""
+            for dependency_root in dependency_roots:
+                autoload = ftp_read_bytes(
+                    client,
+                    posixpath.join(dependency_root, "autoload.php"),
+                    missing_ok=True,
+                )
+                if autoload is None:
+                    continue
+                installed = ftp_read_bytes(
+                    client,
+                    posixpath.join(dependency_root, "composer/installed.json"),
+                    missing_ok=True,
+                )
+                if installed != local_installed:
+                    raise AdminError(
+                        "Le vendor distant existe mais ne correspond pas au "
+                        "composer.lock de cette instance."
+                    )
+                selected = dependency_root
+                break
+            if not selected:
+                raise AdminError(
+                    "Transfert sans vendor impossible : aucun vendor compatible "
+                    "dans ./vendor ou ../vendor sur la destination."
+                )
+            print(f"Vendor distant réutilisé : {selected}")
+        elif vendor_mode == "shared":
+            shared_root = posixpath.join(posixpath.dirname(remote_root), "vendor")
+            remote_autoload = ftp_read_bytes(
+                client,
+                posixpath.join(shared_root, "autoload.php"),
+                missing_ok=True,
+            )
+            if remote_autoload is not None:
+                remote_installed = ftp_read_bytes(
+                    client,
+                    posixpath.join(shared_root, "composer/installed.json"),
+                    missing_ok=True,
+                )
+                if remote_installed == local_installed:
+                    skipped_vendor = {
+                        path for path in inventory if path.startswith("vendor/")
+                    }
+                    print(
+                        "Vendor mutualisé déjà compatible : transfert des "
+                        "dépendances ignoré."
+                    )
+                elif not replace_shared_vendor:
+                    raise AdminError(
+                        "Le vendor mutualisé distant utilise d’autres versions. "
+                        "Refus de l’écraser car plusieurs instances peuvent en "
+                        "dépendre. Utilisez --replace-shared-vendor uniquement "
+                        "après contrôle de toutes les instances."
+                    )
+        created_directories: set[str] = set()
+        uploads = [path for path in inventory if path not in skipped_vendor]
+        total = len(uploads)
+        for index, path in enumerate(uploads, start=1):
+            remote = remote_path(path)
+            directory = posixpath.dirname(remote)
+            if directory not in created_directories:
+                ftp_mkdirs(client, directory)
+                created_directories.add(directory)
+            with direct_source_path(root, path, vendor).open("rb") as stream:
+                client.storbinary(f"STOR {remote}", stream)
+            if index == 1 or index % 50 == 0 or index == total:
+                print(f"Envoi FTP : {index}/{total} fichiers")
+        for index, path in enumerate(uploads, start=1):
+            deployed = ftp_read_bytes(client, remote_path(path))
+            if deployed is None or hashlib.sha256(deployed).hexdigest() != expected[path]:
+                raise AdminError(
+                    f"Le contrôle après transfert a échoué pour {path}."
+                )
+            if index == 1 or index % 50 == 0 or index == total:
+                print(f"Vérification FTP : {index}/{total} fichiers")
+        payload = (
+            json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+            + b"\n"
+        )
+        fingerprint = str(manifest["source_fingerprint"])
+        release_path = posixpath.join(
+            remote_root,
+            REMOTE_RELEASES,
+            f"install-{fingerprint[:16]}.json",
+        )
+        ftp_mkdirs(client, posixpath.dirname(release_path))
+        client.storbinary(f"STOR {release_path}", io.BytesIO(payload))
+        current_path = posixpath.join(remote_root, REMOTE_MANIFEST)
+        ftp_mkdirs(client, posixpath.dirname(current_path))
+        client.storbinary(f"STOR {current_path}", io.BytesIO(payload))
+        stored = ftp_read_json(client, current_path)
+        if not direct_manifest_is_valid(stored, fingerprint, inventory):
+            raise AdminError("Le marqueur de l’installation FTP n’a pas pu être vérifié.")
+
+
+def ftp_install(args: argparse.Namespace) -> int:
+    config = (
+        dict(args.connection_config)
+        if getattr(args, "connection_config", None) is not None
+        else load_config(args.config.resolve())
+    )
+    if config.get("transport") not in {"ftp", "ftps"}:
+        raise AdminError("L’installation directe exige un transport ftp ou ftps.")
+    source = args.source.expanduser().resolve()
+    remote_root = normalize_remote_root(
+        args.remote_root or str(config.get("remote_root", ""))
+    )
+    requested_vendor_mode = str(
+        getattr(args, "vendor_mode", None)
+        or config.get("vendor_mode")
+        or "auto"
+    )
+    vendor_mode, vendor = resolved_vendor_mode(
+        source,
+        requested_vendor_mode,
+    )
+    inventory = direct_install_files(
+        source,
+        include_vendor=vendor_mode != "skip",
+    )
+    manifest = direct_install_manifest(
+        source,
+        inventory,
+        vendor_mode=vendor_mode,
+        vendor=vendor,
+    )
+    total_bytes = sum(int(item["size"]) for item in manifest["files"])
+    print(f"Répertoire source : {source}")
+    print(f"Répertoire FTP d’arrivée : {remote_root}")
+    print(f"Vendor détecté : {vendor}")
+    print(
+        "Gestion de vendor : "
+        + {
+            "local": "transféré dans ./vendor",
+            "shared": "mutualisé dans ../vendor",
+            "skip": "non transféré, vendor distant existant requis",
+        }[vendor_mode]
+    )
+    print(
+        f"Livraison runtime : {len(inventory)} fichier(s), "
+        f"{total_bytes / (1024 * 1024):.1f} Mio"
+    )
+    print(
+        "Exclus : sources frontend, tests, outils, Git, node_modules, "
+        "secrets, bases SQLite, journaux et stockage persistant."
+    )
+    if config.get("transport") == "ftp":
+        print(
+            "ATTENTION : FTP transmet les identifiants et les fichiers sans "
+            "chiffrement. FTPS est recommandé."
+        )
+    if args.list_files:
+        for path in inventory:
+            print(f"  + {path}")
+    print(
+        "IMPORTANT : cette commande installe le moteur applicatif d’un nouveau "
+        "site. La base et la configuration locale restent à provisionner "
+        "séparément."
+    )
+    if getattr(args, "interactive_confirmation", False):
+        if not confirm("Envoyer cette livraison complète par FTP"):
+            print("Opération annulée.")
+            return 0
+        args.apply = True
+    ensure_apply(args, "aucun fichier FTP n’a été modifié")
+    install_directory_ftp(
+        config,
+        source,
+        remote_root,
+        inventory,
+        manifest,
+        bool(getattr(args, "replace_runtime", False)),
+        bool(getattr(args, "replace_shared_vendor", False)),
+    )
+    print(
+        "Installation applicative FTP terminée et vérifiée. "
+        f"Marqueur distant : {REMOTE_MANIFEST}"
+    )
+    return 0
 
 
 def release_manifest(
@@ -1259,6 +1723,62 @@ def interactive_deploy() -> int:
     ))
 
 
+def interactive_ftp_install() -> int:
+    source = Path(ask("Répertoire local de départ", str(ROOT)))
+    if not source.is_absolute():
+        source = ROOT / source
+    detected_vendor = vendor_directory(source)
+    print(f"Vendor détecté : {detected_vendor}")
+    transfer_vendor = confirm("Transférer le répertoire vendor", default=True)
+    if transfer_vendor:
+        shared_default = detected_vendor.parent != source.expanduser().resolve()
+        vendor_mode = (
+            "shared"
+            if confirm(
+                "Mutualiser vendor dans le répertoire parent distant",
+                default=shared_default,
+            )
+            else "local"
+        )
+    else:
+        vendor_mode = "skip"
+    config_path = Path(ask(
+        "Fichier de connexion FTP/FTPS",
+        str(DEFAULT_DEPLOY_CONFIG),
+    ))
+    if not config_path.is_absolute():
+        config_path = ROOT / config_path
+    config = load_config(config_path.resolve())
+    if config.get("transport") not in {"ftp", "ftps"}:
+        raise AdminError("Le fichier choisi ne configure pas une connexion FTP/FTPS.")
+    remote_root = ask(
+        "Répertoire FTP d’arrivée",
+        str(config.get("remote_root", "")),
+    )
+    list_files = confirm("Afficher la liste détaillée des fichiers avant l’envoi")
+    replace_runtime = confirm(
+        "Autoriser le remplacement si ce répertoire contient déjà une installation"
+    )
+    replace_shared_vendor = (
+        vendor_mode == "shared"
+        and confirm(
+            "Autoriser le remplacement d’un vendor mutualisé incompatible"
+        )
+    )
+    return ftp_install(argparse.Namespace(
+        config=config_path,
+        connection_config=config,
+        source=source,
+        remote_root=remote_root,
+        vendor_mode=vendor_mode,
+        list_files=list_files,
+        replace_runtime=replace_runtime,
+        replace_shared_vendor=replace_shared_vendor,
+        apply=False,
+        interactive_confirmation=True,
+    ))
+
+
 def interactive_menu() -> int:
     actions = {
         "1": ("Vérifier l’environnement et les extensions PHP", lambda: run(
@@ -1270,6 +1790,10 @@ def interactive_menu() -> int:
         "3": ("Créer ou restaurer une base de données", interactive_database),
         "4": ("Créer un commit Git puis le pousser", interactive_publish),
         "5": ("Déployer le delta applicatif versionné", interactive_deploy),
+        "6": (
+            "Installer un nouveau site depuis un dossier par FTP/FTPS",
+            interactive_ftp_install,
+        ),
     }
     while True:
         print()
@@ -1404,6 +1928,58 @@ def parser() -> argparse.ArgumentParser:
     delivery.add_argument("--delete", action="store_true")
     delivery.add_argument("--apply", action="store_true")
     delivery.set_defaults(handler=deploy)
+
+    direct_delivery = commands.add_parser(
+        "ftp-install",
+        help="Installer le runtime d’un nouveau site depuis un dossier",
+    )
+    direct_delivery.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_DEPLOY_CONFIG,
+        help="Fichier de connexion FTP/FTPS",
+    )
+    direct_delivery.add_argument(
+        "--source",
+        type=Path,
+        default=ROOT,
+        help="Répertoire local contenant la livraison complète",
+    )
+    direct_delivery.add_argument(
+        "--remote-root",
+        help="Répertoire FTP absolu d’arrivée (remplace la valeur du fichier)",
+    )
+    direct_delivery.add_argument(
+        "--vendor-mode",
+        choices=("auto", "local", "shared", "skip"),
+        default=None,
+        help=(
+            "auto : reproduire l’emplacement local ; local : envoyer dans "
+            "./vendor ; shared : mutualiser dans ../vendor ; skip : ne pas "
+            "transférer vendor"
+        ),
+    )
+    direct_delivery.add_argument(
+        "--list-files",
+        action="store_true",
+        help="Afficher chaque fichier retenu",
+    )
+    direct_delivery.add_argument(
+        "--replace-runtime",
+        action="store_true",
+        help="Autoriser explicitement une destination contenant déjà Compta",
+    )
+    direct_delivery.add_argument(
+        "--replace-shared-vendor",
+        action="store_true",
+        help="Autoriser le remplacement risqué d’un ../vendor incompatible",
+    )
+    direct_delivery.add_argument(
+        "--apply",
+        action="store_true",
+        help="Effectuer réellement le transfert (sinon simulation)",
+    )
+    direct_delivery.set_defaults(handler=ftp_install)
     return root
 
 

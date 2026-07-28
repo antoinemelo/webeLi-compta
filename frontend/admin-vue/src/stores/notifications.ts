@@ -3,7 +3,7 @@ import { defineStore } from 'pinia';
 export type Notification = {
   id: number;
   message: string;
-  tone: 'success' | 'info' | 'warning';
+  tone: 'success' | 'info' | 'warning' | 'error';
 };
 
 let nextId = 1;

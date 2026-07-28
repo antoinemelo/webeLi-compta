@@ -11,6 +11,7 @@ import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import type { BillingDocument } from '@/api/contracts';
 import { runtimeConfig } from '@/config';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { subNavigation } from '@/router/navigation';
 import { useBillingStore } from '@/stores/billing';
 import { useContextStore } from '@/stores/context';
@@ -27,6 +28,7 @@ type DraftLine = {
 const route = useRoute();
 const context = useContextStore();
 const store = useBillingStore();
+useToastFeedback(store);
 const notifications = useNotificationStore();
 const today = new Date().toISOString().slice(0, 10);
 const activeTab = computed(() => String(route.params.tab || 'sales'));
@@ -802,7 +804,6 @@ async function postPayment(
     <template v-else-if="workspace && ['sales', 'achats'].includes(activeTab)">
       <div class="toolbar">
         <div>
-          <h2>{{ direction === 'sales' ? 'Factures clients' : 'Factures fournisseurs' }}</h2>
           <p>Le numéro n’est attribué qu’à l’émission ; le brouillon reste modifiable.</p>
         </div>
         <button
@@ -964,7 +965,7 @@ async function postPayment(
 
     <template v-else-if="workspace && activeTab === 'recurrences'">
       <div class="toolbar">
-        <div><h2>Factures récurrentes</h2><p>Chaque échéance crée un brouillon idempotent à contrôler avant émission.</p></div>
+        <div><p>Chaque échéance crée un brouillon idempotent à contrôler avant émission.</p></div>
         <div class="button-row">
           <button v-if="workspace.capabilities.manage" class="button secondary" type="button" @click="generateRecurrences">Générer jusqu’à la date de référence</button>
           <button v-if="workspace.capabilities.manage" class="button primary" type="button" @click="showRecurrenceForm = !showRecurrenceForm">Nouveau modèle</button>
@@ -1005,7 +1006,7 @@ async function postPayment(
 
     <template v-else-if="workspace && activeTab === 'contacts'">
       <div class="toolbar">
-        <div><h2>Contacts et vue 360°</h2><p>Un registre unique pour les rôles client et fournisseur.</p></div>
+        <div><p>Un registre unique pour les rôles client et fournisseur.</p></div>
         <button v-if="workspace.capabilities.manage" class="button primary" type="button" @click="showContactForm = !showContactForm">Nouveau contact</button>
       </div>
       <form v-if="showContactForm" class="editor-card" @submit.prevent="saveContact">
@@ -1091,7 +1092,7 @@ async function postPayment(
 
     <template v-else-if="workspace && activeTab === 'echeancier'">
       <div class="toolbar">
-        <div><h2>Échéancier et lettrage</h2><p>Créances et dettes ouvertes, calculées au {{ workspace.reference_date }}.</p></div>
+        <div><p>Créances et dettes ouvertes, calculées au {{ workspace.reference_date }}.</p></div>
         <div
           v-if="workspace.capabilities.pay || workspace.capabilities.remind"
           class="button-row"

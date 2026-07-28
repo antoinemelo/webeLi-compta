@@ -549,6 +549,56 @@ final class ClosingAndTaxService
         ];
     }
 
+    public function deleteArchive(
+        int $organisationId,
+        int $dossierId,
+        int $archiveId,
+        int $actorId,
+    ): void {
+        $archive = $this->pdo->prepare(
+            'SELECT a.exercice_id, a.type, a.empreinte_sha256,
+                    a.empreinte_grand_livre, x.statut AS exercice_statut
+             FROM archives_rapports_financiers a
+             JOIN exercices x
+               ON x.id = a.exercice_id AND x.dossier_id = a.dossier_id
+             WHERE a.id = ? AND a.organisation_id = ? AND a.dossier_id = ?'
+        );
+        $archive->execute([$archiveId, $organisationId, $dossierId]);
+        $row = $archive->fetch();
+        if ($row === false) {
+            throw new AccountingException('Archive financière absente du dossier.');
+        }
+        if ((string) $row['exercice_statut'] === 'ferme') {
+            throw new AccountingException(
+                'Suppression impossible : l’exercice comptable est fermé.'
+            );
+        }
+
+        $delete = $this->pdo->prepare(
+            'DELETE FROM archives_rapports_financiers
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+        );
+        $delete->execute([$archiveId, $organisationId, $dossierId]);
+        if ($delete->rowCount() !== 1) {
+            throw new AccountingException('Archive financière déjà supprimée.');
+        }
+
+        $this->audit->log(
+            'compta.archive_financiere_supprimee',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'archive_rapport_financier',
+            (string) $archiveId,
+            [
+                'exercice_id' => (int) $row['exercice_id'],
+                'type' => (string) $row['type'],
+                'empreinte_sha256' => (string) $row['empreinte_sha256'],
+                'empreinte_grand_livre' => (string) $row['empreinte_grand_livre'],
+            ]
+        );
+    }
+
     /** @return list<array<string,mixed>> */
     private function automaticControls(
         int $organisationId,

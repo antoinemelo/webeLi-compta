@@ -767,6 +767,8 @@ CREATE TABLE employes (
         CHECK (supplement_vacances_ppm BETWEEN 0 AND 1000000),
     impot_source_ppm INTEGER NOT NULL DEFAULT 0
         CHECK (impot_source_ppm BETWEEN 0 AND 1000000),
+    lpp_ppm INTEGER CHECK (lpp_ppm IS NULL OR lpp_ppm BETWEEN 0 AND 1000000),
+    emp_lpp_ppm INTEGER CHECK (emp_lpp_ppm IS NULL OR emp_lpp_ppm BETWEEN 0 AND 1000000),
     actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,

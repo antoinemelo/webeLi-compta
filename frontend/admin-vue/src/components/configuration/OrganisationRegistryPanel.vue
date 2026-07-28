@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
+import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
+import { api } from '@/api/client';
+import type {
+  OrganisationLegalIdentity,
+  StructureAccessMatrix
+} from '@/api/contracts';
 import { runtimeConfig } from '@/config';
+import { useToastFeedback } from '@/composables/toastFeedback';
+import { swissCantons } from '@/data/swissCantons';
 import { useContextStore } from '@/stores/context';
 import { useNotificationStore } from '@/stores/notifications';
 import { useOrganisationRegistryStore } from '@/stores/organisationRegistry';
@@ -13,6 +21,7 @@ import { useOrganisationRegistryStore } from '@/stores/organisationRegistry';
 const context = useContextStore();
 const notifications = useNotificationStore();
 const store = useOrganisationRegistryStore();
+useToastFeedback(store, false);
 const canAdminister = computed(() => context.can('installation.admin'));
 const canManageDossiers = computed(() =>
   canAdminister.value || context.can('organisation.manage')
@@ -24,6 +33,16 @@ const accessOpen = ref(false);
 const accessScope = ref<'installation' | 'organisation' | 'dossier'>('organisation');
 const accessUserId = ref(0);
 const accessRoleIds = ref<number[]>([]);
+const structureAccessOverview = ref<Array<{
+  id: number;
+  name: string;
+  roles: string[];
+  dossiers: Array<{
+    id: number;
+    name: string;
+    roles: string[];
+  }>;
+}>>([]);
 const successorUserId = ref(0);
 const copyAccess = ref(false);
 const copySourceDossierId = ref(0);
@@ -34,6 +53,11 @@ const usersCsvName = ref('');
 const accessCsvName = ref('');
 const deleteDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const deleteDossierDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const accessDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const importExportDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const legalHistoryDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const legalForm = ref<HTMLFormElement | null>(null);
+const selectedLegalIdentity = ref<OrganisationLegalIdentity | null>(null);
 const today = new Date().toISOString().slice(0, 10);
 const currentYear = new Date().getFullYear();
 const createDraft = reactive({
@@ -58,6 +82,7 @@ const legalDraft = reactive({
   uid: '',
   source: '',
   line1: '',
+  line2: '',
   postal_code: '',
   city: '',
   canton: '',
@@ -100,6 +125,7 @@ watch(
     legalDraft.legal_form = selected.forme_juridique;
     legalDraft.uid = selected.numero_ide;
     legalDraft.line1 = selected.adresse_ligne1;
+    legalDraft.line2 = selected.adresse_ligne2;
     legalDraft.postal_code = selected.code_postal;
     legalDraft.city = selected.localite;
     legalDraft.canton = selected.canton;
@@ -120,6 +146,80 @@ watch(accessUserId, () => {
   successorUserId.value = 0;
   store.accessPreview = null;
 });
+
+async function editAccessUser(userId: number): Promise<void> {
+  accessUserId.value = userId;
+  const organizations = new Map<number, {
+    id: number;
+    name: string;
+    dossiers: Array<{ id: number; name: string }>;
+  }>();
+  context.dossiers.forEach((dossier) => {
+    const organization = organizations.get(dossier.organization_id) ?? {
+      id: dossier.organization_id,
+      name: dossier.organization_name,
+      dossiers: []
+    };
+    organization.dossiers.push({ id: dossier.id, name: dossier.name });
+    organizations.set(dossier.organization_id, organization);
+  });
+  structureAccessOverview.value = await Promise.all(
+    [...organizations.values()].map(async (organization) => {
+      const [organizationMatrix, ...dossierMatrices] = await Promise.all([
+        api.get<StructureAccessMatrix>('/structures/access', {
+          scope: 'organisation',
+          organisation_id: organization.id
+        }),
+        ...organization.dossiers.map((dossier) => api.get<StructureAccessMatrix>(
+          '/structures/access',
+          {
+            scope: 'dossier',
+            organisation_id: organization.id,
+            dossier_id: dossier.id
+          }
+        ))
+      ]);
+      const organizationUser = organizationMatrix.data.users.find(
+        (user) => user.id === userId
+      );
+      return {
+        id: organization.id,
+        name: organization.name,
+        roles: organizationUser?.organisation_roles.map((role) => role.label) || [],
+        dossiers: organization.dossiers.map((dossier, index) => ({
+          id: dossier.id,
+          name: dossier.name,
+          roles: dossierMatrices[index].data.users.find((user) => user.id === userId)
+            ?.dossier_roles.map((role) => role.label) || []
+        }))
+      };
+    })
+  );
+  await accessDialog.value?.open();
+}
+
+async function selectAccessOrganization(organizationId: number): Promise<void> {
+  if (store.selected?.id === organizationId) return;
+  await store.select(organizationId);
+}
+
+async function switchUserAccessScope(
+  scope: 'installation' | 'organisation' | 'dossier',
+  organizationId?: number,
+  dossierId?: number
+): Promise<void> {
+  const userId = accessUserId.value;
+  if (organizationId) await selectAccessOrganization(organizationId);
+  if (scope === 'dossier' && dossierId) await store.selectDossier(dossierId);
+  accessScope.value = scope;
+  await store.loadAccess(scope);
+  accessUserId.value = userId;
+  accessRoleIds.value = [
+    ...(store.accessMatrix?.users.find((user) => user.id === userId)
+      ?.direct_role_ids || [])
+  ];
+  store.accessPreview = null;
+}
 
 watch(
   () => store.selectedDossier,
@@ -206,7 +306,7 @@ async function saveLegalIdentity(): Promise<void> {
         source: legalDraft.source,
         address: {
           line1: legalDraft.line1,
-          line2: '',
+          line2: legalDraft.line2,
           postal_code: legalDraft.postal_code,
           city: legalDraft.city,
           canton: legalDraft.canton,
@@ -218,6 +318,45 @@ async function saveLegalIdentity(): Promise<void> {
   } catch {
     // Le résumé d’erreur du registre reste visible.
   }
+}
+
+async function viewLegalIdentity(identity: OrganisationLegalIdentity): Promise<void> {
+  selectedLegalIdentity.value = identity;
+  await legalHistoryDialog.value?.open();
+}
+
+function historicalAddress(key: string): string {
+  return String(selectedLegalIdentity.value?.adresse?.[key] || '');
+}
+
+async function reuseLegalIdentity(identity: OrganisationLegalIdentity): Promise<void> {
+  const latestStart = store.selected?.legal_history[0]?.date_debut || '';
+  const nextStart = new Date(`${latestStart}T12:00:00`);
+  nextStart.setDate(nextStart.getDate() + 1);
+  const validFrom = latestStart && today <= latestStart
+    ? nextStart.toISOString().slice(0, 10)
+    : today;
+  Object.assign(legalDraft, {
+    valid_from: validFrom,
+    legal_name: identity.raison_sociale,
+    legal_form: identity.forme_juridique,
+    uid: identity.numero_ide,
+    source: identity.source,
+    line1: String(identity.adresse.line1 || ''),
+    line2: String(identity.adresse.line2 || ''),
+    postal_code: String(identity.adresse.postal_code || ''),
+    city: String(identity.adresse.city || ''),
+    canton: String(identity.adresse.canton || ''),
+    country: String(identity.adresse.country || 'CH')
+  });
+  legalHistoryDialog.value?.close();
+  await nextTick();
+  legalForm.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  legalForm.value?.querySelector<HTMLInputElement>('#registry-legal-name')?.focus();
+  notifications.push(
+    'Informations historiques reprises. Ajustez la date et la source avant l’enregistrement.',
+    'success'
+  );
 }
 
 async function toggleStatus(): Promise<void> {
@@ -308,6 +447,7 @@ async function previewAccess(): Promise<void> {
 async function applyAccess(): Promise<void> {
   await store.applyAccess(successorUserId.value || undefined);
   await context.load();
+  accessDialog.value?.close();
   notifications.push('Matrice d’accès mise à jour et auditée.', 'success');
 }
 
@@ -475,7 +615,12 @@ async function removeDossier(): Promise<void> {
           </FormField>
           <FormField id="registry-create-canton" label="Canton">
             <template #default="{ describedBy }">
-              <input id="registry-create-canton" v-model="createDraft.canton" maxlength="2" :aria-describedby="describedBy">
+              <select id="registry-create-canton" v-model="createDraft.canton" :aria-describedby="describedBy">
+                <option value="">Choisir…</option>
+                <option v-for="canton in swissCantons" :key="canton.code" :value="canton.code">
+                  {{ canton.code }} — {{ canton.label }}
+                </option>
+              </select>
             </template>
           </FormField>
           <FormField id="registry-create-country" label="Pays ISO">
@@ -877,74 +1022,95 @@ async function removeDossier(): Promise<void> {
             </button>
           </div>
 
-          <section v-if="canAdminister" class="csv-access-panel" aria-labelledby="csv-access-title">
-            <div>
-              <p class="eyebrow">Import / export</p>
-              <h4 id="csv-access-title">Utilisateurs, rôles et accès</h4>
-              <p class="help-text">
-                Le mot de passe n’est jamais exporté. À l’import, laissez-le vide
-                pour conserver celui d’un utilisateur existant.
-              </p>
-            </div>
-            <div class="registry-actions">
-              <a class="button secondary" :href="`${runtimeConfig.apiBaseUrl}/structures/users/export`">
-                Exporter utilisateurs.csv
-              </a>
-              <a class="button secondary" :href="`${runtimeConfig.apiBaseUrl}/structures/access/export`">
-                Exporter roles_acces.csv
-              </a>
-            </div>
-            <div class="csv-file-grid">
-              <label>
-                <strong>CSV utilisateurs</strong>
-                <input type="file" accept=".csv,text/csv" @change="readCsv($event, 'users')">
-                <small>{{ usersCsvName || 'Aucun fichier sélectionné' }}</small>
-              </label>
-              <label>
-                <strong>CSV rôles et accès</strong>
-                <input type="file" accept=".csv,text/csv" @change="readCsv($event, 'access')">
-                <small>{{ accessCsvName || 'Aucun fichier sélectionné' }}</small>
-              </label>
-            </div>
+          <div v-if="canAdminister" class="registry-actions import-export-action">
             <button
               type="button"
               class="button secondary"
-              :disabled="!usersCsv || !accessCsv || store.saving"
-              @click="previewAccessCsv"
+              @click="importExportDialog?.open()"
             >
-              Vérifier les deux CSV
+              Importer / exporter les accès
             </button>
-            <div v-if="store.accessCsvPreview" class="permission-preview">
-              <p>
-                Utilisateurs : {{ store.accessCsvPreview.users.created }} à créer,
-                {{ store.accessCsvPreview.users.updated }} à modifier,
-                {{ store.accessCsvPreview.users.unchanged }} inchangé(s).
-              </p>
-              <p>
-                Affectations : {{ store.accessCsvPreview.access.added }} à ajouter,
-                {{ store.accessCsvPreview.access.removed }} à retirer.
-              </p>
-              <p class="help-text">
-                Les affectations sont remplacées uniquement pour les utilisateurs
-                présents dans utilisateurs.csv.
-              </p>
+          </div>
+
+          <ModalDialog
+            v-if="canAdminister"
+            ref="importExportDialog"
+            title="Importer ou exporter les accès"
+            description="Utilisateurs, rôles et périmètres d’accès"
+            wide
+          >
+            <section class="csv-access-panel" aria-labelledby="csv-access-title">
+              <div>
+                <h3 id="csv-access-title">Fichiers d’accès</h3>
+                <p class="help-text">
+                  Le mot de passe n’est jamais exporté. À l’import, laissez-le vide
+                  pour conserver celui d’un utilisateur existant.
+                </p>
+              </div>
+              <div class="registry-actions">
+                <a class="button secondary" :href="`${runtimeConfig.apiBaseUrl}/structures/users/export`">
+                  Exporter utilisateurs.csv
+                </a>
+                <a class="button secondary" :href="`${runtimeConfig.apiBaseUrl}/structures/access/export`">
+                  Exporter roles_acces.csv
+                </a>
+              </div>
+              <div class="csv-file-grid">
+                <label>
+                  <strong>CSV utilisateurs</strong>
+                  <input type="file" accept=".csv,text/csv" @change="readCsv($event, 'users')">
+                  <small>{{ usersCsvName || 'Aucun fichier sélectionné' }}</small>
+                </label>
+                <label>
+                  <strong>CSV rôles et accès</strong>
+                  <input type="file" accept=".csv,text/csv" @change="readCsv($event, 'access')">
+                  <small>{{ accessCsvName || 'Aucun fichier sélectionné' }}</small>
+                </label>
+              </div>
               <button
-                v-if="!store.accessCsvPreview.applied"
                 type="button"
-                class="button"
-                :disabled="store.saving"
-                @click="importAccessCsv"
+                class="button secondary"
+                :disabled="!usersCsv || !accessCsv || store.saving"
+                @click="previewAccessCsv"
               >
-                Confirmer l’import
+                Vérifier les deux CSV
               </button>
-            </div>
-          </section>
+              <div v-if="store.accessCsvPreview" class="permission-preview">
+                <p>
+                  Utilisateurs : {{ store.accessCsvPreview.users.created }} à créer,
+                  {{ store.accessCsvPreview.users.updated }} à modifier,
+                  {{ store.accessCsvPreview.users.unchanged }} inchangé(s).
+                </p>
+                <p>
+                  Affectations : {{ store.accessCsvPreview.access.added }} à ajouter,
+                  {{ store.accessCsvPreview.access.removed }} à retirer.
+                </p>
+                <p class="help-text">
+                  Les affectations sont remplacées uniquement pour les utilisateurs
+                  présents dans utilisateurs.csv.
+                </p>
+                <button
+                  v-if="!store.accessCsvPreview.applied"
+                  type="button"
+                  class="button"
+                  :disabled="store.saving"
+                  @click="importAccessCsv"
+                >
+                  Confirmer l’import
+                </button>
+              </div>
+            </section>
+          </ModalDialog>
 
           <div v-if="accessOpen && store.accessMatrix" class="access-workspace">
             <div class="access-version">
               <strong>
                 Périmètre :
-                {{ accessScope === 'installation' ? 'installation' : accessScope === 'organisation' ? 'organisation' : 'dossier' }}
+                {{ accessScope === 'installation'
+                  ? 'installation'
+                  : accessScope === 'organisation'
+                    ? `organisation · ${store.selected?.nom || ''}`
+                    : `dossier · ${store.selectedDossier?.nom || ''}` }}
               </strong>
               <small>Version {{ store.accessMatrix.version.slice(0, 12) }}</small>
             </div>
@@ -961,7 +1127,17 @@ async function removeDossier(): Promise<void> {
                 </thead>
                 <tbody>
                   <tr v-for="user in store.accessMatrix.users" :key="user.id">
-                    <td><strong>{{ user.name || user.email }}</strong><small>{{ user.email }}</small></td>
+                    <td>
+                      <button
+                        type="button"
+                        class="access-user-link"
+                        :disabled="!user.active"
+                        @click="editAccessUser(user.id)"
+                      >
+                        <strong>{{ user.name || user.email }}</strong>
+                        <small>{{ user.email }}</small>
+                      </button>
+                    </td>
                     <td>{{ user.installation_roles.map((role) => role.label).join(', ') || '—' }}</td>
                     <td>{{ user.organisation_roles.map((role) => role.label).join(', ') || '—' }}</td>
                     <td>{{ user.dossier_roles.map((role) => role.label).join(', ') || '—' }}</td>
@@ -970,7 +1146,7 @@ async function removeDossier(): Promise<void> {
                         type="button"
                         class="button secondary compact"
                         :disabled="!user.active"
-                        @click="accessUserId = user.id"
+                        @click="editAccessUser(user.id)"
                       >
                         Modifier
                       </button>
@@ -980,68 +1156,135 @@ async function removeDossier(): Promise<void> {
               </table>
             </div>
 
-            <form
-              v-if="accessUser"
-              class="access-editor"
-              @submit.prevent="previewAccess"
+            <ModalDialog
+              ref="accessDialog"
+              :title="`Accès de ${accessUser?.name || accessUser?.email || 'l’utilisateur'}`"
+              :description="`Périmètre : ${accessScope === 'installation'
+                ? 'installation'
+                : accessScope === 'organisation'
+                  ? `organisation · ${store.selected?.nom || ''}`
+                  : `dossier · ${store.selectedDossier?.nom || ''}`}`"
+              wide
+              @closed="accessUserId = 0"
             >
-              <div>
-                <p class="eyebrow">Modification contrôlée</p>
-                <h4>{{ accessUser.name || accessUser.email }}</h4>
-              </div>
-              <fieldset class="choice-field">
-                <legend>Rôles directs sur ce périmètre</legend>
-                <label v-for="role in store.accessMatrix.roles" :key="role.id">
-                  <input v-model="accessRoleIds" type="checkbox" :value="role.id">
-                  {{ role.label }}
-                </label>
-              </fieldset>
-              <FormField id="access-successor" label="Successeur (si dernier administrateur)">
-                <template #default="{ describedBy }">
-                  <select id="access-successor" v-model.number="successorUserId" :aria-describedby="describedBy">
-                    <option :value="0">Aucun transfert</option>
-                    <option
-                      v-for="user in store.accessMatrix.users.filter((item) => item.id !== accessUserId && item.active)"
-                      :key="user.id"
-                      :value="user.id"
-                    >
-                      {{ user.name || user.email }}
-                    </option>
-                  </select>
-                </template>
-              </FormField>
-              <button type="submit" class="button secondary" :disabled="store.saving">
-                Prévisualiser les permissions
-              </button>
-            </form>
+              <form v-if="accessUser" class="access-editor-modal" @submit.prevent="previewAccess">
+                <section class="effective-access-summary">
+                  <h3>Accès effectifs</h3>
+                  <p>
+                    Les rôles d’installation s’appliquent à toutes les organisations
+                    et à tous les dossiers. Ils sont donc affichés comme hérités et
+                    ne sont pas recochés parmi les rôles directs.
+                  </p>
+                  <dl>
+                    <div>
+                      <dt>Installation</dt>
+                      <dd class="effective-role-list">
+                        <label v-for="role in accessUser.installation_roles" :key="role.id">
+                          <input type="checkbox" checked disabled>
+                          {{ role.label }} <small>hérité partout</small>
+                        </label>
+                        <span v-if="!accessUser.installation_roles.length">Aucun</span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Organisation</dt>
+                      <dd class="effective-role-list">
+                        <label v-for="role in accessUser.organisation_roles" :key="role.id">
+                          <input type="checkbox" checked disabled>
+                          {{ role.label }} <small>sur l’organisation</small>
+                        </label>
+                        <span v-if="!accessUser.organisation_roles.length">Aucun rôle direct</span>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Dossier</dt>
+                      <dd class="effective-role-list">
+                        <label v-for="role in accessUser.dossier_roles" :key="role.id">
+                          <input type="checkbox" checked disabled>
+                          {{ role.label }} <small>sur le dossier</small>
+                        </label>
+                        <span v-if="!accessUser.dossier_roles.length">Aucun rôle direct</span>
+                      </dd>
+                    </div>
+                  </dl>
+                  <div class="access-overview-list">
+                    <section v-for="organization in structureAccessOverview" :key="organization.id">
+                      <div class="access-overview-organization">
+                        <span>
+                          <strong>{{ organization.name }}</strong>
+                          <small>Organisation · {{ organization.roles.join(', ') || 'aucun rôle direct' }}</small>
+                        </span>
+                        <button
+                          class="button secondary compact"
+                          type="button"
+                          @click="switchUserAccessScope('organisation', organization.id)"
+                        >Modifier</button>
+                      </div>
+                      <div v-for="dossier in organization.dossiers" :key="dossier.id">
+                        <span>
+                          <strong>{{ dossier.name }}</strong>
+                          <small>Dossier · {{ dossier.roles.join(', ') || 'aucun rôle direct' }}</small>
+                        </span>
+                        <button
+                          class="button secondary compact"
+                          type="button"
+                          @click="switchUserAccessScope('dossier', organization.id, dossier.id)"
+                        >Modifier</button>
+                      </div>
+                    </section>
+                  </div>
+                </section>
+                <fieldset class="choice-field access-role-grid">
+                  <legend>Rôles directs à attribuer sur ce périmètre</legend>
+                  <label v-for="role in store.accessMatrix.roles" :key="role.id">
+                    <input v-model="accessRoleIds" type="checkbox" :value="role.id">
+                    <span><strong>{{ role.label }}</strong><small>{{ role.permissions.join(', ') }}</small></span>
+                  </label>
+                </fieldset>
+                <FormField id="access-successor" label="Successeur (si dernier administrateur)">
+                  <template #default="{ describedBy }">
+                    <select id="access-successor" v-model.number="successorUserId" :aria-describedby="describedBy">
+                      <option :value="0">Aucun transfert</option>
+                      <option
+                        v-for="user in store.accessMatrix.users.filter((item) => item.id !== accessUserId && item.active)"
+                        :key="user.id"
+                        :value="user.id"
+                      >
+                        {{ user.name || user.email }}
+                      </option>
+                    </select>
+                  </template>
+                </FormField>
+                <button type="submit" class="button secondary" :disabled="store.saving">
+                  Prévisualiser les permissions
+                </button>
+              </form>
 
-            <div v-if="store.accessPreview" class="permission-preview">
-              <div>
-                <strong>Avant</strong>
-                <p>{{ store.accessPreview.before_permissions.join(', ') || 'Aucune permission' }}</p>
+              <div v-if="store.accessPreview" class="permission-preview">
+                <div>
+                  <strong>Avant</strong>
+                  <p>{{ store.accessPreview.before_permissions.join(', ') || 'Aucune permission' }}</p>
+                </div>
+                <div>
+                  <strong>Après</strong>
+                  <p>{{ store.accessPreview.after_permissions.join(', ') || 'Aucune permission' }}</p>
+                </div>
+                <p v-if="store.accessPreview.added_permissions.length">
+                  Ajoutées : {{ store.accessPreview.added_permissions.join(', ') }}
+                </p>
+                <p v-if="store.accessPreview.removed_permissions.length">
+                  Retirées : {{ store.accessPreview.removed_permissions.join(', ') }}
+                </p>
+                <button type="button" class="button" :disabled="store.saving" @click="applyAccess">
+                  Confirmer cette matrice
+                </button>
               </div>
-              <div>
-                <strong>Après</strong>
-                <p>{{ store.accessPreview.after_permissions.join(', ') || 'Aucune permission' }}</p>
-              </div>
-              <p v-if="store.accessPreview.added_permissions.length">
-                Ajoutées : {{ store.accessPreview.added_permissions.join(', ') }}
-              </p>
-              <p v-if="store.accessPreview.removed_permissions.length">
-                Retirées : {{ store.accessPreview.removed_permissions.join(', ') }}
-              </p>
-              <p v-if="!Array.isArray(store.accessPreview.transfer)">
-                Transfert explicite à l’utilisateur #{{ store.accessPreview.transfer.user_id }}.
-              </p>
-              <button type="button" class="button" :disabled="store.saving" @click="applyAccess">
-                Confirmer cette matrice
-              </button>
-            </div>
+            </ModalDialog>
           </div>
       </section>
 
       <section v-if="detailSection === 'information'" class="registry-section legal-section">
-        <form class="registry-form" @submit.prevent="saveLegalIdentity">
+        <form ref="legalForm" class="registry-form" @submit.prevent="saveLegalIdentity">
         <div class="panel-heading">
           <div><p class="eyebrow">Historique immuable</p><h3>Ajouter une identité juridique datée</h3></div>
         </div>
@@ -1064,6 +1307,9 @@ async function removeDossier(): Promise<void> {
           <FormField id="registry-legal-address" label="Adresse">
             <template #default="{ describedBy }"><input id="registry-legal-address" v-model="legalDraft.line1" :aria-describedby="describedBy"></template>
           </FormField>
+          <FormField id="registry-legal-address-line2" label="Complément d’adresse">
+            <template #default="{ describedBy }"><input id="registry-legal-address-line2" v-model="legalDraft.line2" :aria-describedby="describedBy"></template>
+          </FormField>
           <FormField id="registry-legal-postal" label="NPA">
             <template #default="{ describedBy }"><input id="registry-legal-postal" v-model="legalDraft.postal_code" :aria-describedby="describedBy"></template>
           </FormField>
@@ -1071,7 +1317,14 @@ async function removeDossier(): Promise<void> {
             <template #default="{ describedBy }"><input id="registry-legal-city" v-model="legalDraft.city" :aria-describedby="describedBy"></template>
           </FormField>
           <FormField id="registry-legal-canton" label="Canton">
-            <template #default="{ describedBy }"><input id="registry-legal-canton" v-model="legalDraft.canton" maxlength="2" :aria-describedby="describedBy"></template>
+            <template #default="{ describedBy }">
+              <select id="registry-legal-canton" v-model="legalDraft.canton" :aria-describedby="describedBy">
+                <option value="">Choisir…</option>
+                <option v-for="canton in swissCantons" :key="canton.code" :value="canton.code">
+                  {{ canton.code }} — {{ canton.label }}
+                </option>
+              </select>
+            </template>
           </FormField>
           <FormField id="registry-legal-country" label="Pays ISO">
             <template #default="{ describedBy }"><input id="registry-legal-country" v-model="legalDraft.country" maxlength="2" :aria-describedby="describedBy"></template>
@@ -1089,9 +1342,20 @@ async function removeDossier(): Promise<void> {
           />
           <ol v-else class="history-list">
             <li v-for="identity in store.selected.legal_history" :key="identity.id">
-              <strong>{{ identity.raison_sociale }}</strong>
-              <span>{{ identity.date_debut }} → {{ identity.date_fin || 'actuelle' }}</span>
-              <small>{{ identity.forme_juridique }} · {{ identity.numero_ide || 'sans IDE' }} · source : {{ identity.source }}</small>
+              <button
+                type="button"
+                class="history-entry-button"
+                @click="viewLegalIdentity(identity)"
+              >
+                <span>
+                  <strong>{{ identity.raison_sociale }}</strong>
+                  <small>{{ identity.forme_juridique }} · {{ identity.numero_ide || 'sans IDE' }}</small>
+                </span>
+                <span>
+                  <strong>{{ identity.date_debut }} → {{ identity.date_fin || 'actuelle' }}</strong>
+                  <small>Consulter les informations</small>
+                </span>
+              </button>
             </li>
           </ol>
         </div>
@@ -1117,6 +1381,41 @@ async function removeDossier(): Promise<void> {
     >
       Seules les données techniques produites par l’assistant seront retirées. Toute donnée métier bloque cette action.
     </ConfirmDialog>
+    <ModalDialog
+      ref="legalHistoryDialog"
+      :title="selectedLegalIdentity?.raison_sociale || 'Identité juridique historique'"
+      description="Version historique immuable de l’organisation"
+      wide
+      @closed="selectedLegalIdentity = null"
+    >
+      <div v-if="selectedLegalIdentity" class="legal-history-detail">
+        <dl>
+          <div><dt>Période de validité</dt><dd>{{ selectedLegalIdentity.date_debut }} → {{ selectedLegalIdentity.date_fin || 'actuelle' }}</dd></div>
+          <div><dt>Forme juridique</dt><dd>{{ selectedLegalIdentity.forme_juridique || '—' }}</dd></div>
+          <div><dt>IDE / UID</dt><dd>{{ selectedLegalIdentity.numero_ide || '—' }}</dd></div>
+          <div><dt>Source</dt><dd>{{ selectedLegalIdentity.source }}</dd></div>
+          <div>
+            <dt>Adresse</dt>
+            <dd>
+              {{ historicalAddress('line1') || '—' }}
+              <span v-if="historicalAddress('line2')"><br>{{ historicalAddress('line2') }}</span>
+              <br>{{ historicalAddress('postal_code') }} {{ historicalAddress('city') }}
+              <br>{{ historicalAddress('canton') }}<span v-if="historicalAddress('canton') && historicalAddress('country')"> · </span>{{ historicalAddress('country') }}
+            </dd>
+          </div>
+          <div><dt>Enregistrée le</dt><dd>{{ selectedLegalIdentity.cree_le }}</dd></div>
+        </dl>
+        <div class="registry-actions">
+          <button
+            type="button"
+            class="button"
+            @click="reuseLegalIdentity(selectedLegalIdentity)"
+          >
+            Reprendre pour une nouvelle modification
+          </button>
+        </div>
+      </div>
+    </ModalDialog>
   </section>
 </template>
 
@@ -1219,7 +1518,39 @@ async function removeDossier(): Promise<void> {
 .data-table td:first-child { display: grid; gap: .25rem; }
 .data-table small, .history-list small { color: var(--muted); }
 .history-list { display: grid; gap: .75rem; padding: 0; list-style: none; }
-.history-list li { display: grid; gap: .2rem; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+.history-list li { border: 1px solid var(--border); border-radius: .5rem; overflow: hidden; }
+.history-entry-button {
+  display: flex;
+  width: 100%;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: .85rem;
+  color: inherit;
+  background: var(--surface);
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.history-entry-button:hover { background: #f8f8fb; }
+.history-entry-button > span { display: grid; gap: .2rem; }
+.history-entry-button > span:last-child { text-align: right; }
+.legal-history-detail { display: grid; gap: 1rem; }
+.legal-history-detail dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .75rem;
+  margin: 0;
+}
+.legal-history-detail dl > div {
+  display: grid;
+  gap: .2rem;
+  padding: .8rem;
+  background: #f8f8fb;
+  border-radius: .5rem;
+}
+.legal-history-detail dt { color: var(--muted); font-size: .78rem; font-weight: 750; }
+.legal-history-detail dd { margin: 0; }
 .dependency-note { padding: .75rem; border-left: .25rem solid #9b6a00; background: #f8f8fb; }
 .help-text { color: var(--muted); }
 .dossier-tree, .dossier-detail { display: grid; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
@@ -1275,10 +1606,12 @@ async function removeDossier(): Promise<void> {
   .organisation-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 720px) {
-  .registry-grid, .organisation-list, .csv-file-grid { grid-template-columns: 1fr; }
+  .registry-grid, .organisation-list, .csv-file-grid, .legal-history-detail dl { grid-template-columns: 1fr; }
   .registry-heading, .panel-heading, .registry-actions, .inline-editor, .registry-filters {
     align-items: stretch; flex-direction: column;
   }
+  .history-entry-button { align-items: flex-start; flex-direction: column; }
+  .history-entry-button > span:last-child { text-align: left; }
   .registry-section-nav button { flex-basis: auto; }
 }
 </style>

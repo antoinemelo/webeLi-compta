@@ -630,6 +630,26 @@ final class AccountingApiController
         });
     }
 
+    public function deleteArchive(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.setup');
+        $archiveId = $this->validator->archiveDeletion($request);
+        return $this->execute($request, function () use (
+            $organisationId,
+            $dossierId,
+            $archiveId,
+            $userId
+        ): array {
+            $this->workspace->deleteArchive(
+                $organisationId,
+                $dossierId,
+                $archiveId,
+                $userId
+            );
+            return ['id' => $archiveId, 'deleted' => true];
+        });
+    }
+
     public function createEntry(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('compta.edit');
@@ -648,6 +668,41 @@ final class AccountingApiController
             $data,
             $userId
         ));
+    }
+
+    public function draft(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('compta.edit');
+        $entryId = $this->validator->queryId($request, 'entry_id');
+        return $this->execute(
+            $request,
+            fn (): array => $this->workspace->draft(
+                $organisationId,
+                $dossierId,
+                $entryId
+            )
+        );
+    }
+
+    public function deleteDraft(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('compta.edit');
+        $data = $this->validator->entryDeletion($request);
+        return $this->execute($request, function () use (
+            $organisationId,
+            $dossierId,
+            $data,
+            $userId
+        ): array {
+            $this->workspace->deleteDraft(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $userId
+            );
+            return ['id' => $data['id'], 'deleted' => true];
+        });
     }
 
     public function postExchangeRevaluation(Request $request): Response

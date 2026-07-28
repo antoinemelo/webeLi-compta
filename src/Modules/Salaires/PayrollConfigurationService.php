@@ -469,6 +469,10 @@ final class PayrollConfigurationService
             $procedure,
             (int) ($data['supplement_vacances_ppm'] ?? 83300),
             (int) ($data['impot_source_ppm'] ?? 0),
+            ($data['lpp_ppm'] ?? null) === null ? null : (int) $data['lpp_ppm'],
+            ($data['emp_lpp_ppm'] ?? null) === null
+                ? null
+                : (int) $data['emp_lpp_ppm'],
             (int) ($data['actif'] ?? 1),
         ];
         $id = (int) ($data['id'] ?? 0);
@@ -484,7 +488,8 @@ final class PayrollConfigurationService
                     npa = ?, localite = ?, numero_avs = ?,
                     numero_avs_normalise = ?, date_naissance = ?,
                     procedure = ?, supplement_vacances_ppm = ?,
-                    impot_source_ppm = ?, actif = ?, profil_incomplet = 0,
+                    impot_source_ppm = ?, lpp_ppm = ?, emp_lpp_ppm = ?,
+                    actif = ?, profil_incomplet = 0,
                     modifie_le = datetime('now'), version = version + 1
                  WHERE id = ? AND organisation_id = ? AND dossier_id = ?
                    AND version = ?"
@@ -506,8 +511,8 @@ final class PayrollConfigurationService
                  (organisation_id, dossier_id, prenom, nom, email, rue, npa,
                   localite, numero_avs, numero_avs_normalise, date_naissance,
                   canton, procedure, supplement_vacances_ppm, impot_source_ppm,
-                  actif, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'GE\', ?, ?, ?, ?, ?)'
+                  lpp_ppm, emp_lpp_ppm, actif, cree_par)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'GE\', ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId,

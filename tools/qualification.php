@@ -145,12 +145,22 @@ function qualificationPackage(string $root): bool
         'resources',
         'src',
         'templates',
-        'vendor/autoload.php',
     ] as $required) {
         if (!file_exists($root . '/' . $required)) {
             fwrite(STDERR, "Élément de livraison absent : {$required}\n");
             return false;
         }
+    }
+    if (
+        !is_file($root . '/vendor/autoload.php')
+        && !is_file(dirname($root) . '/vendor/autoload.php')
+    ) {
+        fwrite(
+            STDERR,
+            "Élément de livraison absent : vendor/autoload.php "
+            . "(recherché aussi dans ../vendor)\n"
+        );
+        return false;
     }
 
     $tracked = [];

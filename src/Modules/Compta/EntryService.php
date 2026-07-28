@@ -126,6 +126,67 @@ final class EntryService
     }
 
     /**
+     * Relit un brouillon manuel dans son périmètre afin de poursuivre sa saisie.
+     *
+     * @return array{
+     *   id:int,version:int,exercise_id:int,journal_id:int,date:string,label:string,
+     *   reference:string,attachment_reference:string,
+     *   lines:list<array{account_id:int,label:string,debit_cents:int,credit_cents:int}>
+     * }
+     */
+    public function draft(
+        int $organisationId,
+        int $dossierId,
+        int $entryId,
+    ): array {
+        $header = $this->pdo->prepare(
+            "SELECT id, exercice_id, journal_id, date_comptable, libelle,
+                    reference, piece, version
+             FROM ecritures
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND statut = 'brouillon'
+               AND source_type IN ('manuel', 'import_journal')"
+        );
+        $header->execute([$entryId, $organisationId, $dossierId]);
+        $row = $header->fetch();
+        if ($row === false) {
+            throw new AccountingException(
+                'Brouillon absent, déjà validé ou non modifiable.'
+            );
+        }
+
+        $lines = $this->pdo->prepare(
+            'SELECT l.compte_id, l.libelle, l.debit_centimes, l.credit_centimes
+             FROM lignes_ecriture l
+             JOIN comptes c ON c.id = l.compte_id
+             WHERE l.ecriture_id = ?
+               AND c.organisation_id = ? AND c.dossier_id = ?
+             ORDER BY l.ordre, l.id'
+        );
+        $lines->execute([$entryId, $organisationId, $dossierId]);
+
+        return [
+            'id' => (int) $row['id'],
+            'version' => (int) $row['version'],
+            'exercise_id' => (int) $row['exercice_id'],
+            'journal_id' => (int) $row['journal_id'],
+            'date' => (string) $row['date_comptable'],
+            'label' => (string) $row['libelle'],
+            'reference' => (string) $row['reference'],
+            'attachment_reference' => (string) $row['piece'],
+            'lines' => array_map(
+                static fn (array $line): array => [
+                    'account_id' => (int) $line['compte_id'],
+                    'label' => (string) $line['libelle'],
+                    'debit_cents' => (int) $line['debit_centimes'],
+                    'credit_cents' => (int) $line['credit_centimes'],
+                ],
+                $lines->fetchAll()
+            ),
+        ];
+    }
+
+    /**
      * Remplace un brouillon avec verrou optimiste.
      *
      * @param array{
@@ -189,6 +250,82 @@ final class EntryService
                 'ecriture',
                 (string) $entryId,
                 ['version_precedente' => $expectedVersion]
+            );
+        });
+    }
+
+    /**
+     * Supprime définitivement un brouillon manuel ou importé avec verrou
+     * optimiste. Les lignes sont supprimées par la contrainte en cascade.
+     */
+    public function deleteDraft(
+        int $organisationId,
+        int $dossierId,
+        int $entryId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $entryId,
+            $expectedVersion,
+            $actorId
+        ): void {
+            $draft = $this->pdo->prepare(
+                "SELECT exercice_id, libelle, reference, source_type
+                 FROM ecritures
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND statut = 'brouillon'
+                   AND source_type IN ('manuel', 'import_journal')
+                   AND version = ?"
+            );
+            $draft->execute([
+                $entryId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            $row = $draft->fetch();
+            if ($row === false) {
+                throw new AccountingException(
+                    'Brouillon absent, déjà validé ou modifié par un autre utilisateur.'
+                );
+            }
+
+            $delete = $this->pdo->prepare(
+                "DELETE FROM ecritures
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND statut = 'brouillon'
+                   AND source_type IN ('manuel', 'import_journal')
+                   AND version = ?"
+            );
+            $delete->execute([
+                $entryId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($delete->rowCount() !== 1) {
+                throw new AccountingException(
+                    'Brouillon absent, déjà validé ou modifié par un autre utilisateur.'
+                );
+            }
+
+            $this->audit->log(
+                'compta.brouillon_supprime',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'ecriture',
+                (string) $entryId,
+                [
+                    'exercice_id' => (int) $row['exercice_id'],
+                    'libelle' => (string) $row['libelle'],
+                    'reference' => (string) $row['reference'],
+                    'source_type' => (string) $row['source_type'],
+                    'version' => $expectedVersion,
+                ]
             );
         });
     }

@@ -130,6 +130,17 @@ final class ConfigurationApiController
         });
     }
 
+    public function clearAudit(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope('dossier.manage');
+        return $this->mutation($request, fn (): array => [
+            'deleted' => $this->configuration->clearAudit(
+                $organisationId,
+                $dossierId
+            ),
+        ]);
+    }
+
     public function references(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope();
@@ -304,6 +315,18 @@ final class ConfigurationApiController
             );
             return ['id' => $id];
         });
+    }
+
+    public function clearVatConfiguration(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');
+        return $this->referenceMutation($request, fn (): array => [
+            'deleted' => $this->managedReferences->clearVatConfiguration(
+                $organisationId,
+                $dossierId,
+                $userId
+            ),
+        ]);
     }
 
     public function savePayrollRates(Request $request): Response

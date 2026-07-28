@@ -7,9 +7,11 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import ToastRegion from '@/components/ui/ToastRegion.vue';
 import { runtimeConfig } from '@/config';
+import { useToastFeedback } from '@/composables/toastFeedback';
 import { useContextStore } from '@/stores/context';
 
 const context = useContextStore();
+useToastFeedback(context, false);
 const route = useRoute();
 const mobileOpen = ref(false);
 const scopeMenuOpen = ref(false);
