@@ -22,6 +22,19 @@
         "id": 4,
         "name": "Comptabilité principale",
         "base_currency": "CHF",
+        "billing_treasury_account_id": 12,
+        "billing_iban": "CH9300762011623852957",
+        "billing_treasury_accounts": [
+          {
+            "id": 12,
+            "label": "Banque principale",
+            "iban": "CH9300762011623852957",
+            "currency": "CHF"
+          }
+        ],
+        "vat_status": "non_assujetti",
+        "vat_exempt": true,
+        "vat_effective_from": "2026-01-01",
         "version": 2
       }
     },
@@ -36,6 +49,7 @@
       }
     ],
     "payment_terms": [],
+    "payment_defaults": [],
     "audit": [],
     "definitions": {
       "contacts": "Le registre unique reste celui de Facturation.",

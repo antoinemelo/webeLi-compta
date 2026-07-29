@@ -145,7 +145,12 @@ final class AccountingCsvService
         $stmt = $this->pdo->prepare(
             'SELECT e.id AS entry_id, e.numero, e.date_comptable, j.code AS journal,
                     e.reference, e.piece, e.libelle AS entry_label, e.statut,
-                    l.ordre AS line_order, c.numero AS account_number,
+                    e.source_type, e.source_id,
+                    df.id AS financial_document_id,
+                    df.numero AS financial_document_number,
+                    df.type AS financial_document_type,
+                    l.ordre AS line_order, c.id AS account_id,
+                    c.numero AS account_number,
                     c.libelle AS account_label,
                     COALESCE(NULLIF(l.libelle, \'\'), e.libelle) AS line_label,
                     l.debit_centimes, l.credit_centimes
@@ -153,6 +158,11 @@ final class AccountingCsvService
              JOIN journaux j ON j.id = e.journal_id
              JOIN lignes_ecriture l ON l.ecriture_id = e.id
              JOIN comptes c ON c.id = l.compte_id
+             LEFT JOIN documents_financiers df
+               ON e.source_type = \'document_financier\'
+              AND CAST(e.source_id AS INTEGER) = df.id
+              AND df.organisation_id = e.organisation_id
+              AND df.dossier_id = e.dossier_id
              WHERE e.organisation_id = ? AND e.dossier_id = ?
                AND e.exercice_id = ?
              ORDER BY e.date_comptable, e.id, l.ordre'
@@ -167,6 +177,10 @@ final class AccountingCsvService
             $item['line_order'] = (int) $item['line_order'];
             $item['debit_centimes'] = (int) $item['debit_centimes'];
             $item['credit_centimes'] = (int) $item['credit_centimes'];
+            $item['financial_document_id'] =
+                $item['financial_document_id'] === null
+                    ? null
+                    : (int) $item['financial_document_id'];
             $entries[$item['entry_id']] = true;
             $debit += $item['debit_centimes'];
             $credit += $item['credit_centimes'];
@@ -438,7 +452,7 @@ final class AccountingCsvService
                 ? 'brouillon'
                 : trim((string) ($row[$indexes['statut']] ?? 'brouillon'));
             if (
-                $key === '' || $label === ''
+                $key === ''
                 || preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1
                 || $date < $period['date_debut'] || $date > $period['date_fin']
             ) {
@@ -470,6 +484,11 @@ final class AccountingCsvService
             $lineLabel = $indexes['libelle_ligne'] === false
                 ? ''
                 : trim((string) ($row[$indexes['libelle_ligne']] ?? ''));
+            if ($label === '') {
+                $label = $reference !== ''
+                    ? $reference
+                    : ($piece !== '' ? $piece : $key);
+            }
             $headerValues = compact('date', 'reference', 'piece', 'label', 'status');
             $headerValues['journal_id'] = (int) $journals[$journal]['id'];
             if (!isset($groups[$key])) {

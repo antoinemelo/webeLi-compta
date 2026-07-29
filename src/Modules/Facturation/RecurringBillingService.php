@@ -88,7 +88,13 @@ final class RecurringBillingService
         $vatCode = $this->pdo->prepare(
             'SELECT nature FROM tva_codes
              WHERE id = ? AND organisation_id = ? AND dossier_id = ?
-               AND actif = 1'
+               AND actif = 1 AND date_debut <= ?
+               AND COALESCE(date_fin, \'9999-12-31\') >= ?'
+        );
+        $vatStatus = $this->vatStatusAt(
+            $organisationId,
+            $dossierId,
+            $nextDate
         );
         $allowedNatures = $type === 'facture_fournisseur'
             ? ['prealable', 'acquisition', 'non_taxable', 'correction']
@@ -111,12 +117,26 @@ final class RecurringBillingService
                 (int) ($line['code_tva_id'] ?? 0),
                 $organisationId,
                 $dossierId,
+                $nextDate,
+                $nextDate,
             ]);
             $vatNature = $vatCode->fetchColumn();
             if (
                 $lineAccount->fetchColumn() === false
-                || $vatNature === false
-                || !in_array((string) $vatNature, $allowedNatures, true)
+                || (
+                    !(
+                        $vatStatus === 'non_assujetti'
+                        && (int) ($line['code_tva_id'] ?? 0) === 0
+                    )
+                    && (
+                        $vatNature === false
+                        || !in_array(
+                            (string) $vatNature,
+                            $allowedNatures,
+                            true
+                        )
+                    )
+                )
             ) {
                 throw new BillingException(
                     'Compte ou code TVA de récurrence absent, hors du dossier ou incompatible.'
@@ -163,6 +183,28 @@ final class RecurringBillingService
             ['type' => $type, 'prochaine_echeance' => $nextDate]
         );
         return $id;
+    }
+
+    private function vatStatusAt(
+        int $organisationId,
+        int $dossierId,
+        string $date,
+    ): string {
+        $stmt = $this->pdo->prepare(
+            'SELECT statut FROM tva_regimes
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND date_debut <= ?
+               AND COALESCE(date_fin, \'9999-12-31\') >= ?
+             ORDER BY date_debut DESC, id DESC LIMIT 1'
+        );
+        $stmt->execute([$organisationId, $dossierId, $date, $date]);
+        $status = $stmt->fetchColumn();
+        if ($status === false) {
+            throw new BillingException(
+                'Aucun régime TVA ne couvre la prochaine échéance.'
+            );
+        }
+        return (string) $status;
     }
 
     public function setPaused(

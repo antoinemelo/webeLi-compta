@@ -4,8 +4,8 @@ declare(strict_types=1);
 namespace Compta\Modules\Configuration\Application;
 
 use Compta\Core\Audit\AuditLogger;
-use Compta\Modules\Tresorerie\BankCoordinates;
-use Compta\Modules\Tresorerie\TreasuryException;
+use Compta\Modules\Tva\VatConfigurationService;
+use Compta\Modules\Tva\VatException;
 use DateTimeImmutable;
 use PDO;
 use Throwable;
@@ -27,6 +27,10 @@ final class ConfigurationService
             'identity' => $this->identity($organisationId, $dossierId),
             'modules' => $this->modules->modules($organisationId, $dossierId),
             'payment_terms' => $this->paymentTerms($organisationId, $dossierId),
+            'payment_defaults' => $this->paymentDefaults(
+                $organisationId,
+                $dossierId
+            ),
             'audit' => $this->recentAudit($organisationId, $dossierId),
             'definitions' => [
                 'contacts' => 'Le registre unique reste celui de Facturation.',
@@ -34,6 +38,339 @@ final class ConfigurationService
                 'payment_due_date' => 'Date du document + délai, puis fin du mois obtenu si l’option est active.',
             ],
         ];
+    }
+
+    /** @return array<string,mixed> */
+    public function setupGuide(int $organisationId, int $dossierId): array
+    {
+        $this->assertScope($organisationId, $dossierId);
+        $modules = array_fill_keys(
+            $this->modules->enabledCodes($organisationId, $dossierId),
+            true
+        );
+        $accountingEnabled = isset($modules['comptabilite']);
+        $billingEnabled = isset($modules['facturation']);
+        $treasuryEnabled = isset($modules['liquidites']);
+        $payrollEnabled = isset($modules['salaires']);
+        $parameters = $this->setupGuideParameters($dossierId);
+
+        $identityReady = $this->count(
+            'SELECT COUNT(*) FROM attributs_juridiques_organisation
+             WHERE organisation_id = ?',
+            [$organisationId]
+        ) > 0;
+        $periodsReady = $accountingEnabled
+            && $this->exercisePeriodsReady($organisationId, $dossierId);
+        $opening = $accountingEnabled
+            ? $this->openingSetupState($organisationId, $dossierId)
+            : ['validated' => false, 'zero_confirmable' => false];
+        $treasuryReady = $treasuryEnabled && $this->count(
+            'SELECT COUNT(*) FROM comptes_tresorerie
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1',
+            [$organisationId, $dossierId]
+        ) > 0;
+        $billingAccountReady = $billingEnabled && $this->count(
+            'SELECT COUNT(*) FROM dossiers d
+             JOIN comptes_tresorerie t
+               ON t.id = d.compte_tresorerie_facturation_id
+             WHERE d.organisation_id = ? AND d.id = ?
+               AND t.actif = 1 AND t.iban <> \'\'',
+            [$organisationId, $dossierId]
+        ) > 0;
+        $vatReady = $accountingEnabled && $this->count(
+            'SELECT COUNT(*) FROM tva_regimes
+             WHERE organisation_id = ? AND dossier_id = ?',
+            [$organisationId, $dossierId]
+        ) > 0;
+        $payrollRatesReady = $payrollEnabled && $this->count(
+            'SELECT COUNT(*) FROM taux_salaires_annuels
+             WHERE organisation_id = ? AND dossier_id = ?',
+            [$organisationId, $dossierId]
+        ) > 0;
+        $payrollSettingsReady = $payrollEnabled
+            && $this->count(
+                'SELECT COUNT(*) FROM employeurs_salaires
+                 WHERE organisation_id = ? AND dossier_id = ? AND actif = 1',
+                [$organisationId, $dossierId]
+            ) > 0
+            && $this->count(
+                'SELECT COUNT(*) FROM mapping_comptes_salaires
+                 WHERE organisation_id = ? AND dossier_id = ?',
+                [$organisationId, $dossierId]
+            ) > 0;
+        $paymentDefaultsReady = $billingEnabled
+            && $this->activePaymentDefaultCount(
+                $organisationId,
+                $dossierId
+            ) === 2;
+        $currenciesReady = $this->count(
+            'SELECT COUNT(*) FROM devises_dossier
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1',
+            [$organisationId, $dossierId]
+        ) > 0;
+
+        $steps = [
+            $this->guideStep(
+                'identity',
+                'Informations de l’organisation',
+                'Ajoutez une identité juridique datée et sa source.',
+                '/organisations-dossiers',
+                true,
+                true,
+                $identityReady,
+                $identityReady,
+                false,
+                'Ouvrir les informations'
+            ),
+            $this->guideStep(
+                'exercises',
+                'Exercices et périodes',
+                'Contrôlez que chaque exercice est entièrement couvert par ses périodes, puis validez.',
+                '/configuration/referentiels/exercises',
+                true,
+                $accountingEnabled,
+                $periodsReady && isset($parameters['exercises']),
+                $periodsReady,
+                $periodsReady && !isset($parameters['exercises']),
+                'Valider les exercices et périodes'
+            ),
+            $this->guideStep(
+                'opening',
+                'Plan comptable et ouverture',
+                $opening['zero_confirmable']
+                    ? 'Aucun mouvement n’existe encore : vous pouvez confirmer une ouverture à zéro.'
+                    : 'Validez les soldes d’ouverture du premier exercice.',
+                '/configuration/referentiels/plan?section=opening',
+                true,
+                $accountingEnabled,
+                (bool) $opening['validated'] || isset($parameters['opening']),
+                (bool) $opening['validated'] || (bool) $opening['zero_confirmable'],
+                !(bool) $opening['validated']
+                    && (bool) $opening['zero_confirmable']
+                    && !isset($parameters['opening']),
+                (bool) $opening['validated']
+                    ? 'Consulter l’ouverture'
+                    : ((bool) $opening['zero_confirmable']
+                        ? 'Vérifier l’ouverture à zéro'
+                        : 'Configurer les soldes d’ouverture')
+            ),
+            $this->guideStep(
+                'treasury',
+                'Comptes de trésorerie',
+                'Ajoutez vos caisses et comptes bancaires si vous les utilisez.',
+                '/configuration/referentiels/treasury',
+                false,
+                $treasuryEnabled,
+                $treasuryReady,
+                true,
+                false,
+                'Configurer la trésorerie'
+            ),
+            $this->guideStep(
+                'billing_account',
+                'Compte de facturation',
+                'Choisissez, si nécessaire, le compte bancaire dont l’IBAN figurera sur les factures.',
+                '/configuration',
+                false,
+                $billingEnabled,
+                $billingAccountReady,
+                true,
+                false,
+                'Configurer l’entité'
+            ),
+            $this->guideStep(
+                'vat',
+                'Régime TVA',
+                'Vérifiez le statut, la méthode, la périodicité et la date d’effet du régime TVA.',
+                '/configuration/referentiels/vat',
+                true,
+                $accountingEnabled,
+                $vatReady && isset($parameters['vat']),
+                $vatReady,
+                $vatReady && !isset($parameters['vat']),
+                'Configurer le régime TVA'
+            ),
+            $this->guideStep(
+                'payroll_rates',
+                'Taux annuels des charges sociales',
+                'Importez ou saisissez les taux utiles aux salaires.',
+                '/configuration/referentiels/payroll',
+                false,
+                $payrollEnabled,
+                $payrollRatesReady,
+                true,
+                false,
+                'Configurer les taux'
+            ),
+            $this->guideStep(
+                'payroll_settings',
+                'Paramètres salariaux',
+                'Validez les heures hebdomadaires et l’affectation des comptes.',
+                '/configuration/salaires',
+                false,
+                $payrollEnabled,
+                $payrollSettingsReady,
+                true,
+                false,
+                'Configurer les salaires'
+            ),
+            $this->guideStep(
+                'payment_defaults',
+                'Conditions de paiement',
+                'Définissez une condition active par défaut pour les clients et pour les fournisseurs.',
+                '/configuration/paiements',
+                true,
+                $billingEnabled,
+                $paymentDefaultsReady,
+                $paymentDefaultsReady,
+                false,
+                'Définir les conditions'
+            ),
+            $this->guideStep(
+                'currencies',
+                'Devises autorisées',
+                'Ajoutez les devises utilisées par le dossier ; la devise de base est déjà disponible.',
+                '/configuration/referentiels/currencies',
+                false,
+                true,
+                $currenciesReady,
+                true,
+                false,
+                'Configurer les devises'
+            ),
+        ];
+
+        $requiredComplete = count(array_filter(
+            $steps,
+            static fn (array $step): bool => (
+                $step['required']
+                && $step['applicable']
+                && !$step['completed']
+            )
+        )) === 0;
+        $finished = isset($parameters['finished']);
+        $cancelled = isset($parameters['cancelled']) && !$finished;
+        $steps[] = $this->guideStep(
+            'accounting',
+            'Commencer à comptabiliser',
+            'La configuration obligatoire est terminée. Vous pouvez ouvrir le journal comptable.',
+            '/compta',
+            true,
+            $accountingEnabled,
+            $requiredComplete && $finished,
+            $requiredComplete,
+            $requiredComplete && !$finished,
+            'Terminer et ouvrir la comptabilité'
+        );
+        $applicable = array_values(array_filter(
+            $steps,
+            static fn (array $step): bool => $step['applicable']
+        ));
+        $completed = count(array_filter(
+            $applicable,
+            static fn (array $step): bool => $step['completed']
+        ));
+
+        return [
+            'visible' => !$cancelled && (!$finished || !$requiredComplete),
+            'cancelled' => $cancelled,
+            'required_complete' => $requiredComplete,
+            'finished' => $finished && $requiredComplete,
+            'progress' => [
+                'completed' => $completed,
+                'total' => count($applicable),
+            ],
+            'steps' => $steps,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function confirmSetupGuideStep(
+        int $organisationId,
+        int $dossierId,
+        string $step,
+        int $actorId,
+    ): array {
+        if (!in_array($step, ['exercises', 'opening', 'vat', 'accounting'], true)) {
+            throw new ConfigurationException('Étape de configuration inconnue.');
+        }
+        $state = $this->setupGuide($organisationId, $dossierId);
+        $current = null;
+        foreach ($state['steps'] as $candidate) {
+            if ($candidate['code'] === $step) {
+                $current = $candidate;
+                break;
+            }
+        }
+        if (
+            $current === null
+            || !$current['applicable']
+            || !$current['ready']
+        ) {
+            throw new ConfigurationException(
+                'Cette étape ne peut pas encore être validée.'
+            );
+        }
+        $key = 'setup_guide.' . (
+            $step === 'accounting' ? 'finished' : $step
+        );
+        $this->pdo->prepare(
+            'INSERT INTO parametres_dossier (dossier_id, cle, valeur)
+             VALUES (?, ?, ?)
+             ON CONFLICT (dossier_id, cle) DO UPDATE SET valeur = excluded.valeur'
+        )->execute([$dossierId, $key, (new DateTimeImmutable())->format(DATE_ATOM)]);
+        $this->audit->log(
+            'configuration.parcours_etape_validee',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'dossier',
+            (string) $dossierId,
+            ['etape' => $step]
+        );
+        return $this->setupGuide($organisationId, $dossierId);
+    }
+
+    /** @return array<string,mixed> */
+    public function updateSetupGuideStatus(
+        int $organisationId,
+        int $dossierId,
+        string $action,
+        int $actorId,
+    ): array {
+        if (!in_array($action, ['cancel', 'resume'], true)) {
+            throw new ConfigurationException('Action de parcours inconnue.');
+        }
+        $this->assertScope($organisationId, $dossierId);
+        if ($action === 'cancel') {
+            $this->pdo->prepare(
+                'INSERT INTO parametres_dossier (dossier_id, cle, valeur)
+                 VALUES (?, ?, ?)
+                 ON CONFLICT (dossier_id, cle)
+                 DO UPDATE SET valeur = excluded.valeur'
+            )->execute([
+                $dossierId,
+                'setup_guide.cancelled',
+                (new DateTimeImmutable())->format(DATE_ATOM),
+            ]);
+        } else {
+            $this->pdo->prepare(
+                'DELETE FROM parametres_dossier
+                 WHERE dossier_id = ? AND cle = ?'
+            )->execute([$dossierId, 'setup_guide.cancelled']);
+        }
+        $this->audit->log(
+            $action === 'cancel'
+                ? 'configuration.parcours_annule'
+                : 'configuration.parcours_repris',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'dossier',
+            (string) $dossierId,
+            []
+        );
+        return $this->setupGuide($organisationId, $dossierId);
     }
 
     /** @param array<string,mixed> $data @return array<string,mixed> */
@@ -69,25 +406,34 @@ final class ConfigurationService
                 );
             }
         }
-        $billingIban = BankCoordinates::normalizeIban(
-            (string) ($data['billing_iban'] ?? '')
-        );
-        try {
-            if ($billingIban !== '') {
-                BankCoordinates::assertIban($billingIban);
-            }
-        } catch (TreasuryException) {
-            throw new ConfigurationException('IBAN de facturation invalide.');
-        }
-        if (
-            $billingIban !== ''
-            && !str_starts_with($billingIban, 'CH')
-            && !str_starts_with($billingIban, 'LI')
-        ) {
-            throw new ConfigurationException(
-                'La QR-facture exige un IBAN suisse ou liechtensteinois.'
+        $billingAccountId = $data['billing_treasury_account_id'] ?? null;
+        $billingAccountId = $billingAccountId === null
+            ? null
+            : (int) $billingAccountId;
+        if ($billingAccountId !== null) {
+            $billingAccount = $this->pdo->prepare(
+                "SELECT iban FROM comptes_tresorerie
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND actif = 1 AND iban <> ''"
             );
+            $billingAccount->execute([
+                $billingAccountId,
+                $organisationId,
+                $dossierId,
+            ]);
+            $iban = $billingAccount->fetchColumn();
+            if (
+                $iban === false
+                || (!str_starts_with((string) $iban, 'CH')
+                    && !str_starts_with((string) $iban, 'LI'))
+            ) {
+                throw new ConfigurationException(
+                    'Choisissez un compte de trésorerie actif avec un IBAN CH ou LI.'
+                );
+            }
         }
+        $vatExempt = (bool) ($data['vat_exempt'] ?? false);
+        $vatEffectiveFrom = (string) ($data['vat_effective_from'] ?? '');
         $currency = mb_strtoupper(trim((string) ($data['base_currency'] ?? '')));
         if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
             throw new ConfigurationException('La devise doit être un code ISO de trois lettres.');
@@ -98,7 +444,9 @@ final class ConfigurationService
             $organizationVersion,
             $dossierVersion,
             $organization,
-            $billingIban,
+            $billingAccountId,
+            $vatExempt,
+            $vatEffectiveFrom,
             $currency,
             $actorId,
             $identity
@@ -119,19 +467,24 @@ final class ConfigurationService
             ]);
             $updateDossier = $this->pdo->prepare(
                 'UPDATE dossiers
-                 SET monnaie = ?, version = version + 1
+                 SET monnaie = ?, compte_tresorerie_facturation_id = ?,
+                     version = version + 1
                  WHERE id = ? AND organisation_id = ? AND version = ?'
             );
             $updateDossier->execute([
-                $currency, $dossierId, $organisationId, $dossierVersion,
+                $currency,
+                $billingAccountId,
+                $dossierId,
+                $organisationId,
+                $dossierVersion,
             ]);
-            $billingIbanStatement = $this->pdo->prepare(
-                'INSERT INTO parametres_organisation (organisation_id, cle, valeur)
-                 VALUES (?, \'iban_facturation\', ?)
-                 ON CONFLICT (organisation_id, cle)
-                 DO UPDATE SET valeur = excluded.valeur'
+            $this->updateVatExemption(
+                $organisationId,
+                $dossierId,
+                $vatExempt,
+                $vatEffectiveFrom,
+                $actorId
             );
-            $billingIbanStatement->execute([$organisationId, $billingIban]);
             if ($updateOrganization->rowCount() !== 1 || $updateDossier->rowCount() !== 1) {
                 throw new ConfigurationException(
                     'Conflit de version pendant l’enregistrement.'
@@ -146,8 +499,14 @@ final class ConfigurationService
             if ($identity['dossier']['base_currency'] !== $currency) {
                 $changed[] = 'base_currency';
             }
-            if (($identity['organization']['billing_iban'] ?? '') !== $billingIban) {
-                $changed[] = 'billing_iban';
+            if (
+                ($identity['dossier']['billing_treasury_account_id'] ?? null)
+                !== $billingAccountId
+            ) {
+                $changed[] = 'billing_treasury_account_id';
+            }
+            if (($identity['dossier']['vat_exempt'] ?? false) !== $vatExempt) {
+                $changed[] = 'vat_exempt';
             }
             $this->audit->log(
                 'configuration.identite_modifiee',
@@ -375,16 +734,29 @@ final class ConfigurationService
                     o.forme_juridique, o.numero_ide, o.adresse_ligne1,
                     o.adresse_ligne2, o.code_postal, o.localite, o.canton,
                     o.pays, o.telephone, o.email, o.site_web,
-                    COALESCE((
-                        SELECT p.valeur FROM parametres_organisation p
-                        WHERE p.organisation_id = o.id
-                          AND p.cle = \'iban_facturation\'
-                    ), \'\') AS billing_iban,
+                    COALESCE(t.iban, \'\') AS billing_iban,
                     o.version AS organisation_version,
                     d.id AS dossier_id, d.nom AS dossier_nom, d.monnaie,
+                    d.compte_tresorerie_facturation_id,
+                    COALESCE((
+                        SELECT r.statut FROM tva_regimes r
+                        WHERE r.organisation_id = o.id AND r.dossier_id = d.id
+                          AND r.date_debut <= date(\'now\')
+                          AND COALESCE(r.date_fin, \'9999-12-31\') >= date(\'now\')
+                        ORDER BY r.date_debut DESC, r.id DESC LIMIT 1
+                    ), \'non_configure\') AS vat_status,
+                    COALESCE((
+                        SELECT r.date_debut FROM tva_regimes r
+                        WHERE r.organisation_id = o.id AND r.dossier_id = d.id
+                          AND r.date_debut <= date(\'now\')
+                          AND COALESCE(r.date_fin, \'9999-12-31\') >= date(\'now\')
+                        ORDER BY r.date_debut DESC, r.id DESC LIMIT 1
+                    ), date(\'now\')) AS vat_effective_from,
                     d.version AS dossier_version
              FROM organisations o
              JOIN dossiers d ON d.organisation_id = o.id
+             LEFT JOIN comptes_tresorerie t
+               ON t.id = d.compte_tresorerie_facturation_id
              WHERE o.id = ? AND d.id = ?'
         );
         $stmt->execute([$organisationId, $dossierId]);
@@ -408,13 +780,24 @@ final class ConfigurationService
                 'phone' => (string) $row['telephone'],
                 'email' => (string) $row['email'],
                 'website' => (string) $row['site_web'],
-                'billing_iban' => (string) $row['billing_iban'],
                 'version' => (int) $row['organisation_version'],
             ],
             'dossier' => [
                 'id' => (int) $row['dossier_id'],
                 'name' => (string) $row['dossier_nom'],
                 'base_currency' => (string) $row['monnaie'],
+                'billing_treasury_account_id' =>
+                    $row['compte_tresorerie_facturation_id'] === null
+                        ? null
+                        : (int) $row['compte_tresorerie_facturation_id'],
+                'billing_iban' => (string) $row['billing_iban'],
+                'billing_treasury_accounts' => $this->billingTreasuryAccounts(
+                    $organisationId,
+                    $dossierId
+                ),
+                'vat_status' => (string) $row['vat_status'],
+                'vat_exempt' => (string) $row['vat_status'] === 'non_assujetti',
+                'vat_effective_from' => (string) $row['vat_effective_from'],
                 'version' => (int) $row['dossier_version'],
             ],
         ];
@@ -452,6 +835,34 @@ final class ConfigurationService
     }
 
     /** @return list<array<string,mixed>> */
+    private function paymentDefaults(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT d.id, d.direction, d.condition_id, d.date_debut, d.date_fin,
+                    c.code, c.libelle
+             FROM defauts_conditions_paiement d
+             JOIN conditions_paiement c ON c.id = d.condition_id
+             WHERE d.organisation_id = ? AND d.dossier_id = ?
+             ORDER BY d.direction, d.date_debut DESC, d.id DESC'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'direction' => (string) $row['direction'],
+            'condition_id' => (int) $row['condition_id'],
+            'condition_code' => (string) $row['code'],
+            'condition_label' => (string) $row['libelle'],
+            'valid_from' => (string) $row['date_debut'],
+            'valid_until' => $row['date_fin'] === null
+                ? null
+                : (string) $row['date_fin'],
+            'current' => (string) $row['date_debut'] <= date('Y-m-d')
+                && ($row['date_fin'] === null
+                    || (string) $row['date_fin'] >= date('Y-m-d')),
+        ], $stmt->fetchAll());
+    }
+
+    /** @return list<array<string,mixed>> */
     private function recentAudit(int $organisationId, int $dossierId): array
     {
         $stmt = $this->pdo->prepare(
@@ -483,6 +894,84 @@ final class ConfigurationService
         );
         $stmt->execute([$organisationId, $dossierId]);
         return $stmt->rowCount();
+    }
+
+    /** @return list<array{id:int,label:string,iban:string,currency:string}> */
+    private function billingTreasuryAccounts(
+        int $organisationId,
+        int $dossierId,
+    ): array {
+        $stmt = $this->pdo->prepare(
+            "SELECT id, libelle, iban, monnaie
+             FROM comptes_tresorerie
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND actif = 1 AND iban <> ''
+               AND (iban LIKE 'CH%' OR iban LIKE 'LI%')
+             ORDER BY libelle, id"
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'label' => (string) $row['libelle'],
+            'iban' => (string) $row['iban'],
+            'currency' => (string) $row['monnaie'],
+        ], $stmt->fetchAll());
+    }
+
+    private function updateVatExemption(
+        int $organisationId,
+        int $dossierId,
+        bool $vatExempt,
+        string $effectiveFrom,
+        int $actorId,
+    ): void {
+        $stmt = $this->pdo->prepare(
+            'SELECT statut FROM tva_regimes
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND date_debut <= ?
+               AND COALESCE(date_fin, \'9999-12-31\') >= ?
+             ORDER BY date_debut DESC, id DESC LIMIT 1'
+        );
+        $stmt->execute([
+            $organisationId,
+            $dossierId,
+            $effectiveFrom,
+            $effectiveFrom,
+        ]);
+        $status = $stmt->fetchColumn();
+        if ($vatExempt && $status === 'non_assujetti') {
+            return;
+        }
+        if (!$vatExempt) {
+            if ($status === false || $status === 'non_assujetti') {
+                throw new ConfigurationException(
+                    'Pour devenir assujetti, configurez le numéro TVA, la méthode '
+                    . 'et les comptes dans Configuration → Référentiels → TVA.'
+                );
+            }
+            return;
+        }
+        try {
+            (new VatConfigurationService($this->pdo, $this->audit))->addRegime([
+                'organisation_id' => $organisationId,
+                'dossier_id' => $dossierId,
+                'statut' => 'non_assujetti',
+                'numero_tva' => '',
+                'methode' => 'effective',
+                'mode_decompte' => 'convenues',
+                'periodicite' => 'annuelle',
+                'date_debut' => $effectiveFrom,
+                'date_fin' => null,
+                'compte_impot_prealable_materiel_id' => null,
+                'compte_impot_prealable_investissements_id' => null,
+                'compte_tva_due_id' => null,
+                'compte_decompte_tva_id' => null,
+                'compte_corrections_id' => null,
+                'fermer_precedent' => true,
+            ], $actorId);
+        } catch (VatException $exception) {
+            throw new ConfigurationException($exception->getMessage());
+        }
     }
 
     /** @param array<string,mixed> $data @return array<string,string> */
@@ -522,6 +1011,166 @@ final class ConfigurationService
             throw new ConfigurationException('Adresse de site web invalide.');
         }
         return $values;
+    }
+
+    /**
+     * @return array{
+     *   code:string,title:string,description:string,path:string,required:bool,
+     *   applicable:bool,completed:bool,ready:bool,confirmable:bool,
+     *   action_label:string
+     * }
+     */
+    private function guideStep(
+        string $code,
+        string $title,
+        string $description,
+        string $path,
+        bool $required,
+        bool $applicable,
+        bool $completed,
+        bool $ready,
+        bool $confirmable,
+        string $actionLabel,
+    ): array {
+        return [
+            'code' => $code,
+            'title' => $title,
+            'description' => $description,
+            'path' => $path,
+            'required' => $required,
+            'applicable' => $applicable,
+            'completed' => $applicable && $completed,
+            'ready' => $applicable && $ready,
+            'confirmable' => $applicable && $confirmable,
+            'action_label' => $actionLabel,
+        ];
+    }
+
+    /** @return array<string,string> */
+    private function setupGuideParameters(int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT cle, valeur FROM parametres_dossier
+             WHERE dossier_id = ? AND cle LIKE \'setup_guide.%\''
+        );
+        $stmt->execute([$dossierId]);
+        $parameters = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $parameters[substr((string) $row['cle'], 12)] = (string) $row['valeur'];
+        }
+        return $parameters;
+    }
+
+    private function exercisePeriodsReady(
+        int $organisationId,
+        int $dossierId,
+    ): bool {
+        $exercises = $this->pdo->prepare(
+            'SELECT e.id, e.date_debut, e.date_fin
+             FROM exercices e
+             JOIN dossiers d ON d.id = e.dossier_id
+             WHERE d.organisation_id = ? AND e.dossier_id = ?
+             ORDER BY e.date_debut, e.id'
+        );
+        $exercises->execute([$organisationId, $dossierId]);
+        $rows = $exercises->fetchAll();
+        if ($rows === []) {
+            return false;
+        }
+        $periods = $this->pdo->prepare(
+            'SELECT date_debut, date_fin FROM periodes
+             WHERE organisation_id = ? AND dossier_id = ? AND exercice_id = ?
+             ORDER BY date_debut, date_fin, id'
+        );
+        foreach ($rows as $exercise) {
+            $periods->execute([
+                $organisationId,
+                $dossierId,
+                (int) $exercise['id'],
+            ]);
+            $items = $periods->fetchAll();
+            if ($items === []) {
+                return false;
+            }
+            $expectedStart = (string) $exercise['date_debut'];
+            foreach ($items as $period) {
+                if (
+                    (string) $period['date_debut'] !== $expectedStart
+                    || (string) $period['date_fin'] > (string) $exercise['date_fin']
+                ) {
+                    return false;
+                }
+                $expectedStart = $this->date((string) $period['date_fin'])
+                    ->modify('+1 day')
+                    ->format('Y-m-d');
+            }
+            $expectedEnd = $this->date((string) $exercise['date_fin'])
+                ->modify('+1 day')
+                ->format('Y-m-d');
+            if ($expectedStart !== $expectedEnd) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** @return array{validated:bool,zero_confirmable:bool} */
+    private function openingSetupState(
+        int $organisationId,
+        int $dossierId,
+    ): array {
+        $exerciseId = (int) $this->scalar(
+            "SELECT e.id FROM exercices e
+             JOIN dossiers d ON d.id = e.dossier_id
+             WHERE d.organisation_id = ? AND e.dossier_id = ?
+             ORDER BY e.date_debut, e.id
+             LIMIT 1",
+            [$organisationId, $dossierId]
+        );
+        if ($exerciseId < 1) {
+            return ['validated' => false, 'zero_confirmable' => false];
+        }
+        $validated = $this->count(
+            "SELECT COUNT(*) FROM ecritures
+             WHERE organisation_id = ? AND dossier_id = ? AND exercice_id = ?
+               AND source_type = 'ouverture'
+               AND statut IN ('validee', 'contre_passee')",
+            [$organisationId, $dossierId, $exerciseId]
+        ) > 0;
+        $entryCount = $this->count(
+            'SELECT COUNT(*) FROM ecritures
+             WHERE organisation_id = ? AND dossier_id = ? AND exercice_id = ?',
+            [$organisationId, $dossierId, $exerciseId]
+        );
+        return [
+            'validated' => $validated,
+            'zero_confirmable' => !$validated && $entryCount === 0,
+        ];
+    }
+
+    private function activePaymentDefaultCount(
+        int $organisationId,
+        int $dossierId,
+    ): int {
+        return $this->count(
+            "SELECT COUNT(DISTINCT d.direction)
+             FROM defauts_conditions_paiement d
+             JOIN conditions_paiement c ON c.id = d.condition_id
+             WHERE d.organisation_id = ? AND d.dossier_id = ?
+               AND d.direction IN ('client', 'fournisseur')
+               AND d.date_debut <= date('now')
+               AND COALESCE(d.date_fin, '9999-12-31') >= date('now')
+               AND c.actif = 1
+               AND c.date_debut <= date('now')
+               AND COALESCE(c.date_fin, '9999-12-31') >= date('now')",
+            [$organisationId, $dossierId]
+        );
+    }
+
+    /** @param list<mixed> $params */
+    private function count(string $sql, array $params): int
+    {
+        return (int) $this->scalar($sql, $params);
     }
 
     private function assertScope(int $organisationId, int $dossierId): void

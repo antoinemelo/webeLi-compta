@@ -6,6 +6,7 @@ namespace Compta\Core\Http\Api;
 use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Http\Router;
+use Compta\Core\Auth\SecurityApiController;
 use Compta\Core\Security\Csrf;
 use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Consolidation\ConsolidationApiController;
@@ -41,6 +42,7 @@ final class ApiRouteRegistry
         private readonly ?OrganisationApiController $organisations = null,
         private readonly ?DossierApiController $dossiers = null,
         private readonly ?StructureAccessApiController $structureAccess = null,
+        private readonly ?SecurityApiController $security = null,
     ) {
     }
 
@@ -54,6 +56,15 @@ final class ApiRouteRegistry
         $this->add($router, 'GET', '/api/v1/exercises', $this->shell->exercises(...));
         $this->add($router, 'GET', '/api/v1/references', $this->shell->references(...));
         $this->add($router, 'GET', '/api/v1/dashboard', $this->dashboard->show(...));
+        if ($this->security !== null) {
+            $this->add($router, 'GET', '/api/v1/security', $this->security->profile(...));
+            $this->add($router, 'POST', '/api/v1/security/totp/prepare', $this->security->prepareTotp(...));
+            $this->add($router, 'POST', '/api/v1/security/totp/confirm', $this->security->confirmTotp(...));
+            $this->add($router, 'POST', '/api/v1/security/email/prepare', $this->security->prepareEmail(...));
+            $this->add($router, 'POST', '/api/v1/security/email/confirm', $this->security->confirmEmail(...));
+            $this->add($router, 'POST', '/api/v1/security/disable', $this->security->disable(...));
+            $this->add($router, 'POST', '/api/v1/security/password', $this->security->changePassword(...));
+        }
         if ($this->organisations !== null) {
             $this->add(
                 $router, 'GET', '/api/v1/structures/organisations',
@@ -116,6 +127,24 @@ final class ApiRouteRegistry
             );
             $this->add(
                 $router,
+                'GET',
+                '/api/v1/configuration/setup-guide',
+                $this->configuration->setupGuide(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/setup-guide/confirm',
+                $this->configuration->confirmSetupGuideStep(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/setup-guide/status',
+                $this->configuration->updateSetupGuideStatus(...)
+            );
+            $this->add(
+                $router,
                 'POST',
                 '/api/v1/configuration/identity',
                 $this->configuration->updateIdentity(...)
@@ -165,6 +194,12 @@ final class ApiRouteRegistry
             $this->add(
                 $router,
                 'POST',
+                '/api/v1/configuration/references/contacts/restore',
+                $this->configuration->restoreContact(...)
+            );
+            $this->add(
+                $router,
+                'POST',
                 '/api/v1/configuration/references/currencies',
                 $this->configuration->saveCurrency(...)
             );
@@ -179,6 +214,12 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/configuration/references/exchange-mapping',
                 $this->configuration->saveExchangeMapping(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/vat-regimes',
+                $this->configuration->saveVatRegime(...)
             );
             $this->add(
                 $router,
@@ -221,6 +262,12 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/configuration/references/treasury-accounts',
                 $this->configuration->saveTreasuryAccount(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/configuration/references/treasury-accounts/remove',
+                $this->configuration->removeTreasuryAccount(...)
             );
             $this->add(
                 $router,
@@ -524,6 +571,11 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/facturation/documents/pdf', $this->billing->archivePdf(...));
             $this->add($router, 'POST', '/api/v1/facturation/contacts', $this->billing->createContact(...));
             $this->add($router, 'POST', '/api/v1/facturation/contacts/modifier', $this->billing->updateContact(...));
+            $this->add($router, 'POST', '/api/v1/facturation/contacts/supprimer', $this->billing->deleteContact(...));
+            $this->add($router, 'POST', '/api/v1/facturation/contacts/reactiver', $this->billing->restoreContact(...));
+            $this->add($router, 'POST', '/api/v1/facturation/commerciaux', $this->billing->saveCommercialDocument(...));
+            $this->add($router, 'POST', '/api/v1/facturation/commerciaux/statut', $this->billing->changeCommercialStatus(...));
+            $this->add($router, 'POST', '/api/v1/facturation/commerciaux/convertir', $this->billing->convertCommercialDocument(...));
             $this->add($router, 'POST', '/api/v1/facturation/recurrences', $this->billing->createRecurrence(...));
             $this->add($router, 'POST', '/api/v1/facturation/recurrences/pause', $this->billing->pauseRecurrence(...));
             $this->add($router, 'POST', '/api/v1/facturation/recurrences/generer', $this->billing->generateRecurrences(...));

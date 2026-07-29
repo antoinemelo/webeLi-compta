@@ -14,14 +14,19 @@ function isActive(item: SubNavigationItem): boolean {
 
 <template>
   <nav class="compact-tabs" :aria-label="label">
-    <RouterLink
-      v-for="item in items"
-      :key="item.key"
-      :to="item.path"
-      :class="{ active: isActive(item) }"
-      :aria-current="isActive(item) ? 'page' : undefined"
-    >
-      {{ item.label }}
-    </RouterLink>
+    <div class="compact-tab-links">
+      <RouterLink
+        v-for="item in items"
+        :key="item.key"
+        :to="item.path"
+        :class="{ active: isActive(item) }"
+        :aria-current="isActive(item) ? 'page' : undefined"
+      >
+        {{ item.label }}
+      </RouterLink>
+    </div>
+    <div v-if="$slots.actions" class="compact-tab-actions">
+      <slot name="actions" />
+    </div>
   </nav>
 </template>

@@ -94,10 +94,15 @@ final class TreasuryAccountService
         if ($iban !== '' && preg_match('/^[A-Z]{2}[0-9A-Z]{13,32}$/', $iban) !== 1) {
             throw new TreasuryException('IBAN invalide.');
         }
+        if (!$active) {
+            $this->assertNotBillingAccount($dossierId, $accountId);
+        }
         $stmt = $this->pdo->prepare(
             'UPDATE comptes_tresorerie
              SET compte_comptable_id = ?, libelle = ?, type = ?, iban = ?,
                  bic = ?, monnaie = ?, multiplicateur_comptable = ?, actif = ?,
+                 archive_le = CASE WHEN ? = 1 THEN NULL ELSE datetime(\'now\') END,
+                 archive_par = CASE WHEN ? = 1 THEN NULL ELSE ? END,
                  modifie_le = datetime(\'now\'), version = version + 1
              WHERE id = ? AND organisation_id = ? AND dossier_id = ?
                AND version = ?'
@@ -111,6 +116,9 @@ final class TreasuryAccountService
             $currency,
             $multiplier,
             $active ? 1 : 0,
+            $active ? 1 : 0,
+            $active ? 1 : 0,
+            $actorId,
             $accountId,
             $organisationId,
             $dossierId,
@@ -132,6 +140,110 @@ final class TreasuryAccountService
         );
     }
 
+    /**
+     * Supprime un compte jamais utilisé, sinon l’archive.
+     *
+     * @return array{action:'deleted'|'archived',dependencies:list<string>}
+     */
+    public function remove(
+        int $organisationId,
+        int $dossierId,
+        int $accountId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): array {
+        $stmt = $this->pdo->prepare(
+            'SELECT libelle, version, actif
+             FROM comptes_tresorerie
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+        );
+        $stmt->execute([$accountId, $organisationId, $dossierId]);
+        $account = $stmt->fetch();
+        if ($account === false) {
+            throw new TreasuryException('Compte de trésorerie absent du dossier.');
+        }
+        if ((int) $account['version'] !== $expectedVersion) {
+            throw new TreasuryException(
+                'Le compte a été modifié par une autre session. Rechargez la page.'
+            );
+        }
+        $this->assertNotBillingAccount($dossierId, $accountId);
+        $dependencies = [];
+        foreach ([
+            'imports_bancaires' => 'import bancaire',
+            'lignes_bancaires' => 'ligne bancaire',
+            'lots_paiements_sortants' => 'lot de paiements',
+            'rapprochements_bancaires' => 'rapprochement bancaire',
+            'soldes_bancaires' => 'solde bancaire',
+        ] as $table => $label) {
+            $count = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM {$table}
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND compte_tresorerie_id = ?"
+            );
+            $count->execute([$organisationId, $dossierId, $accountId]);
+            $total = (int) $count->fetchColumn();
+            if ($total > 0) {
+                $dependencies[] = "{$total} {$label}" . ($total > 1 ? 's' : '');
+            }
+        }
+        if ($dependencies !== []) {
+            if ((int) $account['actif'] !== 1) {
+                throw new TreasuryException('Ce compte est déjà archivé.');
+            }
+            $archive = $this->pdo->prepare(
+                "UPDATE comptes_tresorerie
+                 SET actif = 0, archive_le = datetime('now'), archive_par = ?,
+                     modifie_le = datetime('now'), version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND version = ? AND actif = 1"
+            );
+            $archive->execute([
+                $actorId,
+                $accountId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($archive->rowCount() !== 1) {
+                throw new TreasuryException('Conflit pendant l’archivage du compte.');
+            }
+            $this->audit->log(
+                'tresorerie.compte_archive',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'compte_tresorerie',
+                (string) $accountId,
+                ['libelle' => $account['libelle'], 'dependances' => $dependencies]
+            );
+            return ['action' => 'archived', 'dependencies' => $dependencies];
+        }
+        $delete = $this->pdo->prepare(
+            'DELETE FROM comptes_tresorerie
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ? AND version = ?'
+        );
+        $delete->execute([
+            $accountId,
+            $organisationId,
+            $dossierId,
+            $expectedVersion,
+        ]);
+        if ($delete->rowCount() !== 1) {
+            throw new TreasuryException('Conflit pendant la suppression du compte.');
+        }
+        $this->audit->log(
+            'tresorerie.compte_supprime',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'compte_tresorerie',
+            (string) $accountId,
+            ['libelle' => $account['libelle']]
+        );
+        return ['action' => 'deleted', 'dependencies' => []];
+    }
+
     /** @return list<array<string,mixed>> */
     public function list(int $organisationId, int $dossierId): array
     {
@@ -149,5 +261,20 @@ final class TreasuryAccountService
     private function iban(string $value): string
     {
         return strtoupper((string) preg_replace('/\s+/', '', trim($value)));
+    }
+
+    private function assertNotBillingAccount(int $dossierId, int $accountId): void
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT 1 FROM dossiers
+             WHERE id = ? AND compte_tresorerie_facturation_id = ?'
+        );
+        $stmt->execute([$dossierId, $accountId]);
+        if ($stmt->fetchColumn() !== false) {
+            throw new TreasuryException(
+                'Ce compte fournit l’IBAN de facturation. '
+                . 'Choisissez d’abord un autre compte sous Configuration → Entité.'
+            );
+        }
     }
 }

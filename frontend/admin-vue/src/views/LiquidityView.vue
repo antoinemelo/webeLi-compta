@@ -60,6 +60,28 @@ const paymentDraft = reactive({
   bank_line_id: 0
 });
 const allocationDraft = reactive({ payment_id: 0, document_id: 0, amount: '' });
+const availableAllocationPayments = computed(() =>
+  (treasury.workspace?.payments ?? []).filter(
+    (item) => item.non_alloue_centimes > 0 && item.statut === 'valide'
+  )
+);
+const selectedAllocationPayment = computed(() =>
+  availableAllocationPayments.value.find(
+    (item) => item.id === Number(allocationDraft.payment_id)
+  ) ?? null
+);
+const compatibleAllocationDocuments = computed(() => {
+  const payment = selectedAllocationPayment.value;
+  if (!payment) return [];
+  const expectedType = payment.sens === 'encaissement'
+    ? 'facture_client'
+    : 'facture_fournisseur';
+  return (treasury.workspace?.open_documents ?? []).filter((document) =>
+    document.type === expectedType
+    && document.contact_id === payment.contact_id
+    && document.currency === payment.monnaie
+  );
+});
 const selectedDebtIds = ref<number[]>([]);
 const batchDraft = reactive({
   treasury_account_id: 0,
@@ -235,6 +257,34 @@ watch(
   () => context.context?.selection?.exercise?.id,
   () => { void loadMarketTab(); }
 );
+watch(
+  () => allocationDraft.payment_id,
+  () => {
+    allocationDraft.document_id = 0;
+    allocationDraft.amount = '';
+    if (compatibleAllocationDocuments.value.length === 1) {
+      const document = compatibleAllocationDocuments.value[0];
+      allocationDraft.document_id = document.id;
+      allocationDraft.amount = inputMoney(Math.min(
+        selectedAllocationPayment.value?.non_alloue_centimes ?? 0,
+        document.open_cents
+      ));
+    }
+  }
+);
+watch(
+  () => allocationDraft.document_id,
+  () => {
+    const document = compatibleAllocationDocuments.value.find(
+      (item) => item.id === Number(allocationDraft.document_id)
+    );
+    if (!document || !selectedAllocationPayment.value) return;
+    allocationDraft.amount = inputMoney(Math.min(
+      selectedAllocationPayment.value.non_alloue_centimes,
+      document.open_cents
+    ));
+  }
+);
 
 async function loadMarketTab(): Promise<void> {
   if (exerciseId.value < 1) return;
@@ -304,6 +354,10 @@ function cents(value: string): number {
   const match = normalized.match(/^(\d+)(?:\.(\d{0,2}))?$/);
   if (!match) throw new Error('Montant invalide : utilisez au plus deux décimales.');
   return Number(match[1]) * 100 + Number((match[2] || '').padEnd(2, '0'));
+}
+
+function inputMoney(value: number): string {
+  return (value / 100).toFixed(2);
 }
 
 function statusLabel(status: string): string {
@@ -724,13 +778,6 @@ async function toggleRecurrence(item: {
 
 <template>
   <section class="page-stack">
-    <header class="page-heading">
-      <div>
-        <h1>Liquidités</h1>
-        <p>Dépenses, validation et récurrences reliées au grand livre.</p>
-      </div>
-    </header>
-
     <CompactTabs :items="subNavigation.liquidity" label="Navigation des liquidités" />
     <ErrorSummary v-if="store.error" title="Impossible de charger les dépenses" :message="store.error" />
     <ErrorSummary v-if="treasury.error" title="Impossible de charger les opérations de trésorerie" :message="treasury.error" />
@@ -1214,8 +1261,8 @@ async function toggleRecurrence(item: {
       <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
         <h3>Allouer à un document ouvert</h3>
         <div class="form-grid">
-          <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.payments.filter((entry) => entry.non_alloue_centimes > 0)" :key="item.id" :value="item.id">{{ item.date_paiement }} · {{ item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes) }}</option></select></template></FormField>
-          <FormField id="allocation-document" label="Facture ou dette"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.open_documents" :key="item.id" :value="item.id">{{ item.number }} · {{ item.contact }} · {{ money(item.open_cents, item.currency) }}</option></select></template></FormField>
+          <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in availableAllocationPayments" :key="item.id" :value="item.id">{{ item.date_paiement }} · {{ item.sens === 'encaissement' ? 'Encaissement' : 'Décaissement' }} · {{ item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes, item.monnaie) }}</option></select></template></FormField>
+          <FormField id="allocation-document" label="Facture compatible" :hint="selectedAllocationPayment && !compatibleAllocationDocuments.length ? 'Aucune facture émise du même contact, du même sens et dans la même devise.' : 'Seules les factures compatibles sont proposées.'"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" :disabled="!selectedAllocationPayment || !compatibleAllocationDocuments.length" required><option :value="0" disabled>{{ selectedAllocationPayment ? 'Sélectionner' : 'Choisir d’abord un paiement' }}</option><option v-for="item in compatibleAllocationDocuments" :key="item.id" :value="item.id">{{ item.number }} · {{ item.contact }} · {{ money(item.open_cents, item.currency) }}</option></select></template></FormField>
           <FormField id="allocation-amount" label="Montant alloué"><template #default="{ describedBy }"><input id="allocation-amount" v-model="allocationDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
         </div>
         <button class="button primary" :disabled="treasury.saving">Lettrer</button>
@@ -1260,7 +1307,20 @@ async function toggleRecurrence(item: {
       >
         <form class="modal-editor" @submit.prevent="createPayment">
           <div class="form-grid">
-            <FormField id="matching-contact" label="Contact"><template #default="{ describedBy }"><select id="matching-contact" v-model.number="paymentDraft.contact_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in treasury.workspace.catalog.contacts" :key="item.id" :value="item.id">{{ item.label }}</option></select></template></FormField>
+            <FormField id="matching-contact" label="Contact" hint="Recherche par entreprise, prénom ou nom.">
+              <template #default="{ describedBy }">
+                <AccountCombobox
+                  id="matching-contact"
+                  v-model="paymentDraft.contact_id"
+                  :options="treasury.workspace.catalog.contacts"
+                  number-key="__none__"
+                  label-key="label"
+                  placeholder="Rechercher un contact…"
+                  :aria-describedby="describedBy"
+                  required
+                />
+              </template>
+            </FormField>
             <FormField id="matching-direction" label="Sens"><template #default="{ describedBy }"><select id="matching-direction" v-model="paymentDraft.direction" :aria-describedby="describedBy"><option value="encaissement">Encaissement</option><option value="decaissement">Décaissement</option></select></template></FormField>
             <FormField id="matching-date" label="Date"><template #default="{ describedBy }"><input id="matching-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
             <FormField id="matching-amount" label="Montant"><template #default="{ describedBy }"><input id="matching-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>

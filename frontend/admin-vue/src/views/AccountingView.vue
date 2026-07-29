@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
+import ActionMenu from '@/components/ui/ActionMenu.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import ModalDialog from '@/components/ui/ModalDialog.vue';
 import AssetsPanel from '@/components/accounting/AssetsPanel.vue';
@@ -108,7 +109,13 @@ type JournalDetails = {
     piece: string;
     entry_label: string;
     statut: string;
+    source_type: string;
+    source_id: string;
+    financial_document_id: number | null;
+    financial_document_number: string | null;
+    financial_document_type: string | null;
     line_order: number;
+    account_id: number;
     account_number: string;
     account_label: string;
     line_label: string;
@@ -157,6 +164,7 @@ type JournalDetailSortKey =
   | 'statut';
 
 const route = useRoute();
+const router = useRouter();
 const context = useContextStore();
 const accounting = useAccountingStore();
 useToastFeedback(accounting);
@@ -311,10 +319,10 @@ const closingSection = computed(() => {
   if (legacyTab === 'tva') return 'tva';
   if (legacyTab === 'fiscal') return 'fiscal';
   if (legacyTab === 'amortissements') return 'assets';
-  const section = String(route.query.section || 'control');
+  const section = String(route.query.section || 'assets');
   return ['control', 'tva', 'fiscal', 'assets'].includes(section)
     ? section
-    : 'control';
+    : 'assets';
 });
 const currency = computed(() => context.selection?.dossier.currency || 'CHF');
 const statementUnitLabel = computed(() =>
@@ -569,6 +577,14 @@ watch(
 );
 
 watch(
+  () => [isChartSettings.value, String(route.query.section || '')] as const,
+  ([chartSettings, section]) => {
+    if (chartSettings && section !== '') selectPlanSection(section);
+  },
+  { immediate: true }
+);
+
+watch(
   () => accounting.workspace,
   (value) => {
     if (!value) return;
@@ -655,6 +671,20 @@ async function applyReportPeriod(): Promise<void> {
 
 async function selectAccount(): Promise<void> {
   await reload(selectedAccountId.value || undefined);
+}
+
+async function openAccountExtract(accountId: number): Promise<void> {
+  selectedAccountId.value = accountId;
+  await router.push('/compta/extraits');
+  await reload(accountId);
+}
+
+function financialDocumentPath(line: JournalDetails['items'][number]): string {
+  const tab = String(line.financial_document_type || '').includes('fournisseur')
+    ? 'achats'
+    : 'sales';
+  const path = tab === 'sales' ? '/facturation/ventes' : `/facturation/${tab}`;
+  return `${path}?document=${line.financial_document_id}&as_of_date=${line.date_comptable}`;
 }
 
 function safeCents(value: string): number {
@@ -1478,14 +1508,10 @@ async function deleteFinancialArchive(): Promise<void> {
 </script>
 
 <template>
-  <header class="page-heading accounting-header">
+  <header v-if="isChartSettings" class="page-heading accounting-header">
     <div>
-      <h1>{{ isChartSettings ? 'Configuration' : 'Comptabilité' }}</h1>
-      <p>
-        {{ isChartSettings
-          ? 'Structure, comptes, règles de sens et soldes d’ouverture du dossier.'
-          : 'Journal et états pilotés par les mêmes services PHP et la même base SQLite.' }}
-      </p>
+      <h1>Configuration</h1>
+      <p>Structure, comptes, règles de sens et soldes d’ouverture du dossier.</p>
     </div>
     <div v-if="context.exercises.length" class="exercise-control">
       <label class="compact-control">
@@ -1508,7 +1534,20 @@ async function deleteFinancialArchive(): Promise<void> {
     v-if="allowed"
     :items="isChartSettings ? subNavigation.settings : subNavigation.accounting"
     :label="isChartSettings ? 'Navigation Configuration' : 'Navigation comptable'"
-  />
+  >
+    <template v-if="!isChartSettings && context.exercises.length" #actions>
+      <select
+        v-model.number="exerciseId"
+        class="form-select form-select-sm compact-tab-select"
+        aria-label="Exercice consulté"
+        @change="changeExercise"
+      >
+        <option v-for="exercise in context.exercises" :key="exercise.id" :value="exercise.id">
+          {{ exercise.label }} — {{ exerciseStatusLabel(exercise.status) }}
+        </option>
+      </select>
+    </template>
+  </CompactTabs>
 
   <nav
     v-if="allowed && currentTab === 'cloture'"
@@ -1521,7 +1560,7 @@ async function deleteFinancialArchive(): Promise<void> {
         ['control', 'Contrôles'], ['fiscal', 'Dossier fiscal']
       ]"
       :key="item[0]"
-      :to="{ path: '/compta/cloture', query: item[0] === 'control' ? {} : { section: item[0] } }"
+      :to="{ path: '/compta/cloture', query: item[0] === 'assets' ? {} : { section: item[0] } }"
       custom
       v-slot="{ href, navigate }"
     >
@@ -1638,10 +1677,12 @@ async function deleteFinancialArchive(): Promise<void> {
           <div class="section-heading">
             <div><p class="eyebrow">Grand livre</p><h2>Écritures récentes</h2></div>
             <div class="button-row">
-              <span>{{ workspace.journal.total }} écriture(s)</span>
-              <button class="button secondary small" type="button" @click="showJournalDetails">Voir tout le journal</button>
-              <button v-if="workspace.capabilities.export" class="button secondary small" type="button" @click="exportJournal">Exporter CSV</button>
-              <button v-if="canEdit" class="button primary small" type="button" @click="chooseJournalImport">Importer CSV</button>
+              <span>{{ workspace.journal.total }} {{ workspace.journal.total === 1 ? 'écriture' : 'écritures' }}</span>
+              <ActionMenu label="Actions du journal">
+                <button type="button" @click="showJournalDetails">Voir tout le journal</button>
+                <button v-if="workspace.capabilities.export" type="button" @click="exportJournal">Exporter CSV</button>
+                <button v-if="canEdit" type="button" @click="chooseJournalImport">Importer CSV</button>
+              </ActionMenu>
               <input
                 ref="journalFileInput"
                 class="visually-hidden"
@@ -1667,8 +1708,26 @@ async function deleteFinancialArchive(): Promise<void> {
               <tbody>
                 <tr v-for="row in sortedJournalItems" :key="row.id">
                   <td>{{ row.date_comptable }}</td><td>{{ row.numero || `#${row.id}` }}</td>
-                  <td>{{ row.comptes_debit }}</td><td>{{ row.comptes_credit }}</td><td>{{ row.libelle || row.reference || '—' }}</td>
-                  <td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td>
+                  <td>
+                    <template v-for="(account, index) in row.debit_accounts" :key="account.id">
+                      <span v-if="index">, </span>
+                      <button class="account-number-link" type="button" :title="account.label" @click="openAccountExtract(account.id)">{{ account.number }}</button>
+                    </template>
+                    <span v-if="!row.debit_accounts.length">{{ row.comptes_debit }}</span>
+                  </td>
+                  <td>
+                    <template v-for="(account, index) in row.credit_accounts" :key="account.id">
+                      <span v-if="index">, </span>
+                      <button class="account-number-link" type="button" :title="account.label" @click="openAccountExtract(account.id)">{{ account.number }}</button>
+                    </template>
+                    <span v-if="!row.credit_accounts.length">{{ row.comptes_credit }}</span>
+                  </td>
+                  <td>{{ row.libelle || row.reference || '—' }}</td>
+                  <td class="amount">
+                    {{ row.debit_centimes === row.credit_centimes
+                      ? formatStatementAmount(row.debit_centimes)
+                      : '-,--' }}
+                  </td>
                   <td>
                     <button
                       v-if="row.statut === 'brouillon' && ['manuel', 'import_journal'].includes(row.source_type) && canEdit"
@@ -1718,7 +1777,10 @@ async function deleteFinancialArchive(): Promise<void> {
                   <tr v-for="line in sortedJournalDetailItems" :key="`${line.entry_id}-${line.line_order}`">
                     <td>{{ line.date_comptable }}</td>
                     <td>{{ line.numero || `#${line.entry_id}` }}</td>
-                    <td>{{ line.account_number }} — {{ line.account_label }}</td>
+                    <td>
+                      <button class="account-number-link" type="button" :title="`Ouvrir l’extrait ${line.account_label}`" @click="openAccountExtract(line.account_id)">{{ line.account_number }}</button>
+                      — {{ line.account_label }}
+                    </td>
                     <td>
                       <strong>{{ line.entry_label || '—' }}</strong>
                       <small v-if="line.line_label && line.line_label !== line.entry_label" class="table-cell-detail">
@@ -1728,6 +1790,12 @@ async function deleteFinancialArchive(): Promise<void> {
                         <template v-if="line.reference">Réf. {{ line.reference }}</template>
                         <template v-if="line.reference && line.piece"> · </template>
                         <template v-if="line.piece">Pièce {{ line.piece }}</template>
+                      </small>
+                      <small v-if="line.financial_document_id" class="table-cell-detail">
+                        Pièce financière
+                        <RouterLink :to="financialDocumentPath(line)">
+                          {{ line.financial_document_number || `#${line.financial_document_id}` }}
+                        </RouterLink>
                       </small>
                     </td>
                     <td class="amount">{{ line.debit_centimes ? formatStatementAmount(line.debit_centimes) : '—' }}</td>
@@ -1800,7 +1868,16 @@ async function deleteFinancialArchive(): Promise<void> {
           <div v-else class="t-account">
             <div><section><h4>Débit ({{ ledgerDebitSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.debit_centimes)" :key="`d-${row.ecriture_id}`"><span>{{ row.date_comptable }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.debit_centimes) }}</strong></p><p v-if="workspace.ledger.total_credit_centimes > workspace.ledger.total_debit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_credit_centimes - workspace.ledger.total_debit_centimes) }}</strong></p></section>
               <section><h4>Crédit ({{ ledgerCreditSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.credit_centimes)" :key="`c-${row.ecriture_id}`"><span>{{ row.date_comptable }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.credit_centimes) }}</strong></p><p v-if="workspace.ledger.total_debit_centimes > workspace.ledger.total_credit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_debit_centimes - workspace.ledger.total_credit_centimes) }}</strong></p></section></div>
-            <footer><strong>TOTAUX</strong><span>{{ formatStatementAmount(Math.max(workspace.ledger.total_debit_centimes, workspace.ledger.total_credit_centimes)) }}</span><span>{{ formatStatementAmount(Math.max(workspace.ledger.total_debit_centimes, workspace.ledger.total_credit_centimes)) }}</span></footer>
+            <footer>
+              <span>
+                <strong>TOTAUX</strong>
+                <b>{{ formatStatementAmount(Math.max(workspace.ledger.total_debit_centimes, workspace.ledger.total_credit_centimes)) }}</b>
+              </span>
+              <span>
+                <span class="visually-hidden">Total crédit</span>
+                <b>{{ formatStatementAmount(Math.max(workspace.ledger.total_debit_centimes, workspace.ledger.total_credit_centimes)) }}</b>
+              </span>
+            </footer>
           </div>
         </template>
       </section>
@@ -2150,7 +2227,7 @@ async function deleteFinancialArchive(): Promise<void> {
           <div class="section-heading"><h3>Balances de vérification</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('grand_livre')">Exporter CSV</button></div>
           <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCES DE VÉRIFICATION AU {{ reportDateLabel }} — {{ currency }}</strong></div>
           <div class="table-scroll"><table class="financial-statement-table financial-ledger-table"><thead><tr><th>Compte</th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
-            <tbody><tr v-for="row in workspace.reports.general_ledger.items" :key="row.id"><td><span class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td><td class="amount">{{ formatStatementAmount(row.initial_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td></tr>
+            <tbody><tr v-for="row in workspace.reports.general_ledger.items" :key="row.id"><td><button class="account-code account-link" type="button" :title="`Ouvrir l’extrait du compte ${row.numero}`" @click="openAccountExtract(row.id)">{{ row.numero }}</button>{{ row.libelle }}</td><td class="amount">{{ formatStatementAmount(row.initial_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td></tr>
               <tr v-if="!workspace.reports.general_ledger.items.length"><td colspan="5">Aucun compte mouvementé.</td></tr></tbody>
           </table></div>
         </section>
@@ -2453,7 +2530,11 @@ async function deleteFinancialArchive(): Promise<void> {
                   <tr v-for="line in sortedArchivedJournalItems" :key="`archive-journal-${line.entry_id}-${line.line_order}`">
                     <td>{{ line.date_comptable }}</td>
                     <td>{{ line.numero || `#${line.entry_id}` }}</td>
-                    <td>{{ line.account_number }} — {{ line.account_label }}</td>
+                    <td>
+                      <button v-if="line.account_id" class="account-number-link" type="button" :title="`Ouvrir l’extrait ${line.account_label}`" @click="openAccountExtract(line.account_id)">{{ line.account_number }}</button>
+                      <span v-else>{{ line.account_number }}</span>
+                      — {{ line.account_label }}
+                    </td>
                     <td>
                       <strong>{{ line.entry_label || '—' }}</strong>
                       <small v-if="line.line_label && line.line_label !== line.entry_label" class="table-cell-detail">{{ line.line_label }}</small>

@@ -15,6 +15,7 @@ const environment = {
   APP_DEBUG: '1',
   APP_INSTANCE_ID: 'compta-e2e',
   APP_BASE_URL: '/e2e',
+  APP_PUBLIC_URL: `http://127.0.0.1:${port}/e2e`,
   APP_STORAGE_PATH: storage,
   APP_DB_PATH: resolve(storage, 'app.sqlite')
 };

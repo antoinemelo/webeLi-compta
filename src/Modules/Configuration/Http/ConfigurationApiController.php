@@ -42,6 +42,50 @@ final class ConfigurationApiController
         );
     }
 
+    public function setupGuide(Request $request): Response
+    {
+        [, $organisationId, $dossierId] = $this->scope();
+        return ApiResponse::success(
+            $request,
+            $this->configuration->setupGuide($organisationId, $dossierId)
+        );
+    }
+
+    public function confirmSetupGuideStep(Request $request): Response
+    {
+        $step = $this->validator->setupGuideStep($request);
+        $permission = match ($step) {
+            'exercises', 'opening' => 'compta.setup',
+            'vat' => 'tva.setup',
+            default => null,
+        };
+        [$userId, $organisationId, $dossierId] = $this->scope($permission);
+        return $this->mutation(
+            $request,
+            fn (): array => $this->configuration->confirmSetupGuideStep(
+                $organisationId,
+                $dossierId,
+                $step,
+                $userId
+            )
+        );
+    }
+
+    public function updateSetupGuideStatus(Request $request): Response
+    {
+        $action = $this->validator->setupGuideAction($request);
+        [$userId, $organisationId, $dossierId] = $this->scope();
+        return $this->mutation(
+            $request,
+            fn (): array => $this->configuration->updateSetupGuideStatus(
+                $organisationId,
+                $dossierId,
+                $action,
+                $userId
+            )
+        );
+    }
+
     public function updateIdentity(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope();
@@ -267,14 +311,56 @@ final class ConfigurationApiController
             $dossierId
         ): array {
             $data = $this->validator->contactDeletion($request);
-            $this->managedReferences->deleteContact(
+            $result = $this->managedReferences->deleteContact(
                 $organisationId,
                 $dossierId,
                 $data['id'],
                 $data['version'],
                 $userId
             );
-            return ['id' => $data['id'], 'deleted' => true];
+            return ['id' => $data['id'], ...$result];
+        });
+    }
+
+    public function restoreContact(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'facturation.manage'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $data = $this->validator->contactDeletion($request);
+            $this->managedReferences->restoreContact(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $userId
+            );
+            return ['id' => $data['id'], 'restored' => true];
+        });
+    }
+
+    public function saveVatRegime(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('tva.setup');
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $id = $this->managedReferences->saveVatRegime(
+                $organisationId,
+                $dossierId,
+                $this->validator->vatRegime($request),
+                $userId
+            );
+            return ['id' => $id];
         });
     }
 
@@ -410,6 +496,31 @@ final class ConfigurationApiController
                 $userId
             );
             return ['id' => $id];
+        });
+    }
+
+    public function removeTreasuryAccount(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope(
+            'tresorerie.setup'
+        );
+        return $this->referenceMutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $data = $this->validator->contactDeletion($request);
+            return [
+                'id' => $data['id'],
+                ...$this->managedReferences->removeTreasuryAccount(
+                    $organisationId,
+                    $dossierId,
+                    $data['id'],
+                    $data['version'],
+                    $userId
+                ),
+            ];
         });
     }
 

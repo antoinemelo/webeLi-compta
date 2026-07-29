@@ -193,8 +193,13 @@ final class TreasuryWorkspaceService
         $catalog['contacts'] = $this->query(
             "SELECT c.id, COALESCE(NULLIF(c.raison_sociale, ''),
                     trim(c.prenom || ' ' || c.nom)) AS label,
+                    c.raison_sociale AS company,
+                    c.prenom AS first_name,
+                    c.nom AS last_name,
+                    COALESCE(e.raison_sociale, '') AS associated_company,
                     group_concat(cr.role, ',') AS roles
              FROM contacts c
+             LEFT JOIN contacts e ON e.id = c.entreprise_id
              JOIN contact_roles cr ON cr.contact_id = c.id
              WHERE c.organisation_id = ? AND c.dossier_id = ? AND c.actif = 1
              GROUP BY c.id ORDER BY label",

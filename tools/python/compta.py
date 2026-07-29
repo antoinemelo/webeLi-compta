@@ -106,6 +106,24 @@ def run(
     )
 
 
+def validate_admin_password(password: str) -> None:
+    environment = os.environ.copy()
+    environment["COMPTA_ADMIN_PASSWORD"] = password
+    try:
+        run(
+            ["php", "bin/console", "security:password-check"],
+            env=environment,
+            capture=True,
+        )
+    except subprocess.CalledProcessError as error:
+        detail = error.stderr.decode(
+            "utf-8", errors="replace"
+        ).strip().removeprefix("ERREUR:").strip()
+        raise AdminError(
+            detail or "Le mot de passe administrateur ne respecte pas la politique de sécurité."
+        ) from error
+
+
 def git(*arguments: str, capture: bool = True) -> str:
     result = run(["git", *arguments], capture=capture)
     return result.stdout.decode("utf-8", errors="replace").strip() if capture else ""
@@ -387,11 +405,7 @@ def initialize_database(
         getattr(args, "admin_password", "")
         or environment.get("COMPTA_ADMIN_PASSWORD", "")
     )
-    if len(password) < 12:
-        raise AdminError(
-            "L’initialisation exige COMPTA_ADMIN_PASSWORD "
-            "(12 caractères minimum)."
-        )
+    validate_admin_password(password)
     environment["COMPTA_ADMIN_PASSWORD"] = password
     year = str(getattr(args, "exercise", "") or datetime.now().year)
     start = str(getattr(args, "start", "") or f"{year}-01-01")
@@ -456,10 +470,7 @@ def database_create(args: argparse.Namespace) -> int:
             getattr(args, "admin_password", "")
             or os.environ.get("COMPTA_ADMIN_PASSWORD", "")
         )
-        if len(password) < 12:
-            raise AdminError(
-                "Le mot de passe administrateur doit contenir au moins 12 caractères."
-            )
+        validate_admin_password(password)
     print("Étapes : migrations SQL, catalogue des plans comptables"
           + (", initialisation de l’instance" if initialize else "")
           + (
@@ -1567,11 +1578,24 @@ def interactive_create_database(initialize: bool) -> int:
             "Adresse e-mail de l’administrateur",
             values["admin_email"],
         )
-        password = getpass.getpass("Mot de passe administrateur (12 caractères minimum) : ")
-        confirmation = getpass.getpass("Confirmez le mot de passe : ")
-        if password != confirmation or len(password) < 12:
-            print("Opération annulée : mots de passe différents ou trop courts.")
-            return 0
+        while True:
+            password = getpass.getpass(
+                "Mot de passe administrateur "
+                "(12 caractères minimum, non prévisible ; vide pour annuler) : "
+            )
+            if password == "":
+                print("Opération annulée.")
+                return 0
+            confirmation = getpass.getpass("Confirmez le mot de passe : ")
+            if password != confirmation:
+                print("Mot de passe refusé : les deux saisies sont différentes.")
+                continue
+            try:
+                validate_admin_password(password)
+            except AdminError as error:
+                print(f"Mot de passe refusé : {error}")
+                continue
+            break
         values["admin_password"] = password
         values["organisation"] = ask(
             "Nom de l’organisation",

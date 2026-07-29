@@ -234,6 +234,8 @@ $consolidation->saveLegalAttributes(
     'compte_comptable_id' => $bankAccount,
     'libelle' => 'Banque principale',
     'type' => 'banque',
+    'iban' => 'CH9300762011623852957',
+    'bic' => 'POFICHBEXXX',
     'monnaie' => 'CHF',
 ]);
 (new ContactService($pdo, $audit))->create(
@@ -248,6 +250,21 @@ $consolidation->saveLegalAttributes(
         'ligne1' => 'Rue du Test 6',
         'code_postal' => '1200',
         'localite' => 'Genève',
+        'pays' => 'CH',
+    ]
+);
+(new ContactService($pdo, $audit))->create(
+    $organisationA,
+    $dossierA,
+    [
+        'type_personne' => 'entreprise',
+        'raison_sociale' => 'Client Commercial E2E SA',
+    ],
+    ['client'],
+    [
+        'ligne1' => 'Rue des Offres 8',
+        'code_postal' => '1000',
+        'localite' => 'Lausanne',
         'pays' => 'CH',
     ]
 );

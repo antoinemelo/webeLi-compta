@@ -1,7 +1,30 @@
 (() => {
   'use strict';
 
-  document.querySelector('[data-auto-focus]')?.focus();
+  const autoFocusTarget = document.querySelector('[data-auto-focus]');
+  if (
+    autoFocusTarget instanceof HTMLElement
+    && (
+      autoFocusTarget.getAttribute('role') === 'alert'
+      || window.matchMedia('(min-width: 64rem)').matches
+    )
+  ) {
+    autoFocusTarget.focus();
+  }
+
+  document.querySelectorAll('[data-password-toggle]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const input = document.getElementById(button.dataset.passwordToggle ?? '');
+      if (!(input instanceof HTMLInputElement)) return;
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      button.setAttribute('aria-pressed', show ? 'true' : 'false');
+      button.setAttribute(
+        'aria-label',
+        show ? 'Masquer le mot de passe' : 'Afficher le mot de passe',
+      );
+    });
+  });
 
   const form = document.querySelector('[data-entry-form]');
   if (!form) return;

@@ -409,21 +409,45 @@ final class BillingService
                     $unitPrice * $quantity,
                     1000
                 );
-                $quote = $this->vat->quote(
+                $serviceDate = (string) $line['date_prestation'];
+                $vatStatus = $this->vatStatusAt(
                     $organisationId,
                     $dossierId,
-                    (int) $line['code_tva_id'],
-                    (string) $line['date_prestation'],
-                    $amount,
-                    (string) $line['mode_saisie'],
-                    isset($line['deduction_bp']) ? (int) $line['deduction_bp'] : null,
-                    (string) ($line['motif_correction'] ?? ''),
-                    isset($line['tdfn_id']) ? (int) $line['tdfn_id'] : null
+                    $serviceDate
                 );
+                $codeId = (int) ($line['code_tva_id'] ?? 0);
+                $quote = $vatStatus === 'non_assujetti' && $codeId === 0
+                    ? [
+                        'net_cents' => $amount,
+                        'vat_cents' => 0,
+                        'gross_cents' => $amount,
+                        'rate_bp' => 0,
+                        'code' => '',
+                        'treatment' => 'non_taxable',
+                        'nature' => 'non_taxable',
+                        'afc_box' => '',
+                        'deduction_bp' => 0,
+                        'deductible_vat_cents' => 0,
+                        'activity_id' => '',
+                        'tdfn_rate_bp' => null,
+                    ]
+                    : $this->vat->quote(
+                        $organisationId,
+                        $dossierId,
+                        $codeId,
+                        $serviceDate,
+                        $amount,
+                        (string) $line['mode_saisie'],
+                        isset($line['deduction_bp'])
+                            ? (int) $line['deduction_bp']
+                            : null,
+                        (string) ($line['motif_correction'] ?? ''),
+                        isset($line['tdfn_id']) ? (int) $line['tdfn_id'] : null
+                    );
                 $insert->execute([
                     $documentId, $index + 1, $label, $quantity, $unitPrice,
                     $line['mode_saisie'], (int) $line['compte_id'],
-                    (int) $line['code_tva_id'], $line['date_prestation'],
+                    $codeId > 0 ? $codeId : null, $line['date_prestation'],
                     $line['deduction_bp'] ?? null,
                     trim((string) ($line['motif_correction'] ?? '')),
                     $line['tdfn_id'] ?? null,
@@ -508,7 +532,7 @@ final class BillingService
                 throw new BillingException('Document vide, déjà émis ou modifié.');
             }
             $prefix = match ($document['type']) {
-                'facture_client' => 'F',
+                'facture_client' => 'FV',
                 'avoir_client' => 'NC',
                 'facture_fournisseur' => 'FA',
                 'avoir_fournisseur' => 'NCA',
@@ -684,6 +708,9 @@ final class BillingService
                     (int) $document['taux_change_numerateur'],
                     (int) $document['taux_change_denominateur']
                 );
+                if ((int) ($line['code_tva_id'] ?? 0) < 1) {
+                    continue;
+                }
                 $this->vat->attach(
                     $organisationId,
                     $dossierId,
@@ -864,7 +891,7 @@ final class BillingService
                     c.code AS code_tva, c.libelle AS libelle_tva,
                     a.numero AS compte_numero, a.libelle AS compte_libelle
              FROM lignes_document l
-             JOIN tva_codes c ON c.id = l.code_tva_id
+             LEFT JOIN tva_codes c ON c.id = l.code_tva_id
              JOIN comptes a ON a.id = l.compte_id
              WHERE l.document_id = ? ORDER BY l.ordre'
         );
@@ -931,6 +958,24 @@ final class BillingService
              ORDER BY code'
         );
         $journals->execute([$organisationId, $dossierId]);
+        $vatRegimes = $this->pdo->prepare(
+            'SELECT id, statut, date_debut, date_fin
+             FROM tva_regimes
+             WHERE organisation_id = ? AND dossier_id = ?
+             ORDER BY date_debut DESC, id DESC'
+        );
+        $vatRegimes->execute([$organisationId, $dossierId]);
+        $paymentDefaults = $this->pdo->prepare(
+            'SELECT d.direction, d.date_debut, d.date_fin,
+                    c.id AS condition_id, c.code, c.libelle,
+                    c.delai_jours, c.fin_de_mois
+             FROM defauts_conditions_paiement d
+             JOIN conditions_paiement c ON c.id = d.condition_id
+             WHERE d.organisation_id = ? AND d.dossier_id = ?
+               AND c.actif = 1
+             ORDER BY d.direction, d.date_debut DESC, d.id DESC'
+        );
+        $paymentDefaults->execute([$organisationId, $dossierId]);
         $currencyConfiguration = $this->exchange->configuration(
             $organisationId,
             $dossierId
@@ -940,6 +985,8 @@ final class BillingService
             'vat_codes' => $vatCodes->fetchAll(),
             'exercises' => $exercises->fetchAll(),
             'journals' => $journals->fetchAll(),
+            'vat_regimes' => $vatRegimes->fetchAll(),
+            'payment_defaults' => $paymentDefaults->fetchAll(),
             'currencies' => array_values(array_filter(
                 $currencyConfiguration['currencies'],
                 static fn (array $item): bool => (bool) $item['active']
@@ -968,7 +1015,7 @@ final class BillingService
             "SELECT cle, valeur FROM parametres_organisation
              WHERE organisation_id = ? AND cle IN (
                  'adresse_ligne1', 'adresse_ligne2', 'code_postal',
-                 'localite', 'pays', 'iban_facturation'
+                 'localite', 'pays'
              )"
         );
         $params->execute([$organisationId]);
@@ -984,20 +1031,26 @@ final class BillingService
                 $values[$key] = (string) $identity[$key];
             }
         }
-        if (($values['iban_facturation'] ?? '') === '') {
-            $iban = $this->pdo->prepare(
-                "SELECT iban FROM comptes_tresorerie
-                 WHERE organisation_id = ? AND dossier_id = ?
-                   AND actif = 1 AND iban <> ''
-                 ORDER BY id LIMIT 1"
-            );
-            $iban->execute([$organisationId, $dossierId]);
-            $values['iban_facturation'] = (string) ($iban->fetchColumn() ?: '');
-        }
+        $billingProfile = $this->pdo->prepare(
+            'SELECT d.nom AS dossier_nom, t.iban
+             FROM dossiers d
+             LEFT JOIN comptes_tresorerie t
+               ON t.id = d.compte_tresorerie_facturation_id
+              AND t.organisation_id = d.organisation_id
+              AND t.dossier_id = d.id
+              AND t.actif = 1
+             WHERE d.id = ? AND d.organisation_id = ?'
+        );
+        $billingProfile->execute([$dossierId, $organisationId]);
+        $dossier = $billingProfile->fetch() ?: [];
+        $values['iban_facturation'] = (string) (
+            $dossier['iban'] ?? ''
+        );
         return [
             'nom' => trim((string) $identity['raison_sociale']) !== ''
                 ? (string) $identity['raison_sociale']
                 : (string) $identity['nom'],
+            'dossier' => (string) ($dossier['dossier_nom'] ?? ''),
             'ligne1' => $values['adresse_ligne1'] ?? '',
             'ligne2' => $values['adresse_ligne2'] ?? '',
             'code_postal' => $values['code_postal'] ?? '',
@@ -1021,13 +1074,8 @@ final class BillingService
             }
         }
         $country = strtoupper(trim((string) $profile['pays']));
-        $iban = strtoupper((string) preg_replace(
-            '/\s+/',
-            '',
-            (string) ($profile['iban_facturation'] ?? '')
-        ));
-        if (strlen($country) !== 2 || preg_match('/^(CH|LI)[0-9A-Z]{19}$/', $iban) !== 1) {
-            throw new BillingException('Pays ou IBAN de facturation invalide.');
+        if (preg_match('/^[A-Z]{2}$/', $country) !== 1) {
+            throw new BillingException('Pays du créancier invalide.');
         }
         $scope = $this->pdo->prepare(
             'SELECT 1 FROM dossiers WHERE id = ? AND organisation_id = ?'
@@ -1042,7 +1090,6 @@ final class BillingService
             'code_postal' => trim((string) $profile['code_postal']),
             'localite' => trim((string) $profile['localite']),
             'pays' => $country,
-            'iban_facturation' => $iban,
         ];
         $stmt = $this->pdo->prepare(
             'INSERT INTO parametres_organisation (organisation_id, cle, valeur)
@@ -1217,6 +1264,17 @@ final class BillingService
         );
         foreach ($lines as $line) {
             $date = (string) ($line['date_prestation'] ?? '');
+            $vatStatus = $this->vatStatusAt(
+                $organisationId,
+                $dossierId,
+                $date
+            );
+            if (
+                $vatStatus === 'non_assujetti'
+                && (int) ($line['code_tva_id'] ?? 0) === 0
+            ) {
+                continue;
+            }
             $vatCode->execute([
                 (int) ($line['code_tva_id'] ?? 0),
                 $organisationId,
@@ -1231,6 +1289,29 @@ final class BillingService
                 );
             }
         }
+    }
+
+    private function vatStatusAt(
+        int $organisationId,
+        int $dossierId,
+        string $date,
+    ): string {
+        $stmt = $this->pdo->prepare(
+            'SELECT statut FROM tva_regimes
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND date_debut <= ?
+               AND COALESCE(date_fin, \'9999-12-31\') >= ?
+             ORDER BY date_debut DESC, id DESC LIMIT 1'
+        );
+        $stmt->execute([$organisationId, $dossierId, $date, $date]);
+        $status = $stmt->fetchColumn();
+        if ($status === false) {
+            throw new BillingException(
+                'Aucun régime TVA ne couvre la date du document. '
+                . 'Configurez le statut TVA sous Configuration → Entité.'
+            );
+        }
+        return (string) $status;
     }
 
     private function assertDate(string $date): void

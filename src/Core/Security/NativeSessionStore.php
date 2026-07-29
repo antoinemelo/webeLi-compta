@@ -16,6 +16,10 @@ final class NativeSessionStore implements SessionStore
         if (session_status() === PHP_SESSION_ACTIVE) {
             return;
         }
+        ini_set('session.use_strict_mode', '1');
+        ini_set('session.use_only_cookies', '1');
+        ini_set('session.use_trans_sid', '0');
+        ini_set('session.cookie_httponly', '1');
         session_name($this->config->sessionName());
         session_set_cookie_params([
             'lifetime' => 0,

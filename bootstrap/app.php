@@ -5,6 +5,9 @@ use Compta\Core\Audit\AuditLogger;
 use Compta\Core\Auth\AccessControl;
 use Compta\Core\Auth\AuthService;
 use Compta\Core\Auth\LoginThrottle;
+use Compta\Core\Auth\MfaService;
+use Compta\Core\Auth\PasswordResetService;
+use Compta\Core\Auth\SecurityApiController;
 use Compta\Core\Auth\UserRepository;
 use Compta\Core\Config\AppConfig;
 use Compta\Core\Database\ConnectionFactory;
@@ -12,8 +15,10 @@ use Compta\Core\Http\Api\ApiRouteRegistry;
 use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
 use Compta\Core\Http\VueShellRenderer;
+use Compta\Core\Mail\ConfiguredMailer;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Security\NativeSessionStore;
+use Compta\Core\Security\TotpService;
 use Compta\Modules\Compta\ChartOfAccountsService;
 use Compta\Modules\Compta\AccountingCsvService;
 use Compta\Modules\Compta\AccountingApiController;
@@ -48,6 +53,7 @@ use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Dossiers\StructureAccessService;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
+use Compta\Modules\Facturation\CommercialDocumentService;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Facturation\AttachmentService;
 use Compta\Modules\Facturation\InvoicePdfService;
@@ -108,6 +114,23 @@ $audit = new AuditLogger($pdo);
 $entries = new EntryService($pdo, $audit);
 $payrolls = new PayrollService($pdo, $audit, $entries);
 $csrf = new Csrf($session);
+$mailer = new ConfiguredMailer($config);
+$mfa = new MfaService(
+    $pdo,
+    $users,
+    $session,
+    $audit,
+    new TotpService($config->string('mfa_encryption_key')),
+    $mailer,
+    $config
+);
+$passwordReset = new PasswordResetService(
+    $pdo,
+    $users,
+    $audit,
+    $mailer,
+    $config
+);
 $auth = new AuthService(
     $users,
     new LoginThrottle(
@@ -116,7 +139,9 @@ $auth = new AuthService(
         $config->int('login_window_seconds')
     ),
     $audit,
-    $session
+    $session,
+    $csrf,
+    $mfa
 );
 $access = new AccessControl($pdo);
 $reports = new ReportingService($pdo);
@@ -124,6 +149,7 @@ $chart = new ChartOfAccountsService($pdo, $audit);
 $contacts = new ContactService($pdo, $audit);
 $payments = new PaymentService($pdo, $audit, $entries);
 $billing = new BillingService($pdo, $audit, $entries);
+$commercialDocuments = new CommercialDocumentService($pdo, $audit, $billing);
 $recurringBilling = new RecurringBillingService($pdo, $audit, $billing);
 $reconciliations = new ReconciliationService($pdo, $audit);
 $payrollConfiguration = new PayrollConfigurationService($pdo, $audit);
@@ -251,6 +277,7 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         new BillingWorkspaceService($pdo, $billing, $payments, $contacts),
         $billing,
+        $commercialDocuments,
         $contacts,
         $payments,
         $recurringBilling,
@@ -318,7 +345,8 @@ $apiRoutes = new ApiRouteRegistry(
         $access,
         $structureAccess,
         new StructureAccessInputValidator()
-    )
+    ),
+    new SecurityApiController($auth, $mfa)
 );
 $shellPage = new ShellPageController(
     $config,
@@ -352,6 +380,7 @@ return [
         $pedagogy,
         $apiRoutes,
         $shellPage,
-        $moduleAccess
+        $moduleAccess,
+        $passwordReset
     ),
 ];

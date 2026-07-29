@@ -42,6 +42,7 @@
     "allocations": [],
     "recurrences": [],
     "reminders": [],
+    "commercial_documents": [],
     "catalog": {
       "accounts": [],
       "vat_codes": [],
@@ -50,7 +51,15 @@
       "currencies": [
         { "code": "CHF", "active": true, "is_base": true, "version": 1 }
       ],
-      "exchange_rates": []
+      "exchange_rates": [],
+      "vat_regimes": [
+        {
+          "status": "non_assujetti",
+          "valid_from": "2026-01-01",
+          "valid_until": null
+        }
+      ],
+      "payment_defaults": []
     },
     "definitions": {},
     "capabilities": {

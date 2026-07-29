@@ -26,4 +26,11 @@ final class Csrf
         $expected = (string) $this->session->get(self::KEY, '');
         return $expected !== '' && is_string($token) && hash_equals($expected, $token);
     }
+
+    public function rotate(): string
+    {
+        $token = bin2hex(random_bytes(32));
+        $this->session->set(self::KEY, $token);
+        return $token;
+    }
 }

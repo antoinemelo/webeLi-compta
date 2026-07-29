@@ -256,6 +256,8 @@ CREATE TABLE comptes_tresorerie (
     multiplicateur_comptable INTEGER NOT NULL DEFAULT 1
         CHECK (multiplicateur_comptable IN (-1, 1)),
     actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    archive_le TEXT,
+    archive_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     modifie_le TEXT,
@@ -324,6 +326,7 @@ CREATE TABLE contacts (
     dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
     type_personne TEXT NOT NULL DEFAULT 'entreprise'
         CHECK (type_personne IN ('entreprise', 'personne')),
+    entreprise_id INTEGER REFERENCES contacts(id) ON DELETE RESTRICT,
     raison_sociale TEXT NOT NULL DEFAULT '',
     prenom TEXT NOT NULL DEFAULT '',
     nom TEXT NOT NULL DEFAULT '',
@@ -334,6 +337,8 @@ CREATE TABLE contacts (
     cle_idempotence TEXT NOT NULL DEFAULT '',
     langue TEXT NOT NULL DEFAULT 'fr' CHECK (langue IN ('fr', 'de', 'it', 'en')),
     actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    archive_le TEXT,
+    archive_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     modifie_le TEXT,
@@ -341,7 +346,12 @@ CREATE TABLE contacts (
     CHECK (
         (type_personne = 'entreprise' AND raison_sociale <> '')
         OR (type_personne = 'personne' AND (prenom <> '' OR nom <> ''))
-    )
+    ),
+    CHECK (
+        (type_personne = 'entreprise' AND entreprise_id IS NULL)
+        OR type_personne = 'personne'
+    ),
+    CHECK (entreprise_id IS NULL OR entreprise_id <> id)
 );
 
 CREATE TABLE contributions_pedagogiques (
@@ -455,6 +465,57 @@ CREATE TABLE documents_financiers (
     )
 );
 
+CREATE TABLE documents_commerciaux (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
+    type TEXT NOT NULL CHECK (
+        type IN (
+            'offre_client',
+            'demande_offre_fournisseur',
+            'reponse_offre_fournisseur',
+            'commande_client',
+            'commande_fournisseur'
+        )
+    ),
+    statut TEXT NOT NULL DEFAULT 'brouillon' CHECK (
+        statut IN (
+            'brouillon', 'envoye', 'recu', 'accepte', 'refuse',
+            'remplace', 'commande', 'facture', 'annule', 'archive'
+        )
+    ),
+    numero TEXT NOT NULL DEFAULT '',
+    numero_externe TEXT NOT NULL DEFAULT '',
+    date_document TEXT NOT NULL,
+    date_validite TEXT,
+    monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (length(monnaie) = 3),
+    adresse_snapshot_json TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(adresse_snapshot_json)),
+    contact_snapshot_json TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(contact_snapshot_json)),
+    total_net_centimes INTEGER NOT NULL DEFAULT 0,
+    total_tva_centimes INTEGER NOT NULL DEFAULT 0,
+    total_brut_centimes INTEGER NOT NULL DEFAULT 0,
+    texte_entete TEXT NOT NULL DEFAULT '',
+    texte_pied TEXT NOT NULL DEFAULT '',
+    note_interne TEXT NOT NULL DEFAULT '',
+    document_source_id INTEGER REFERENCES documents_commerciaux(id) ON DELETE RESTRICT,
+    remplace_par_id INTEGER REFERENCES documents_commerciaux(id) ON DELETE RESTRICT,
+    emis_le TEXT,
+    accepte_le TEXT,
+    refuse_le TEXT,
+    archive_le TEXT,
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    CHECK (date_validite IS NULL OR date_validite >= date_document),
+    CHECK (total_brut_centimes = total_net_centimes + total_tva_centimes),
+    CHECK (remplace_par_id IS NULL OR remplace_par_id <> id)
+);
+
 CREATE TABLE modeles_depenses_recurrentes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
@@ -538,6 +599,8 @@ CREATE TABLE dossiers (
     slug TEXT NOT NULL,
     type TEXT NOT NULL CHECK (type IN ('reel', 'demo', 'exercice')),
     monnaie TEXT NOT NULL DEFAULT 'CHF' CHECK (length(monnaie) = 3),
+    compte_tresorerie_facturation_id INTEGER
+        REFERENCES comptes_tresorerie(id) ON DELETE RESTRICT,
     actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     version INTEGER NOT NULL DEFAULT 1,
@@ -1050,7 +1113,7 @@ CREATE TABLE lignes_document (
     prix_unitaire_centimes INTEGER NOT NULL CHECK (prix_unitaire_centimes >= 0),
     mode_saisie TEXT NOT NULL CHECK (mode_saisie IN ('net', 'brut')),
     compte_id INTEGER NOT NULL REFERENCES comptes(id) ON DELETE RESTRICT,
-    code_tva_id INTEGER NOT NULL REFERENCES tva_codes(id) ON DELETE RESTRICT,
+    code_tva_id INTEGER REFERENCES tva_codes(id) ON DELETE RESTRICT,
     date_prestation TEXT NOT NULL,
     deduction_bp INTEGER CHECK (deduction_bp IS NULL OR deduction_bp BETWEEN 0 AND 10000),
     motif_correction TEXT NOT NULL DEFAULT '',
@@ -1070,6 +1133,66 @@ CREATE TABLE lignes_document (
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     CHECK (total_brut_centimes = base_nette_centimes + tva_centimes),
     UNIQUE (document_id, ordre)
+);
+
+CREATE TABLE lignes_document_commercial (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL REFERENCES documents_commerciaux(id) ON DELETE CASCADE,
+    ordre INTEGER NOT NULL CHECK (ordre > 0),
+    libelle TEXT NOT NULL CHECK (length(trim(libelle)) > 0),
+    quantite_milli INTEGER NOT NULL CHECK (quantite_milli > 0),
+    prix_unitaire_centimes INTEGER NOT NULL CHECK (prix_unitaire_centimes >= 0),
+    mode_saisie TEXT NOT NULL DEFAULT 'net' CHECK (mode_saisie IN ('net', 'brut')),
+    compte_id INTEGER REFERENCES comptes(id) ON DELETE RESTRICT,
+    code_tva_id INTEGER REFERENCES tva_codes(id) ON DELETE RESTRICT,
+    base_nette_centimes INTEGER NOT NULL DEFAULT 0,
+    tva_centimes INTEGER NOT NULL DEFAULT 0,
+    total_brut_centimes INTEGER NOT NULL DEFAULT 0,
+    taux_tva_snapshot_bp INTEGER NOT NULL DEFAULT 0
+        CHECK (taux_tva_snapshot_bp BETWEEN 0 AND 10000),
+    code_tva_snapshot TEXT NOT NULL DEFAULT '',
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (total_brut_centimes = base_nette_centimes + tva_centimes),
+    UNIQUE (document_id, ordre)
+);
+
+CREATE TABLE conversions_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
+    document_source_id INTEGER NOT NULL
+        REFERENCES documents_commerciaux(id) ON DELETE RESTRICT,
+    document_cible_commercial_id INTEGER
+        REFERENCES documents_commerciaux(id) ON DELETE RESTRICT,
+    document_cible_financier_id INTEGER
+        REFERENCES documents_financiers(id) ON DELETE RESTRICT,
+    type_lien TEXT NOT NULL CHECK (
+        type_lien IN ('reponse', 'remplacement', 'commande', 'facture')
+    ),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    CHECK (
+        (document_cible_commercial_id IS NOT NULL)
+        <> (document_cible_financier_id IS NOT NULL)
+    )
+);
+
+CREATE TABLE conversions_lignes_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversion_id INTEGER NOT NULL
+        REFERENCES conversions_documents(id) ON DELETE CASCADE,
+    ligne_source_id INTEGER NOT NULL
+        REFERENCES lignes_document_commercial(id) ON DELETE RESTRICT,
+    ligne_cible_commercial_id INTEGER
+        REFERENCES lignes_document_commercial(id) ON DELETE RESTRICT,
+    ligne_cible_financiere_id INTEGER
+        REFERENCES lignes_document(id) ON DELETE RESTRICT,
+    quantite_milli INTEGER NOT NULL CHECK (quantite_milli > 0),
+    CHECK (
+        (ligne_cible_commercial_id IS NOT NULL)
+        <> (ligne_cible_financiere_id IS NOT NULL)
+    ),
+    UNIQUE (conversion_id, ligne_source_id)
 );
 
 CREATE TABLE lignes_ecriture (
@@ -1958,8 +2081,32 @@ CREATE TABLE utilisateurs (
     prenom TEXT NOT NULL DEFAULT '',
     nom TEXT NOT NULL DEFAULT '',
     actif INTEGER NOT NULL DEFAULT 1 CHECK (actif IN (0, 1)),
+    mode_connexion TEXT NOT NULL DEFAULT 'password'
+        CHECK (mode_connexion IN ('password', 'email', 'totp')),
+    secret_totp_protege TEXT,
+    codes_recuperation_json TEXT NOT NULL DEFAULT '[]'
+        CHECK (json_valid(codes_recuperation_json)),
+    mfa_active_le TEXT,
+    version_securite INTEGER NOT NULL DEFAULT 1 CHECK (version_securite > 0),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
-    derniere_connexion_le TEXT
+    derniere_connexion_le TEXT,
+    CHECK (mode_connexion <> 'totp' OR secret_totp_protege IS NOT NULL)
+);
+
+CREATE TABLE defis_mfa_email (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    selecteur TEXT NOT NULL UNIQUE,
+    utilisateur_id INTEGER NOT NULL REFERENCES utilisateurs(id) ON DELETE CASCADE,
+    but TEXT NOT NULL CHECK (but IN ('connexion', 'activation')),
+    code_hash TEXT NOT NULL,
+    ip TEXT NOT NULL DEFAULT '',
+    agent_utilisateur TEXT NOT NULL DEFAULT '',
+    tentatives INTEGER NOT NULL DEFAULT 0 CHECK (tentatives BETWEEN 0 AND 5),
+    expire_le INTEGER NOT NULL,
+    consomme_le INTEGER,
+    cree_le INTEGER NOT NULL,
+    CHECK (expire_le > cree_le),
+    CHECK (consomme_le IS NULL OR consomme_le >= cree_le)
 );
 
 CREATE TABLE versions_modeles_exercice (
@@ -2025,6 +2172,9 @@ CREATE INDEX idx_conditions_paiement_scope_date
 CREATE INDEX idx_contacts_scope_nom
     ON contacts(dossier_id, actif, raison_sociale, nom, prenom);
 
+CREATE INDEX idx_contacts_entreprise
+    ON contacts(dossier_id, entreprise_id, actif, nom, prenom);
+
 CREATE UNIQUE INDEX idx_contacts_idempotence_unique
     ON contacts(dossier_id, cle_idempotence)
     WHERE cle_idempotence <> '';
@@ -2042,6 +2192,15 @@ CREATE INDEX idx_documents_condition_paiement
 
 CREATE INDEX idx_documents_scope_etat
     ON documents_financiers(dossier_id, type, statut, date_echeance, contact_id);
+
+CREATE INDEX idx_documents_commerciaux_scope
+    ON documents_commerciaux(dossier_id, type, statut, date_document, contact_id);
+CREATE UNIQUE INDEX idx_documents_commerciaux_numero
+    ON documents_commerciaux(dossier_id, numero)
+    WHERE numero <> '';
+
+CREATE INDEX idx_conversions_documents_source
+    ON conversions_documents(document_source_id, type_lien);
 
 CREATE UNIQUE INDEX idx_documents_generation_unique
     ON documents_financiers(dossier_id, cle_generation)
@@ -2098,6 +2257,9 @@ CREATE INDEX idx_lignes_compte ON lignes_ecriture(compte_id, ecriture_id);
 
 CREATE INDEX idx_lignes_document ON lignes_document(document_id, ordre);
 
+CREATE INDEX idx_lignes_document_commercial
+    ON lignes_document_commercial(document_id, ordre);
+
 CREATE INDEX idx_modele_comptes_ordre
     ON modele_comptes(modele_id, variante, ordre, numero);
 
@@ -2138,6 +2300,9 @@ CREATE INDEX idx_sorties_immobilisations_scope
     ON sorties_immobilisations(dossier_id, date_sortie, statut);
 
 CREATE INDEX idx_tentatives_connexion ON tentatives_connexion(email, ip, tente_le);
+
+CREATE INDEX idx_defis_mfa_email_utilisateur
+    ON defis_mfa_email(utilisateur_id, but, expire_le, consomme_le);
 
 CREATE INDEX idx_tentatives_progression
     ON tentatives_pedagogiques(assignation_id, etape_id, cree_le);
@@ -2473,6 +2638,14 @@ BEGIN
         SELECT 1 FROM dossiers d WHERE d.id = NEW.dossier_id
           AND d.organisation_id = NEW.organisation_id
     ) THEN RAISE(ABORT, 'scope de contact invalide') END;
+    SELECT CASE WHEN NEW.entreprise_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM contacts e
+        WHERE e.id = NEW.entreprise_id
+          AND e.organisation_id = NEW.organisation_id
+          AND e.dossier_id = NEW.dossier_id
+          AND e.type_personne = 'entreprise'
+          AND e.actif = 1
+    ) THEN RAISE(ABORT, 'entreprise du contact invalide') END;
 END;
 
 CREATE TRIGGER trg_contacts_scope_update BEFORE UPDATE ON contacts
@@ -2480,6 +2653,42 @@ BEGIN
     SELECT CASE WHEN NEW.organisation_id <> OLD.organisation_id
         OR NEW.dossier_id <> OLD.dossier_id
         THEN RAISE(ABORT, 'scope de contact immuable') END;
+    SELECT CASE WHEN NEW.entreprise_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM contacts e
+        WHERE e.id = NEW.entreprise_id
+          AND e.organisation_id = NEW.organisation_id
+          AND e.dossier_id = NEW.dossier_id
+          AND e.type_personne = 'entreprise'
+          AND e.actif = 1
+    ) THEN RAISE(ABORT, 'entreprise du contact invalide') END;
+END;
+
+CREATE TRIGGER trg_dossier_compte_facturation_insert
+BEFORE INSERT ON dossiers
+WHEN NEW.compte_tresorerie_facturation_id IS NOT NULL
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM comptes_tresorerie t
+        WHERE t.id = NEW.compte_tresorerie_facturation_id
+          AND t.organisation_id = NEW.organisation_id
+          AND t.dossier_id = NEW.id
+          AND t.actif = 1
+          AND t.iban <> ''
+    ) THEN RAISE(ABORT, 'compte de facturation invalide') END;
+END;
+
+CREATE TRIGGER trg_dossier_compte_facturation_update
+BEFORE UPDATE OF compte_tresorerie_facturation_id ON dossiers
+WHEN NEW.compte_tresorerie_facturation_id IS NOT NULL
+BEGIN
+    SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM comptes_tresorerie t
+        WHERE t.id = NEW.compte_tresorerie_facturation_id
+          AND t.organisation_id = NEW.organisation_id
+          AND t.dossier_id = NEW.id
+          AND t.actif = 1
+          AND t.iban <> ''
+    ) THEN RAISE(ABORT, 'compte de facturation invalide') END;
 END;
 
 CREATE TRIGGER trg_defauts_conditions_scope_insert
@@ -2820,10 +3029,26 @@ BEGIN
     SELECT CASE WHEN NOT EXISTS (
         SELECT 1 FROM documents_financiers d
         JOIN comptes c ON c.id = NEW.compte_id
-        JOIN tva_codes t ON t.id = NEW.code_tva_id
+        LEFT JOIN tva_codes t ON t.id = NEW.code_tva_id
         WHERE d.id = NEW.document_id AND d.statut = 'brouillon'
           AND c.organisation_id = d.organisation_id AND c.dossier_id = d.dossier_id
-          AND t.organisation_id = d.organisation_id AND t.dossier_id = d.dossier_id
+          AND (
+              (
+                  NEW.code_tva_id IS NULL
+                  AND EXISTS (
+                      SELECT 1 FROM tva_regimes r
+                      WHERE r.organisation_id = d.organisation_id
+                        AND r.dossier_id = d.dossier_id
+                        AND r.statut = 'non_assujetti'
+                        AND r.date_debut <= NEW.date_prestation
+                        AND COALESCE(r.date_fin, '9999-12-31') >= NEW.date_prestation
+                  )
+              )
+              OR (
+                  t.organisation_id = d.organisation_id
+                  AND t.dossier_id = d.dossier_id
+              )
+          )
     ) THEN RAISE(ABORT, 'ligne de document hors scope ou document figé') END;
 END;
 

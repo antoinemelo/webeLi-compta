@@ -29,11 +29,20 @@ const treasuryDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const exchangeRateDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const contactDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const vatDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const vatRegimeDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const payrollRatesDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const exerciseDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const periodDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const clearAuditDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const clearVatDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const removeContactDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const removeTreasuryDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
+const pendingContactRemoval = ref<
+  NonNullable<typeof managedReferences.value>['contacts'][number] | null
+>(null);
+const pendingTreasuryRemoval = ref<
+  NonNullable<typeof managedReferences.value>['treasury']['accounts'][number] | null
+>(null);
 const tabs = subNavigation.settings;
 const activeTab = computed(() => (
   route.name === 'managed-reference'
@@ -76,7 +85,9 @@ const identity = reactive({
   canton: '',
   country: 'CH',
   phone: '',
-  billing_iban: '',
+  billing_treasury_account_id: null as number | null,
+  vat_exempt: true,
+  vat_effective_from: today,
   email: '',
   website: '',
   base_currency: 'CHF'
@@ -94,10 +105,13 @@ const clientDefault = ref(0);
 const supplierDefault = ref(0);
 const clientDefaultFrom = ref(today);
 const supplierDefaultFrom = ref(today);
+const contactReferenceSearch = ref('');
+const contactReferenceStatus = ref<'active' | 'archived' | 'all'>('active');
 const contactDraft = reactive({
   id: 0,
   version: 0,
   type: 'entreprise' as 'entreprise' | 'personne',
+  company_contact_id: null as number | null,
   company: '',
   first_name: '',
   last_name: '',
@@ -127,6 +141,21 @@ const vatDraft = reactive({
   account_id: 0,
   valid_from: today,
   valid_until: ''
+});
+const vatRegimeDraft = reactive({
+  status: 'non_assujetti' as 'non_assujetti' | 'assujetti' | 'volontaire',
+  vat_number: '',
+  method: 'effective' as 'effective' | 'tdfn',
+  reporting_mode: 'convenues' as 'convenues' | 'recues',
+  frequency: 'trimestrielle' as
+    | 'mensuelle' | 'trimestrielle' | 'semestrielle' | 'annuelle',
+  valid_from: today,
+  valid_until: '',
+  input_material_account_id: 0,
+  input_investment_account_id: 0,
+  vat_due_account_id: 0,
+  vat_settlement_account_id: 0,
+  corrections_account_id: 0
 });
 const payrollDraft = reactive<Record<string, string | number>>({
   year: new Date().getFullYear(),
@@ -239,13 +268,21 @@ const periodDraft = reactive({
 const vatTreatmentsWithRate = ['normal', 'reduit', 'special', 'acquisition', 'import'];
 const paymentRows = computed<Array<Record<string, unknown>>>(() =>
   (configuration.value?.payment_terms ?? []).map((item) => ({
+    defaults: (configuration.value?.payment_defaults ?? [])
+      .filter((entry) => entry.condition_id === item.id)
+      .map((entry) => (
+        `${entry.direction === 'client' ? 'Clients' : 'Fournisseurs'}`
+        + ` dès le ${entry.valid_from}`
+        + `${entry.valid_until ? ` jusqu’au ${entry.valid_until}` : ''}`
+        + `${entry.current ? ' · actuel' : ''}`
+      ))
+      .join(' ; ') || 'Aucun',
     id: item.id,
     code: item.code,
     label: item.label,
     direction: directionLabel(item.direction),
     calculation: `${item.days} jour(s)${item.end_of_month ? ', fin de mois' : ''}`,
     validity: `${item.valid_from} — ${item.valid_until || 'sans fin'}`,
-    default: item.is_default ? 'Oui' : 'Non'
   }))
 );
 const auditRows = computed<Array<Record<string, unknown>>>(() =>
@@ -257,6 +294,21 @@ const auditRows = computed<Array<Record<string, unknown>>>(() =>
     target: `${item.target_type}${item.target_id ? ` #${item.target_id}` : ''}`
   }))
 );
+const filteredReferenceContacts = computed(() => {
+  const query = contactReferenceSearch.value.trim().toLocaleLowerCase('fr-CH');
+  return (managedReferences.value?.contacts ?? []).filter((contact) => {
+    if (
+      contactReferenceStatus.value !== 'all'
+      && contact.active !== (contactReferenceStatus.value === 'active')
+    ) {
+      return false;
+    }
+    return !query || [
+      contactName(contact), contact.company_contact_name, contact.email,
+      contact.city, ...contact.roles
+    ].join(' ').toLocaleLowerCase('fr-CH').includes(query);
+  });
+});
 
 watch(
   () => context.selection?.dossier.id ?? 0,
@@ -288,7 +340,9 @@ watch(
       phone: value.organization.phone,
       email: value.organization.email,
       website: value.organization.website,
-      billing_iban: value.organization.billing_iban,
+      billing_treasury_account_id: value.dossier.billing_treasury_account_id,
+      vat_exempt: value.dossier.vat_exempt,
+      vat_effective_from: value.dossier.vat_effective_from,
       base_currency: value.dossier.base_currency
     });
     markUnsavedChanges(false);
@@ -310,6 +364,24 @@ watch(
     });
     if (value.currencies.mapping) {
       Object.assign(exchangeMappingDraft, value.currencies.mapping);
+    }
+    const currentRegime = value.vat.regimes[0];
+    if (currentRegime) {
+      Object.assign(vatRegimeDraft, {
+        status: currentRegime.status,
+        vat_number: currentRegime.vat_number,
+        method: currentRegime.method,
+        reporting_mode: currentRegime.reporting_mode,
+        frequency: currentRegime.frequency,
+        valid_from: today,
+        valid_until: '',
+        input_material_account_id: currentRegime.input_material_account_id || 0,
+        input_investment_account_id:
+          currentRegime.input_investment_account_id || 0,
+        vat_due_account_id: currentRegime.vat_due_account_id || 0,
+        vat_settlement_account_id: currentRegime.vat_settlement_account_id || 0,
+        corrections_account_id: currentRegime.corrections_account_id || 0
+      });
     }
   },
   { deep: true }
@@ -520,6 +592,7 @@ function resetContactDraft(): void {
     id: 0,
     version: 0,
     type: 'entreprise',
+    company_contact_id: null,
     company: '',
     first_name: '',
     last_name: '',
@@ -538,7 +611,13 @@ function resetContactDraft(): void {
 }
 
 async function createContact(): Promise<void> {
-  await store.createContact({ ...contactDraft, roles: [...contactDraft.roles] });
+  await store.createContact({
+    ...contactDraft,
+    company_contact_id: contactDraft.type === 'personne'
+      ? contactDraft.company_contact_id
+      : null,
+    roles: [...contactDraft.roles]
+  });
   resetContactDraft();
   contactDialog.value?.close();
   notifications.push('Contact enregistré dans le registre unique.', 'success');
@@ -551,6 +630,7 @@ function editContact(
     id: contact.id,
     version: contact.version,
     type: contact.type,
+    company_contact_id: contact.company_contact_id,
     company: contact.company,
     first_name: contact.first_name,
     last_name: contact.last_name,
@@ -570,35 +650,48 @@ function editContact(
 }
 
 async function deleteContact(
+  contact?: NonNullable<typeof managedReferences.value>['contacts'][number]
+): Promise<void> {
+  if (contact) {
+    pendingContactRemoval.value = contact;
+    await removeContactDialog.value?.open();
+    return;
+  }
+  const selected = pendingContactRemoval.value;
+  if (!selected) return;
+  await store.deleteContact(selected.id, selected.version);
+  if (contactDraft.id === selected.id) resetContactDraft();
+  pendingContactRemoval.value = null;
+  notifications.push(
+    'Contact supprimé s’il était inutilisé, sinon archivé avec son historique.',
+    'success'
+  );
+}
+
+async function restoreContact(
   contact: NonNullable<typeof managedReferences.value>['contacts'][number]
 ): Promise<void> {
-  if (!window.confirm(
-    `Supprimer définitivement « ${contactName(contact)} » ? `
-    + 'Cette opération sera refusée si des éléments comptables ou salariaux y sont liés.'
-  )) return;
-  await store.deleteContact(contact.id, contact.version);
-  if (contactDraft.id === contact.id) {
-    Object.assign(contactDraft, {
-      id: 0,
-      version: 0,
-      type: 'entreprise',
-      company: '',
-      first_name: '',
-      last_name: '',
-      email: '',
-      phone: '',
-      payment_iban: '',
-      payment_bic: '',
-      language: 'fr',
-      roles: ['client'],
-      address_line1: '',
-      address_line2: '',
-      postal_code: '',
-      city: '',
-      country: 'CH'
-    });
-  }
-  notifications.push('Contact supprimé.', 'success');
+  await store.restoreContact(contact.id, contact.version);
+  notifications.push('Contact désarchivé et à nouveau disponible.', 'success');
+}
+
+async function saveVatRegime(): Promise<void> {
+  const taxable = vatRegimeDraft.status !== 'non_assujetti';
+  await store.saveVatRegime({
+    ...vatRegimeDraft,
+    vat_number: taxable ? vatRegimeDraft.vat_number : '',
+    input_material_account_id: taxable
+      ? vatRegimeDraft.input_material_account_id : null,
+    input_investment_account_id: taxable
+      ? vatRegimeDraft.input_investment_account_id : null,
+    vat_due_account_id: taxable ? vatRegimeDraft.vat_due_account_id : null,
+    vat_settlement_account_id: taxable
+      ? vatRegimeDraft.vat_settlement_account_id : null,
+    corrections_account_id: taxable
+      ? vatRegimeDraft.corrections_account_id : null
+  });
+  vatRegimeDialog.value?.close();
+  notifications.push('Nouveau régime TVA daté enregistré.', 'success');
 }
 
 function resetVatCode(): void {
@@ -841,6 +934,25 @@ async function saveTreasuryAccount(): Promise<void> {
   resetTreasuryDraft();
   treasuryDialog.value?.close();
   notifications.push('Compte de trésorerie enregistré.', 'success');
+}
+
+async function removeTreasuryAccount(
+  account?: NonNullable<typeof managedReferences.value>['treasury']['accounts'][number]
+): Promise<void> {
+  if (account) {
+    pendingTreasuryRemoval.value = account;
+    await removeTreasuryDialog.value?.open();
+    return;
+  }
+  const selected = pendingTreasuryRemoval.value;
+  if (!selected) return;
+  await store.removeTreasuryAccount(selected.id, selected.version);
+  if (treasuryDraft.id === selected.id) resetTreasuryDraft();
+  pendingTreasuryRemoval.value = null;
+  notifications.push(
+    'Compte supprimé s’il était inutilisé, sinon archivé avec son historique.',
+    'success'
+  );
 }
 
 async function saveCurrency(): Promise<void> {
@@ -1105,18 +1217,25 @@ async function clearAudit(): Promise<void> {
             </template>
           </FormField>
           <FormField
-            id="billing-iban"
-            label="IBAN de facturation"
-            hint="IBAN CH ou LI utilisé dans la section Swiss QR des factures clients."
+            id="billing-account"
+            label="Compte de facturation"
+            hint="Seuls les comptes de trésorerie actifs avec un IBAN CH ou LI sont proposés."
           >
             <template #default="{ describedBy }">
-              <input
-                id="billing-iban"
-                v-model="identity.billing_iban"
-                autocomplete="off"
-                placeholder="CH…"
+              <select
+                id="billing-account"
+                v-model="identity.billing_treasury_account_id"
                 :aria-describedby="describedBy"
               >
+                <option :value="null">Aucun compte sélectionné</option>
+                <option
+                  v-for="account in configuration.identity.dossier.billing_treasury_accounts"
+                  :key="account.id"
+                  :value="account.id"
+                >
+                  {{ account.label }} · {{ account.iban }} · {{ account.currency }}
+                </option>
+              </select>
             </template>
           </FormField>
           <FormField
@@ -1297,7 +1416,7 @@ async function clearAudit(): Promise<void> {
               { key: 'direction', label: 'Portée' },
               { key: 'calculation', label: 'Calcul' },
               { key: 'validity', label: 'Validité' },
-              { key: 'default', label: 'Défaut actuel' }
+              { key: 'defaults', label: 'Utilisation comme défaut' }
             ]"
             :rows="paymentRows"
           />
@@ -1411,10 +1530,19 @@ async function clearAudit(): Promise<void> {
                     </td>
                     <td>{{ account.type }}</td>
                     <td>{{ account.iban || '—' }}<br><small>{{ account.bic }}</small></td>
-                    <td>{{ account.active ? 'Actif' : 'Inactif' }}</td>
-                    <td>
+                    <td>{{ account.active ? 'Actif' : 'Archivé' }}</td>
+                    <td class="button-row">
                       <button class="button secondary compact" type="button" @click="editTreasuryAccount(account)">
                         Modifier
+                      </button>
+                      <button
+                        v-if="account.active"
+                        class="button danger compact"
+                        type="button"
+                        :disabled="store.saving"
+                        @click="removeTreasuryAccount(account)"
+                      >
+                        Supprimer ou archiver
                       </button>
                     </td>
                   </tr>
@@ -1582,8 +1710,18 @@ async function clearAudit(): Promise<void> {
                   <option value="personne">Personne</option>
                 </select>
               </label>
-              <label>Raison sociale
+              <label v-if="contactDraft.type === 'entreprise'">Raison sociale
                 <input v-model="contactDraft.company" :required="contactDraft.type === 'entreprise'">
+              </label>
+              <label v-else>Entreprise associée (facultatif)
+                <AccountCombobox
+                  v-model="contactDraft.company_contact_id"
+                  :options="managedReferences.contacts.filter((item) => item.type === 'entreprise' && item.active && item.id !== contactDraft.id)"
+                  label-key="company"
+                  number-key="__none__"
+                  :empty-value="null"
+                  placeholder="Rechercher une entreprise…"
+                />
               </label>
               <label>Prénom
                 <input v-model="contactDraft.first_name">
@@ -1645,28 +1783,66 @@ async function clearAudit(): Promise<void> {
           <article class="panel">
             <div class="panel-heading">
               <div><p class="eyebrow">Facturation</p><h2>Débiteurs et créanciers</h2></div>
-              <strong>{{ managedReferences.contacts.length }}</strong>
+              <strong>{{ filteredReferenceContacts.length }}</strong>
+            </div>
+            <div class="filter-bar contextual-filter">
+              <FormField id="reference-contact-search" label="Rechercher">
+                <template #default="{ describedBy }">
+                  <input
+                    id="reference-contact-search"
+                    v-model="contactReferenceSearch"
+                    :aria-describedby="describedBy"
+                    placeholder="Nom, entreprise, courriel…"
+                  >
+                </template>
+              </FormField>
+              <FormField id="reference-contact-status" label="Statut">
+                <template #default="{ describedBy }">
+                  <select
+                    id="reference-contact-status"
+                    v-model="contactReferenceStatus"
+                    :aria-describedby="describedBy"
+                  >
+                    <option value="active">Actifs</option>
+                    <option value="archived">Archivés</option>
+                    <option value="all">Tous</option>
+                  </select>
+                </template>
+              </FormField>
             </div>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>Contact</th><th>Rôles</th><th>Adresse</th><th>E-mail</th><th></th></tr></thead>
+                <thead><tr><th>Contact</th><th>Entreprise</th><th>Rôles</th><th>Offres</th><th>Commandes</th><th>Adresse</th><th>Statut</th><th></th></tr></thead>
                 <tbody>
-                  <tr v-for="contact in managedReferences.contacts" :key="contact.id">
-                    <td>{{ contactName(contact) }}</td>
+                  <tr v-for="contact in filteredReferenceContacts" :key="contact.id">
+                    <td>{{ contactName(contact) }}<br><small>{{ contact.email || '—' }}</small></td>
+                    <td>{{ contact.company_contact_name || (contact.type === 'entreprise' ? 'Entreprise' : 'Indépendant') }}</td>
                     <td>{{ contact.roles.join(', ') }}</td>
+                    <td>{{ contact.offers_count }}</td>
+                    <td>{{ contact.orders_count }}</td>
                     <td>{{ contact.address_line1 }}, {{ contact.postal_code }} {{ contact.city }}</td>
-                    <td>{{ contact.email || '—' }}</td>
+                    <td>{{ contact.active ? 'Actif' : 'Archivé' }}</td>
                     <td class="button-row">
-                      <button class="button secondary compact" type="button" @click="editContact(contact)">
+                      <button v-if="contact.active" class="button secondary compact" type="button" @click="editContact(contact)">
                         Modifier
                       </button>
                       <button
+                        v-if="contact.active"
                         class="button danger compact"
                         type="button"
                         :disabled="store.saving"
                         @click="deleteContact(contact)"
                       >
-                        Supprimer
+                        Supprimer ou archiver
+                      </button>
+                      <button
+                        v-else
+                        class="button secondary compact"
+                        type="button"
+                        :disabled="store.saving"
+                        @click="restoreContact(contact)"
+                      >
+                        Désarchiver
                       </button>
                     </td>
                   </tr>
@@ -1674,9 +1850,9 @@ async function clearAudit(): Promise<void> {
               </table>
             </div>
             <EmptyState
-              v-if="!managedReferences.contacts.length"
-              title="Aucun contact"
-              description="Créez le premier contact multi-rôles du dossier."
+              v-if="!filteredReferenceContacts.length"
+              title="Aucun contact correspondant"
+              description="Modifiez la recherche ou le filtre de statut."
             />
           </article>
         </template>
@@ -1700,6 +1876,121 @@ async function clearAudit(): Promise<void> {
               </button>
             </div>
           </div>
+          <article class="panel vat-regime-card">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Dossier · régime daté</p>
+                <h2>Avec ou sans TVA</h2>
+              </div>
+              <button
+                v-if="managedReferences.capabilities.vat"
+                class="button primary"
+                type="button"
+                @click="vatRegimeDialog?.open()"
+              >
+                Modifier le régime TVA
+              </button>
+            </div>
+            <div v-if="managedReferences.vat.regimes[0]" class="entity-readonly-card">
+              <div>
+                <span>Régime actuel</span>
+                <strong>
+                  {{
+                    managedReferences.vat.regimes[0].status === 'non_assujetti'
+                      ? 'Sans TVA · non assujetti'
+                      : managedReferences.vat.regimes[0].status === 'volontaire'
+                        ? 'Avec TVA · assujettissement volontaire'
+                        : 'Avec TVA · assujetti'
+                  }}
+                </strong>
+              </div>
+              <div>
+                <span>Applicable dès le</span>
+                <strong>{{ managedReferences.vat.regimes[0].valid_from }}</strong>
+              </div>
+              <div>
+                <span>N° TVA</span>
+                <strong>{{ managedReferences.vat.regimes[0].vat_number || 'Non applicable' }}</strong>
+              </div>
+              <div>
+                <span>Méthode</span>
+                <strong>{{ managedReferences.vat.regimes[0].method }}</strong>
+              </div>
+            </div>
+            <p class="help-text">
+              Sans TVA, les ventes ne présentent aucun calcul TVA et les achats
+              sont saisis TVA comprise sans impôt préalable récupérable. Un
+              changement crée une nouvelle valeur datée et conserve l’historique.
+            </p>
+          </article>
+          <ModalDialog
+            ref="vatRegimeDialog"
+            title="Configurer le régime TVA"
+            description="Le nouveau régime prend effet à la date choisie ; le régime précédent est automatiquement fermé."
+            wide
+          >
+            <form class="configuration-form" @submit.prevent="saveVatRegime">
+              <div class="configuration-grid">
+                <label>Traitement du dossier
+                  <select v-model="vatRegimeDraft.status">
+                    <option value="non_assujetti">Sans TVA · non assujetti</option>
+                    <option value="assujetti">Avec TVA · assujetti</option>
+                    <option value="volontaire">Avec TVA · assujettissement volontaire</option>
+                  </select>
+                </label>
+                <label>Applicable dès le
+                  <input v-model="vatRegimeDraft.valid_from" type="date" required>
+                </label>
+                <label v-if="vatRegimeDraft.status !== 'non_assujetti'">Numéro IDE / TVA
+                  <input v-model="vatRegimeDraft.vat_number" placeholder="CHE-123.456.789 TVA" required>
+                </label>
+                <label v-if="vatRegimeDraft.status !== 'non_assujetti'">Méthode
+                  <select v-model="vatRegimeDraft.method">
+                    <option value="effective">Méthode effective</option>
+                    <option value="tdfn">Taux de la dette fiscale nette</option>
+                  </select>
+                </label>
+                <label v-if="vatRegimeDraft.status !== 'non_assujetti'">Mode de décompte
+                  <select v-model="vatRegimeDraft.reporting_mode">
+                    <option value="convenues">Contre-prestations convenues</option>
+                    <option value="recues">Contre-prestations reçues</option>
+                  </select>
+                </label>
+                <label v-if="vatRegimeDraft.status !== 'non_assujetti'">Périodicité
+                  <select v-model="vatRegimeDraft.frequency">
+                    <option value="mensuelle">Mensuelle</option>
+                    <option value="trimestrielle">Trimestrielle</option>
+                    <option value="semestrielle">Semestrielle</option>
+                    <option value="annuelle">Annuelle</option>
+                  </select>
+                </label>
+              </div>
+              <fieldset v-if="vatRegimeDraft.status !== 'non_assujetti'">
+                <legend>Comptes TVA</legend>
+                <div class="configuration-grid">
+                  <label>Impôt préalable · matériel et services
+                    <AccountCombobox v-model="vatRegimeDraft.input_material_account_id" :options="managedReferences.vat.accounts" required />
+                  </label>
+                  <label>Impôt préalable · investissements
+                    <AccountCombobox v-model="vatRegimeDraft.input_investment_account_id" :options="managedReferences.vat.accounts" required />
+                  </label>
+                  <label>TVA due
+                    <AccountCombobox v-model="vatRegimeDraft.vat_due_account_id" :options="managedReferences.vat.accounts" required />
+                  </label>
+                  <label>Décompte TVA
+                    <AccountCombobox v-model="vatRegimeDraft.vat_settlement_account_id" :options="managedReferences.vat.accounts" required />
+                  </label>
+                  <label>Corrections TVA
+                    <AccountCombobox v-model="vatRegimeDraft.corrections_account_id" :options="managedReferences.vat.accounts" required />
+                  </label>
+                </div>
+              </fieldset>
+              <div class="form-actions">
+                <button class="button secondary" type="button" @click="vatRegimeDialog?.close()">Annuler</button>
+                <button class="button primary" :disabled="store.saving">Enregistrer le nouveau régime</button>
+              </div>
+            </form>
+          </ModalDialog>
           <ModalDialog
             ref="vatDialog"
             :title="vatDraft.id ? 'Modifier le code TVA' : 'Nouveau code TVA'"
@@ -2293,6 +2584,32 @@ async function clearAudit(): Promise<void> {
       @confirm="clearVatReferences"
     >
       <p>Cette action supprime ensemble les codes et le régime TVA technique du dossier. Toute période ou écriture TVA historique bloque l’opération afin de préserver la traçabilité.</p>
+    </ConfirmDialog>
+    <ConfirmDialog
+      ref="removeContactDialog"
+      title="Supprimer ou archiver ce contact ?"
+      confirm-label="Continuer"
+      tone="danger"
+      @confirm="deleteContact()"
+    >
+      <p>
+        « {{ pendingContactRemoval ? contactName(pendingContactRemoval) : '' }} »
+        sera supprimé s’il n’a aucun historique. S’il possède un document, un
+        paiement ou une donnée salariale, il sera archivé et restera consultable.
+      </p>
+    </ConfirmDialog>
+    <ConfirmDialog
+      ref="removeTreasuryDialog"
+      title="Supprimer ou archiver ce compte ?"
+      confirm-label="Continuer"
+      tone="danger"
+      @confirm="removeTreasuryAccount()"
+    >
+      <p>
+        « {{ pendingTreasuryRemoval?.label || '' }} » sera supprimé s’il n’a
+        jamais été utilisé, sinon archivé. Un compte choisi pour la facturation
+        doit d’abord être remplacé sous Entité.
+      </p>
     </ConfirmDialog>
     <ConfirmDialog
       ref="clearAuditDialog"

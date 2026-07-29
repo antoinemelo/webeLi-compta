@@ -18,8 +18,9 @@ ne contient de taux implicite.
 
 1. Installer le plan comptable du dossier et vérifier les comptes 1170, 1171,
    2200 et 2201.
-2. Créer un régime daté : assujettissement, méthode effective ou TDFN,
-   contre-prestations convenues ou reçues et périodicité.
+2. Dans **Configuration > Référentiels > TVA > Avec ou sans TVA**, créer un
+   régime daté : non-assujettissement ou assujettissement, méthode effective
+   ou TDFN, contre-prestations convenues ou reçues et périodicité.
 3. Créer les codes fiscaux utiles. La qualification est toujours choisie par
    l'utilisateur : le logiciel ne déduit jamais automatiquement le régime d'un
    don, d'une subvention, d'une formation ou d'une opération étrangère.

@@ -159,6 +159,17 @@ final class BillingInputValidator
         $company = trim((string) ($data['company'] ?? ''));
         $first = trim((string) ($data['first_name'] ?? ''));
         $last = trim((string) ($data['last_name'] ?? ''));
+        $companyContactId = $data['company_contact_id'] ?? null;
+        if (
+            $companyContactId !== null
+            && (!is_int($companyContactId) || $companyContactId < 1)
+        ) {
+            $errors['company_contact_id'][] = 'Entreprise associée invalide.';
+        }
+        if ($type === 'entreprise' && $companyContactId !== null) {
+            $errors['company_contact_id'][] =
+                'Une entreprise ne peut pas être rattachée à une autre entreprise.';
+        }
         if (
             !in_array($type, ['entreprise', 'personne'], true)
             || ($type === 'entreprise' && $company === '')
@@ -197,6 +208,9 @@ final class BillingInputValidator
                 ? $this->positiveInt($data, 'version', $errors) : null,
             'data' => [
                 'type_personne' => $type,
+                'entreprise_id' => $companyContactId === null
+                    ? null
+                    : (int) $companyContactId,
                 'raison_sociale' => $company,
                 'prenom' => $first,
                 'nom' => $last,
@@ -215,6 +229,182 @@ final class BillingInputValidator
                 'pays' => strtoupper(trim((string) ($address['country'] ?? 'CH'))),
             ],
             'idempotency_key' => $key,
+        ];
+        $this->fail($errors);
+        return $result;
+    }
+
+    /** @return array{contact_id:int,version:int} */
+    public function contactDeletion(Request $request): array
+    {
+        return $this->ids($request, ['contact_id', 'version']);
+    }
+
+    /** @return array<string,mixed> */
+    public function commercialDocument(Request $request): array
+    {
+        $this->rejectScope($request);
+        $data = $request->input();
+        $errors = [];
+        $type = (string) ($data['type'] ?? '');
+        if (!in_array($type, [
+            'offre_client',
+            'demande_offre_fournisseur',
+            'reponse_offre_fournisseur',
+            'commande_client',
+            'commande_fournisseur',
+        ], true)) {
+            $errors['type'][] = 'Type commercial invalide.';
+        }
+        $date = (string) ($data['document_date'] ?? '');
+        if (!$this->validDate($date)) {
+            $errors['document_date'][] = 'Date AAAA-MM-JJ requise.';
+        }
+        $validUntil = trim((string) ($data['valid_until'] ?? ''));
+        if ($validUntil !== '' && !$this->validDate($validUntil)) {
+            $errors['valid_until'][] = 'Date de validité invalide.';
+        }
+        $currency = strtoupper(trim((string) ($data['currency'] ?? '')));
+        if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
+            $errors['currency'][] = 'Code devise ISO requis.';
+        }
+        $result = [
+            'id' => $this->optionalPositiveInt($data, 'id', $errors) ?? 0,
+            'version' => $this->optionalPositiveInt($data, 'version', $errors) ?? 0,
+            'type' => $type,
+            'contact_id' => $this->positiveInt($data, 'contact_id', $errors),
+            'document_date' => $date,
+            'valid_until' => $validUntil,
+            'currency' => $currency,
+            'external_number' => trim((string) ($data['external_number'] ?? '')),
+            'source_document_id' => $this->optionalPositiveInt(
+                $data,
+                'source_document_id',
+                $errors
+            ),
+            'header_text' => trim((string) ($data['header_text'] ?? '')),
+            'footer_text' => trim((string) ($data['footer_text'] ?? '')),
+            'internal_note' => trim((string) ($data['internal_note'] ?? '')),
+            'lines' => $this->lines(
+                $data['lines'] ?? null,
+                $errors,
+                accountRequired: false
+            ),
+        ];
+        if ($result['id'] > 0 && $result['version'] < 1) {
+            $errors['version'][] = 'Version requise pour une modification.';
+        }
+        $this->fail($errors);
+        return $result;
+    }
+
+    /** @return array{document_id:int,version:int,status:string} */
+    public function commercialStatus(Request $request): array
+    {
+        $this->rejectScope($request);
+        $data = $request->input();
+        $errors = [];
+        $status = (string) ($data['status'] ?? '');
+        if (!in_array($status, [
+            'envoye', 'recu', 'accepte', 'refuse', 'remplace',
+            'annule', 'archive',
+        ], true)) {
+            $errors['status'][] = 'Statut commercial invalide.';
+        }
+        $result = [
+            'document_id' => $this->positiveInt(
+                $data,
+                'document_id',
+                $errors
+            ),
+            'version' => $this->positiveInt($data, 'version', $errors),
+            'status' => $status,
+        ];
+        $this->fail($errors);
+        return $result;
+    }
+
+    /** @return array<string,mixed> */
+    public function commercialConversion(Request $request): array
+    {
+        $this->rejectScope($request);
+        $data = $request->input();
+        $errors = [];
+        $targetType = (string) ($data['target_type'] ?? '');
+        if (!in_array($targetType, [
+            'reponse_offre_fournisseur',
+            'commande_client',
+            'commande_fournisseur',
+            'facture_client',
+            'facture_fournisseur',
+        ], true)) {
+            $errors['target_type'][] = 'Cible de conversion invalide.';
+        }
+        $date = (string) ($data['document_date'] ?? '');
+        if (!$this->validDate($date)) {
+            $errors['document_date'][] = 'Date de conversion invalide.';
+        }
+        $dueDate = trim((string) ($data['due_date'] ?? ''));
+        if ($dueDate !== '' && !$this->validDate($dueDate)) {
+            $errors['due_date'][] = 'Échéance invalide.';
+        }
+        $validUntil = trim((string) ($data['valid_until'] ?? ''));
+        if ($validUntil !== '' && !$this->validDate($validUntil)) {
+            $errors['valid_until'][] = 'Date de validité invalide.';
+        }
+        if ($dueDate !== '' && $dueDate < $date) {
+            $errors['due_date'][] = 'L’échéance doit suivre la date du document.';
+        }
+        if ($validUntil !== '' && $validUntil < $date) {
+            $errors['valid_until'][] =
+                'La validité doit suivre la date du document.';
+        }
+        $lineAccounts = [];
+        if (str_starts_with($targetType, 'facture_')) {
+            $rawLineAccounts = $data['line_accounts'] ?? null;
+            if (!is_array($rawLineAccounts) || $rawLineAccounts === []) {
+                $errors['line_accounts'][] =
+                    'Choisissez un compte comptable pour chaque position.';
+            } else {
+                foreach (array_values($rawLineAccounts) as $index => $mapping) {
+                    if (!is_array($mapping)) {
+                        $errors["line_accounts.{$index}"][] = 'Répartition invalide.';
+                        continue;
+                    }
+                    $lineAccounts[] = [
+                        'line_id' => $this->positiveInt(
+                            $mapping,
+                            'line_id',
+                            $errors,
+                            "line_accounts.{$index}.line_id"
+                        ),
+                        'account_id' => $this->positiveInt(
+                            $mapping,
+                            'account_id',
+                            $errors,
+                            "line_accounts.{$index}.account_id"
+                        ),
+                    ];
+                }
+            }
+        }
+        $result = [
+            'source_document_id' => $this->positiveInt(
+                $data,
+                'source_document_id',
+                $errors
+            ),
+            'target_type' => $targetType,
+            'document_date' => $date,
+            'due_date' => $dueDate,
+            'valid_until' => $validUntil,
+            'collective_account_id' => $this->optionalPositiveInt(
+                $data,
+                'collective_account_id',
+                $errors
+            ),
+            'external_number' => trim((string) ($data['external_number'] ?? '')),
+            'line_accounts' => $lineAccounts,
         ];
         $this->fail($errors);
         return $result;
@@ -412,7 +602,11 @@ final class BillingInputValidator
      * @param array<string,list<string>> $errors
      * @return list<array<string,mixed>>
      */
-    private function lines(mixed $value, array &$errors): array
+    private function lines(
+        mixed $value,
+        array &$errors,
+        bool $accountRequired = true,
+    ): array
     {
         if (!is_array($value) || $value === []) {
             $errors['lines'][] = 'Au moins une ligne est requise.';
@@ -447,18 +641,25 @@ final class BillingInputValidator
                     "lines.{$index}.unit_price_cents"
                 ),
                 'mode_saisie' => $mode,
-                'compte_id' => $this->positiveInt(
-                    $line,
-                    'account_id',
-                    $errors,
-                    "lines.{$index}.account_id"
-                ),
-                'code_tva_id' => $this->positiveInt(
+                'compte_id' => $accountRequired
+                    ? $this->positiveInt(
+                        $line,
+                        'account_id',
+                        $errors,
+                        "lines.{$index}.account_id"
+                    )
+                    : ($this->optionalPositiveInt(
+                        $line,
+                        'account_id',
+                        $errors,
+                        "lines.{$index}.account_id"
+                    ) ?? 0),
+                'code_tva_id' => $this->optionalPositiveInt(
                     $line,
                     'vat_code_id',
                     $errors,
                     "lines.{$index}.vat_code_id"
-                ),
+                ) ?? 0,
                 'date_prestation' => $this->validDate($line['service_date'] ?? null)
                     ? (string) $line['service_date']
                     : '',
@@ -534,6 +735,7 @@ final class BillingInputValidator
         array $data,
         string $field,
         array &$errors,
+        ?string $errorField = null,
     ): ?int {
         if (
             !array_key_exists($field, $data)
@@ -542,7 +744,7 @@ final class BillingInputValidator
         ) {
             return null;
         }
-        return $this->positiveInt($data, $field, $errors);
+        return $this->positiveInt($data, $field, $errors, $errorField);
     }
 
     /** @param array<string,mixed> $data @param array<string,list<string>> $errors */

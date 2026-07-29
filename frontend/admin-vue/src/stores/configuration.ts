@@ -38,6 +38,15 @@ export const useConfigurationStore = defineStore('configuration', {
         version
       });
     },
+    async restoreContact(id: number, version: number): Promise<void> {
+      await this.mutateReference('/configuration/references/contacts/restore', {
+        id,
+        version
+      });
+    },
+    async saveVatRegime(data: Record<string, unknown>): Promise<void> {
+      await this.mutateReference('/configuration/references/vat-regimes', data);
+    },
     async saveVatCode(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/vat-codes', data);
     },
@@ -58,6 +67,12 @@ export const useConfigurationStore = defineStore('configuration', {
     },
     async saveTreasuryAccount(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/treasury-accounts', data);
+    },
+    async removeTreasuryAccount(id: number, version: number): Promise<void> {
+      await this.mutateReference(
+        '/configuration/references/treasury-accounts/remove',
+        { id, version }
+      );
     },
     async saveCurrency(data: Record<string, unknown>): Promise<void> {
       await this.mutateReference('/configuration/references/currencies', data);
@@ -117,6 +132,7 @@ export const useConfigurationStore = defineStore('configuration', {
       try {
         await api.post<unknown>(path, data);
         await this.load();
+        window.dispatchEvent(new CustomEvent('compta:configuration-changed'));
       } catch (error) {
         this.error = errorMessage(error);
         throw error;
@@ -130,6 +146,7 @@ export const useConfigurationStore = defineStore('configuration', {
       try {
         await api.post<unknown>(path, data);
         await Promise.all([this.load(), this.loadManagedReferences()]);
+        window.dispatchEvent(new CustomEvent('compta:configuration-changed'));
       } catch (error) {
         this.error = errorMessage(error);
         throw error;

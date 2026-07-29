@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Compta\Core\Auth\UserRepository;
+use Compta\Core\Auth\PasswordPolicy;
+use Compta\Core\Auth\PasswordResetService;
 use Compta\Core\Config\AppConfig;
 use Compta\Core\Database\BackupService;
 use Compta\Core\Database\ConnectionFactory;
@@ -10,6 +12,7 @@ use Compta\Core\Database\IntegrityChecker;
 use Compta\Core\Database\MigrationRunner;
 use Compta\Core\Diagnostics\Doctor;
 use Compta\Core\Audit\AuditLogger;
+use Compta\Core\Mail\ConfiguredMailer;
 use Compta\Modules\Dossiers\ScopeManager;
 use Compta\Modules\Dossiers\DossierRegistryService;
 use Compta\Modules\Compta\AccountingSetupService;
@@ -51,6 +54,16 @@ if ($command === 'qualify') {
     require $root . '/tools/qualification.php';
     exit(runQualification($root));
 }
+if ($command === 'security:password-check') {
+    try {
+        PasswordPolicy::assert(getenv('COMPTA_ADMIN_PASSWORD') ?: '');
+        echo "Mot de passe conforme à la politique de sécurité.\n";
+        exit(0);
+    } catch (Throwable $e) {
+        fwrite(STDERR, "ERREUR: {$e->getMessage()}\n");
+        exit(1);
+    }
+}
 
 $config = AppConfig::load($root);
 $pdo = ConnectionFactory::sqlite($config->string('database_path'));
@@ -64,6 +77,7 @@ try {
         'instance:init' => initializeInstance($pdo, $root, $options),
         'pedagogie:ready' => ensurePedagogyReady($pdo, $options),
         'user:create-admin' => createAdmin($pdo, $options),
+        'user:reset-password' => resetUserPassword($pdo, $config, $options),
         'organisation:create' => createOrganisation($pdo, $options),
         'dossier:create' => createDossier($pdo, $options),
         'exercice:create' => createExercise($pdo, $options),
@@ -101,9 +115,11 @@ Compta — commandes du socle
   db:migrate --plan
   db:migrate --apply --backup
   db:integrity
+  security:password-check
   instance:init --admin-email=admin@example.test --organisation="Mon organisation" --nature=reelle --dossier="Comptabilité" --slug=comptabilite --type=reel --monnaie=CHF --exercice=2026 --debut=2026-01-01 --fin=2026-12-31 --modules=liquidites,facturation,comptabilite,salaires [--pedagogie] [--organisation-pedagogique="École WebeLi"] [--dossier-pedagogique="Démonstration guidée"]
   pedagogie:ready --organisation=2 --dossier=2 --acteur=1
   user:create-admin --email=admin@example.test
+  user:reset-password --email=utilisateur@example.test
   organisation:create --nom="École" --nature=pedagogique
   dossier:create --organisation=1 --nom="Mandat" --slug=mandat --type=exercice
   exercice:create --dossier=1 --libelle=2026 --debut=2026-01-01 --fin=2026-12-31
@@ -184,7 +200,7 @@ function createAdmin(PDO $pdo, array $options): int
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         throw new RuntimeException('Utilisez --email=adresse-valide.');
     }
-    if (strlen($password) < 12) {
+    if (mb_strlen($password) < 12) {
         throw new RuntimeException('Définissez COMPTA_ADMIN_PASSWORD (12 caractères minimum).');
     }
     $users = new UserRepository($pdo);
@@ -208,6 +224,31 @@ function createAdmin(PDO $pdo, array $options): int
 }
 
 /** @param array<string, mixed> $options */
+function resetUserPassword(PDO $pdo, AppConfig $config, array $options): int
+{
+    $email = optionString($options, 'email');
+    $password = getenv('COMPTA_RESET_PASSWORD') ?: '';
+    if ($password === '') {
+        throw new RuntimeException(
+            'Définissez COMPTA_RESET_PASSWORD avec le nouveau mot de passe.'
+        );
+    }
+    $users = new UserRepository($pdo);
+    $result = (new PasswordResetService(
+        $pdo,
+        $users,
+        new AuditLogger($pdo),
+        new ConfiguredMailer($config),
+        $config
+    ))->administrativeReset($email, $password);
+    echo "Mot de passe réinitialisé et sessions révoquées : {$email}\n";
+    if ($result['mfa_mode'] !== 'password') {
+        echo "Le second facteur reste actif ({$result['mfa_mode']}).\n";
+    }
+    return 0;
+}
+
+/** @param array<string, mixed> $options */
 function initializeInstance(PDO $pdo, string $root, array $options): int
 {
     $email = optionString($options, 'admin-email');
@@ -215,7 +256,7 @@ function initializeInstance(PDO $pdo, string $root, array $options): int
     if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         throw new RuntimeException('Adresse e-mail administrateur invalide.');
     }
-    if (strlen($password) < 12) {
+    if (mb_strlen($password) < 12) {
         throw new RuntimeException(
             'Définissez COMPTA_ADMIN_PASSWORD (12 caractères minimum).'
         );

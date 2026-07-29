@@ -18,18 +18,21 @@ administrateur, organisation, dossier, exercice, période, journal, plan
 comptable, modules, codes TVA et régime TVA initial. Ce régime prudent est
 configuré comme **non assujetti**, sans inventer de numéro TVA, et prend effet
 au premier jour de l’exercice. Il doit être remplacé dans
-`Comptabilité > Clôture > TVA` lorsque l’organisation est assujettie.
+`Configuration > Référentiels > TVA` lorsque l’organisation est assujettie.
 
 L’initialisation propose par défaut une seconde organisation pédagogique avec
 son dossier de démonstration et les sept parcours WebeLi, sans question
 supplémentaire. Le mot de passe est demandé sans être affiché ni placé dans la
-ligne de commande.
+ligne de commande. Il doit contenir au moins 12 caractères et ne peut pas être
+une combinaison prévisible telle que `ChangeMe123!`. Cette validation a lieu
+avant la création, les migrations et les sauvegardes ; en mode interactif, une
+saisie refusée est simplement redemandée.
 
 La sous-commande équivalente utilise la variable d’environnement
 `COMPTA_ADMIN_PASSWORD` :
 
 ```bash
-COMPTA_ADMIN_PASSWORD='mot-de-passe-long' \
+COMPTA_ADMIN_PASSWORD='<phrase-secrète-unique-de-12-caractères-ou-plus>' \
 python3 tools/python/compta.py db-create \
   --path storage/database/nouvelle.sqlite \
   --initialize \

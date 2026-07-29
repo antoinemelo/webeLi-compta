@@ -15,7 +15,7 @@ Le dossier doit posséder un régime TVA couvrant la date de la dépense. Une
 base ou un dossier créé par l’initialisation standard reçoit automatiquement
 un régime `non_assujetti` daté du début de l’exercice. Si l’organisation est
 assujettie, ce régime doit être remplacé par sa configuration réelle dans
-`Comptabilité > Clôture > TVA`.
+`Configuration > Référentiels > TVA`.
 
 ## Cycle
 

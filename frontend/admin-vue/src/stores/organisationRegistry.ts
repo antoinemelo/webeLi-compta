@@ -334,6 +334,7 @@ export const useOrganisationRegistryStore = defineStore('organisationRegistry', 
         await api.post<unknown>(path, data);
         await this.load();
         if (reloadSelected && this.selected) await this.select(this.selected.id);
+        window.dispatchEvent(new CustomEvent('compta:configuration-changed'));
       } catch (error) {
         this.error = errorMessage(error);
         throw error;

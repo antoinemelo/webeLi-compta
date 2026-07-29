@@ -4,6 +4,7 @@ declare(strict_types=1);
 namespace Compta\Modules\Dossiers;
 
 use Compta\Core\Audit\AuditLogger;
+use Compta\Core\Auth\PasswordPolicy;
 use Compta\Core\Auth\UserRepository;
 use PDO;
 use Throwable;
@@ -1276,10 +1277,12 @@ SQL;
                 );
             }
             $password = (string) $row[4];
-            if ($password !== '' && strlen($password) < 12) {
+            $passwordViolation = $password === ''
+                ? null
+                : PasswordPolicy::violation($password);
+            if ($passwordViolation !== null) {
                 throw new StructureAccessException(
-                    "CSV utilisateurs, ligne {$line}: le mot de passe doit "
-                    . 'contenir au moins 12 caractères.'
+                    "CSV utilisateurs, ligne {$line}: {$passwordViolation}"
                 );
             }
             if (!isset($existing[$email]) && $password === '') {

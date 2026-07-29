@@ -94,43 +94,6 @@ async function refresh(): Promise<void> {
 </script>
 
 <template>
-  <header class="page-heading dashboard-header">
-    <div>
-      <h1>Tableau de bord</h1>
-    </div>
-    <form v-if="context.selection && context.exercises.length" class="dashboard-filters" @submit.prevent="refresh">
-      <FormField id="dashboard-exercise" label="Exercice">
-        <template #default="{ describedBy }">
-          <select
-            id="dashboard-exercise"
-            v-model.number="exerciseId"
-            :aria-describedby="describedBy"
-            @change="onExerciseChange"
-          >
-            <option v-for="exercise in context.exercises" :key="exercise.id" :value="exercise.id">
-              {{ exercise.label }}
-            </option>
-          </select>
-        </template>
-      </FormField>
-      <FormField id="dashboard-date" label="Date d’arrêté">
-        <template #default="{ describedBy }">
-          <input
-            id="dashboard-date"
-            v-model="asOfDate"
-            type="date"
-            :min="selectedExercise?.start_date"
-            :max="selectedExercise?.end_date"
-            :aria-describedby="describedBy"
-          >
-        </template>
-      </FormField>
-      <button class="button primary" type="submit" :disabled="dashboard.loading">
-        Actualiser
-      </button>
-    </form>
-  </header>
-
   <EmptyState
     v-if="!context.selection"
     title="Sélectionnez un dossier depuis l’icône filtre en haut à droite"
@@ -145,35 +108,64 @@ async function refresh(): Promise<void> {
     <ErrorSummary :message="dashboard.error" />
     <SkeletonBlock v-if="dashboard.loading && !projection" :lines="8" />
 
-    <template v-if="projection">
       <section class="dashboard-scope" aria-label="Périmètre du calcul">
-        <span>
-          <small>Exercice</small>
-          <strong>{{ projection.scope.exercise.label }}</strong>
-        </span>
-        <span>
-          <small>Date d’arrêté</small>
-          <strong>{{ projection.scope.as_of_date }}</strong>
-        </span>
-        <span>
-          <small>Période</small>
-          <strong>
-            {{ projection.scope.period?.label || 'Aucune période correspondante' }}
-            <span
-              v-if="projection.scope.period"
-              class="status-badge"
-              :class="`status-${projection.scope.period.status}`"
-            >
-              {{ projection.scope.period.status === 'fermee' ? 'Fermée' : 'Ouverte' }}
-            </span>
-          </strong>
-        </span>
-        <span>
-          <small>Devise de base</small>
-          <strong>{{ currency }}</strong>
-        </span>
+        <div class="dashboard-scope-summary">
+          <span>
+            <small>Période</small>
+            <strong>
+              {{ projection?.scope.period?.label || 'Aucune période correspondante' }}
+              <span
+                v-if="projection?.scope.period"
+                class="status-badge"
+                :class="`status-${projection.scope.period.status}`"
+              >
+                {{ projection.scope.period.status === 'fermee' ? 'Fermée' : 'Ouverte' }}
+              </span>
+            </strong>
+          </span>
+          <span>
+            <small>Devise de base</small>
+            <strong>{{ currency }}</strong>
+          </span>
+        </div>
+        <form
+          v-if="context.selection && context.exercises.length"
+          class="dashboard-filters"
+          @submit.prevent="refresh"
+        >
+          <FormField id="dashboard-exercise" label="Exercice">
+            <template #default="{ describedBy }">
+              <select
+                id="dashboard-exercise"
+                v-model.number="exerciseId"
+                :aria-describedby="describedBy"
+                @change="onExerciseChange"
+              >
+                <option v-for="exercise in context.exercises" :key="exercise.id" :value="exercise.id">
+                  {{ exercise.label }}
+                </option>
+              </select>
+            </template>
+          </FormField>
+          <FormField id="dashboard-date" label="Date d’arrêté">
+            <template #default="{ describedBy }">
+              <input
+                id="dashboard-date"
+                v-model="asOfDate"
+                type="date"
+                :min="selectedExercise?.start_date"
+                :max="selectedExercise?.end_date"
+                :aria-describedby="describedBy"
+              >
+            </template>
+          </FormField>
+          <button class="button primary" type="submit" :disabled="dashboard.loading">
+            Actualiser
+          </button>
+        </form>
       </section>
 
+    <template v-if="projection">
       <EmptyState
         v-if="projection.empty_state.is_empty"
         title="Aucune activité à cette date"
@@ -305,15 +297,6 @@ async function refresh(): Promise<void> {
       </section>
 
 
-      <details class="calculation-details">
-        <summary>Définitions du calcul</summary>
-        <ul>
-          <li>{{ projection.calculation.revenue_definition }}</li>
-          <li>{{ projection.calculation.expenses_definition }}</li>
-          <li>{{ projection.calculation.open_items_definition }}</li>
-          <li>{{ projection.calculation.overdue_definition }}</li>
-        </ul>
-      </details>
     </template>
   </template>
 </template>

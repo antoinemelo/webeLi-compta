@@ -6,7 +6,21 @@ return [
     'debug' => false,
     'instance_id' => 'entreprise-1',
     'base_url' => '/entreprise-1',
+    // URL HTTPS complète de cette instance, sans barre oblique finale.
+    'public_url' => 'https://compta.example/entreprise-1',
     'storage_path' => '/chemin/prive/compta-entreprise-1',
     'database_path' => '/chemin/prive/compta-entreprise-1/database/app.sqlite',
     'setup_secret' => 'remplacer-par-une-longue-valeur-aleatoire',
+    // Clé stable, propre à l’instance et conservée hors du webroot.
+    // Exemple : bin2hex(random_bytes(32)).
+    'mfa_encryption_key' => 'remplacer-par-au-moins-32-caracteres-aleatoires',
+    // « php » s’appuie sur le MTA du serveur. « smtp » active les options ci-dessous.
+    'mail_transport' => 'php',
+    'mail_from_address' => 'no-reply@compta.example',
+    'mail_from_name' => 'Compta',
+    'smtp_host' => '',
+    'smtp_port' => 587,
+    'smtp_encryption' => 'tls',
+    'smtp_username' => '',
+    'smtp_password' => '',
 ];

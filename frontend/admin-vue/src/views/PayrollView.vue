@@ -23,6 +23,25 @@ const currentYear = new Date().getFullYear();
 const year = ref(currentYear);
 const tab = computed(() => String(route.params.tab || 'employees'));
 const workspace = computed(() => store.workspace);
+const availableYears = computed(() => {
+  const years = new Set<number>([
+    year.value,
+    currentYear - 2,
+    currentYear - 1,
+    currentYear,
+    currentYear + 1,
+    currentYear + 2
+  ]);
+  for (const payroll of workspace.value?.payrolls || []) {
+    const payrollYear = n(payroll, 'annee');
+    if (payrollYear >= 2000 && payrollYear <= 9999) years.add(payrollYear);
+  }
+  for (const exercise of context.exercises) {
+    const exerciseYear = Number(String(exercise.label).match(/\d{4}/)?.[0] || 0);
+    if (exerciseYear >= 2000 && exerciseYear <= 9999) years.add(exerciseYear);
+  }
+  return Array.from(years).sort((left, right) => right - left);
+});
 const employee = reactive({
   id: 0, version: 0,
   first_name: '', last_name: '', avs: '', email: '', birth_date: '',
@@ -598,14 +617,19 @@ onMounted(() => reload());
 </script>
 
 <template>
-  <header class="page-heading">
-    <div>
-      <h1>Salaires</h1>
-      <p>Contrats datés, calculs au centime, dettes séparées et certificats non transmis.</p>
-    </div>
-    <label>Année <input v-model.number="year" type="number" min="2000" max="9999"></label>
-  </header>
-  <CompactTabs :items="subNavigation.payroll" label="Navigation des salaires" />
+  <CompactTabs :items="subNavigation.payroll" label="Navigation des salaires">
+    <template #actions>
+      <select
+        v-model.number="year"
+        class="form-select form-select-sm compact-tab-select"
+        aria-label="Année"
+      >
+        <option v-for="availableYear in availableYears" :key="availableYear" :value="availableYear">
+          {{ availableYear }}
+        </option>
+      </select>
+    </template>
+  </CompactTabs>
   <ErrorSummary :message="store.error" />
   <SkeletonBlock v-if="store.loading && !workspace" :lines="8" />
 

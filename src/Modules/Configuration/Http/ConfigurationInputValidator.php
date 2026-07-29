@@ -13,6 +13,34 @@ use DateTimeImmutable;
 
 final class ConfigurationInputValidator
 {
+    public function setupGuideStep(Request $request): string
+    {
+        $data = $this->only($request, ['step']);
+        $step = is_string($data['step'] ?? null)
+            ? trim((string) $data['step'])
+            : '';
+        if (!in_array($step, ['exercises', 'opening', 'vat', 'accounting'], true)) {
+            throw ApiException::validation([
+                'step' => ['Étape de configuration invalide.'],
+            ]);
+        }
+        return $step;
+    }
+
+    public function setupGuideAction(Request $request): string
+    {
+        $data = $this->only($request, ['action']);
+        $action = is_string($data['action'] ?? null)
+            ? trim((string) $data['action'])
+            : '';
+        if (!in_array($action, ['cancel', 'resume'], true)) {
+            throw ApiException::validation([
+                'action' => ['Action de parcours invalide.'],
+            ]);
+        }
+        return $action;
+    }
+
     /** @return array{currency:string,active:bool} */
     public function currency(Request $request): array
     {
@@ -87,7 +115,8 @@ final class ConfigurationInputValidator
             'organization_version', 'dossier_version', 'name', 'legal_name',
             'legal_form', 'uid', 'address_line1', 'address_line2',
             'postal_code', 'city', 'canton', 'country', 'phone', 'email',
-            'website', 'billing_iban', 'base_currency',
+            'website', 'billing_treasury_account_id', 'base_currency',
+            'vat_exempt', 'vat_effective_from',
         ]);
         $errors = [];
         foreach (['organization_version', 'dossier_version'] as $field) {
@@ -100,9 +129,22 @@ final class ConfigurationInputValidator
                 $errors[$field][] = 'Valeur requise.';
             }
         }
-        $data['billing_iban'] ??= '';
-        if (!is_string($data['billing_iban'])) {
-            $errors['billing_iban'][] = 'IBAN textuel requis.';
+        $billingAccountId = $data['billing_treasury_account_id'] ?? null;
+        if (
+            $billingAccountId !== null
+            && (!is_int($billingAccountId) || $billingAccountId < 1)
+        ) {
+            $errors['billing_treasury_account_id'][] =
+                'Compte de trésorerie invalide.';
+        }
+        if (!is_bool($data['vat_exempt'] ?? null)) {
+            $errors['vat_exempt'][] = 'Statut TVA explicite requis.';
+        }
+        if (
+            !is_string($data['vat_effective_from'] ?? null)
+            || !$this->validDate((string) $data['vat_effective_from'])
+        ) {
+            $errors['vat_effective_from'][] = 'Date d’effet TVA invalide.';
         }
         $this->fail($errors);
         return $data;
@@ -182,7 +224,8 @@ final class ConfigurationInputValidator
     public function contact(Request $request): array
     {
         $data = $this->only($request, [
-            'id', 'version', 'type', 'company', 'first_name', 'last_name', 'email', 'phone',
+            'id', 'version', 'type', 'company_contact_id',
+            'company', 'first_name', 'last_name', 'email', 'phone',
             'language', 'roles', 'address_line1', 'address_line2',
             'postal_code', 'city', 'country', 'payment_iban', 'payment_bic',
         ]);
@@ -198,6 +241,17 @@ final class ConfigurationInputValidator
         $type = $data['type'] ?? null;
         if (!is_string($type) || !in_array($type, ['entreprise', 'personne'], true)) {
             $errors['type'][] = 'Type de contact invalide.';
+        }
+        $companyContactId = $data['company_contact_id'] ?? null;
+        if (
+            $companyContactId !== null
+            && (!is_int($companyContactId) || $companyContactId < 1)
+        ) {
+            $errors['company_contact_id'][] = 'Entreprise associée invalide.';
+        }
+        if ($type === 'entreprise' && $companyContactId !== null) {
+            $errors['company_contact_id'][] =
+                'Une entreprise ne peut pas être rattachée à une autre entreprise.';
         }
         foreach ([
             'company', 'first_name', 'last_name', 'email', 'phone', 'language',
@@ -276,6 +330,9 @@ final class ConfigurationInputValidator
             'id' => (int) $data['id'],
             'version' => (int) $data['version'],
             'type' => $type,
+            'company_contact_id' => $companyContactId === null
+                ? null
+                : (int) $companyContactId,
             'company' => trim((string) $data['company']),
             'first_name' => trim((string) $data['first_name']),
             'last_name' => trim((string) $data['last_name']),
@@ -290,6 +347,83 @@ final class ConfigurationInputValidator
             'country' => $country,
             'payment_iban' => $paymentIban,
             'payment_bic' => $paymentBic,
+        ];
+    }
+
+    /** @return array<string,mixed> */
+    public function vatRegime(Request $request): array
+    {
+        $data = $this->only($request, [
+            'status', 'vat_number', 'method', 'reporting_mode', 'frequency',
+            'valid_from', 'valid_until', 'input_material_account_id',
+            'input_investment_account_id', 'vat_due_account_id',
+            'vat_settlement_account_id', 'corrections_account_id',
+        ]);
+        $errors = [];
+        $status = (string) ($data['status'] ?? '');
+        if (!in_array($status, ['non_assujetti', 'assujetti', 'volontaire'], true)) {
+            $errors['status'][] = 'Régime TVA invalide.';
+        }
+        $method = (string) ($data['method'] ?? 'effective');
+        if (!in_array($method, ['effective', 'tdfn'], true)) {
+            $errors['method'][] = 'Méthode TVA invalide.';
+        }
+        $reportingMode = (string) ($data['reporting_mode'] ?? 'convenues');
+        if (!in_array($reportingMode, ['convenues', 'recues'], true)) {
+            $errors['reporting_mode'][] = 'Mode de décompte invalide.';
+        }
+        $frequency = (string) ($data['frequency'] ?? 'trimestrielle');
+        if (!in_array(
+            $frequency,
+            ['mensuelle', 'trimestrielle', 'semestrielle', 'annuelle'],
+            true
+        )) {
+            $errors['frequency'][] = 'Périodicité TVA invalide.';
+        }
+        $validFrom = (string) ($data['valid_from'] ?? '');
+        $validUntil = trim((string) ($data['valid_until'] ?? ''));
+        if (!$this->validDate($validFrom)) {
+            $errors['valid_from'][] = 'Date d’effet invalide.';
+        }
+        if ($validUntil !== '' && !$this->validDate($validUntil)) {
+            $errors['valid_until'][] = 'Date de fin invalide.';
+        }
+        if ($validUntil !== '' && $validFrom !== '' && $validUntil < $validFrom) {
+            $errors['valid_until'][] = 'La fin précède le début.';
+        }
+        $accountMap = [
+            'input_material_account_id',
+            'input_investment_account_id',
+            'vat_due_account_id',
+            'vat_settlement_account_id',
+            'corrections_account_id',
+        ];
+        $accounts = [];
+        foreach ($accountMap as $field) {
+            $value = $data[$field] ?? null;
+            if ($status !== 'non_assujetti') {
+                if (!is_int($value) || $value < 1) {
+                    $errors[$field][] = 'Compte comptable requis.';
+                }
+                $accounts[$field] = is_int($value) ? $value : null;
+            } else {
+                $accounts[$field] = null;
+            }
+        }
+        $vatNumber = trim((string) ($data['vat_number'] ?? ''));
+        if ($status !== 'non_assujetti' && $vatNumber === '') {
+            $errors['vat_number'][] = 'Numéro IDE/TVA requis.';
+        }
+        $this->fail($errors);
+        return [
+            'status' => $status,
+            'vat_number' => $vatNumber,
+            'method' => $method,
+            'reporting_mode' => $reportingMode,
+            'frequency' => $frequency,
+            'valid_from' => $validFrom,
+            'valid_until' => $validUntil,
+            ...$accounts,
         ];
     }
 

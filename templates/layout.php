@@ -6,6 +6,7 @@ use Compta\Core\Support\Html;
 $ui = is_array($ui_context ?? null) ? $ui_context : [];
 $authenticated = ($ui['authenticated'] ?? false) === true;
 $path = (string) ($ui['path'] ?? '');
+$loginPage = !$authenticated && $path === '/login';
 ?>
 <!doctype html>
 <html lang="fr">
@@ -14,31 +15,56 @@ $path = (string) ($ui['path'] ?? '');
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title><?= Html::escape($title) ?> — Compta</title>
+  <?php if ($loginPage): ?>
+    <link rel="preload"
+      href="<?= Html::escape($config->url('/assets/fonts/montserrat/Montserrat-Variable.ttf')) ?>"
+      as="font" type="font/ttf" crossorigin>
+    <link rel="preload"
+      href="<?= Html::escape($config->url('/assets/fonts/raleway/Raleway-Variable.ttf')) ?>"
+      as="font" type="font/ttf" crossorigin>
+  <?php endif; ?>
   <link rel="stylesheet"
     href="<?= Html::escape($config->url('/assets/vendor/bootstrap/bootstrap.min.css')) ?>">
   <link rel="stylesheet" href="<?= Html::escape($config->url('/assets/app.css')) ?>">
 </head>
-<body class="bg-body-tertiary">
+<body class="<?= $loginPage ? 'login-page' : 'bg-body-tertiary' ?>">
   <a class="skip-link" href="#contenu">Aller au contenu</a>
-  <header class="app-header no-print">
-    <div class="container-fluid app-header-inner">
-      <a class="navbar-brand fw-semibold" href="<?= Html::escape($config->url('/')) ?>">
-        WebeLi Compta
-      </a>
-      <div class="d-flex align-items-center gap-2">
-        <span class="instance-badge">
-          Instance <strong><?= Html::escape((string) ($ui['instance'] ?? $config->string('instance_id'))) ?></strong>
-        </span>
-        <?php if ($authenticated): ?>
+  <?php if ($loginPage): ?>
+    <header class="login-header no-print">
+      <div class="container-fluid login-header-inner">
+        <a class="login-brand" href="<?= Html::escape($config->url('/')) ?>">
+          WebeLi <strong>Compta</strong>
+        </a>
+        <a class="login-shortcut" href="#login-form" aria-label="Connexion"
+          title="Connexion">
+          <svg class="login-shortcut-icon" viewBox="0 0 16 16"
+            aria-hidden="true" focusable="false">
+            <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6m2-3a2 2 0 1 1-4 0 2 2 0 0 1 4 0m4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4m-1-.004c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10s-3.516.68-4.168 1.332c-.678.678-.83 1.418-.832 1.664z"/>
+          </svg>
+        </a>
+      </div>
+    </header>
+  <?php else: ?>
+    <header class="app-header no-print">
+      <div class="container-fluid app-header-inner">
+        <a class="navbar-brand fw-semibold" href="<?= Html::escape($config->url('/')) ?>">
+          WebeLi Compta
+        </a>
+        <div class="d-flex align-items-center gap-2">
+          <span class="instance-badge">
+            Instance <strong><?= Html::escape((string) ($ui['instance'] ?? $config->string('instance_id'))) ?></strong>
+          </span>
+          <?php if ($authenticated): ?>
           <form method="post" action="<?= Html::escape($config->url('/logout')) ?>">
             <input type="hidden" name="_csrf" value="<?= Html::escape((string) ($ui_csrf ?? '')) ?>">
             <button class="btn btn-sm btn-header" type="submit">Déconnexion</button>
           </form>
-        <?php endif; ?>
+          <?php endif; ?>
+        </div>
       </div>
-    </div>
-  </header>
-  <div class="brand-accent no-print" aria-hidden="true"></div>
+    </header>
+    <div class="brand-accent no-print" aria-hidden="true"></div>
+  <?php endif; ?>
 
   <?php if ($authenticated && ($ui['dossier'] ?? '') !== ''): ?>
     <section class="context-strip no-print" aria-label="Contexte de travail">
@@ -51,7 +77,7 @@ $path = (string) ($ui['path'] ?? '');
     </section>
   <?php endif; ?>
 
-  <div class="<?= $authenticated ? 'app-shell' : 'container-xl py-4' ?>">
+  <div class="<?= $authenticated ? 'app-shell' : ($loginPage ? 'login-shell' : 'container-xl py-4') ?>">
     <?php if ($authenticated): ?>
       <aside class="app-sidebar no-print" aria-label="Navigation principale">
         <details class="app-menu">
@@ -79,7 +105,9 @@ $path = (string) ($ui['path'] ?? '');
         </details>
       </aside>
     <?php endif; ?>
-    <main id="contenu" class="<?= $authenticated ? 'app-main' : '' ?>" tabindex="-1">
+    <main id="contenu"
+      class="<?= $authenticated ? 'app-main' : ($loginPage ? 'login-main' : '') ?>"
+      tabindex="-1">
       <?= $content ?>
     </main>
   </div>

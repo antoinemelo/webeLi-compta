@@ -61,6 +61,16 @@ final class Doctor
             'Instance',
             $this->config->string('instance_id')
         );
+        $publicUrl = $this->config->string('public_url');
+        $results[] = $this->item(
+            $publicUrl !== ''
+                ? 'ok'
+                : ($this->config->string('env') === 'prod' ? 'error' : 'warning'),
+            'URL publique',
+            $publicUrl !== ''
+                ? $publicUrl
+                : 'APP_PUBLIC_URL requis pour la récupération du mot de passe'
+        );
 
         try {
             $statuses = array_column($this->migrations->plan(), 'status');

@@ -18,15 +18,22 @@ final class LoginThrottle
     {
         $since = time() - $this->windowSeconds;
         $stmt = $this->pdo->prepare(
-            'SELECT COUNT(*) FROM tentatives_connexion
-             WHERE email = :email AND ip = :ip AND tente_le >= :since'
+            'SELECT
+                SUM(CASE WHEN email = :email AND ip = :ip THEN 1 ELSE 0 END) AS pair_count,
+                SUM(CASE WHEN email = :email THEN 1 ELSE 0 END) AS email_count,
+                SUM(CASE WHEN ip = :ip THEN 1 ELSE 0 END) AS ip_count
+             FROM tentatives_connexion
+             WHERE tente_le >= :since'
         );
         $stmt->execute([
-            'email' => mb_strtolower(trim($email)),
-            'ip' => $ip,
+            'email' => $this->email($email),
+            'ip' => $this->ip($ip),
             'since' => $since,
         ]);
-        return (int) $stmt->fetchColumn() >= $this->maxAttempts;
+        $counts = $stmt->fetch() ?: [];
+        return (int) ($counts['pair_count'] ?? 0) >= $this->maxAttempts
+            || (int) ($counts['email_count'] ?? 0) >= $this->maxAttempts * 4
+            || (int) ($counts['ip_count'] ?? 0) >= $this->maxAttempts * 10;
     }
 
     public function failure(string $email, string $ip): void
@@ -35,8 +42,8 @@ final class LoginThrottle
             'INSERT INTO tentatives_connexion (email, ip, tente_le) VALUES (:email, :ip, :time)'
         );
         $stmt->execute([
-            'email' => mb_strtolower(trim($email)),
-            'ip' => $ip,
+            'email' => $this->email($email),
+            'ip' => $this->ip($ip),
             'time' => time(),
         ]);
         $this->pdo->prepare('DELETE FROM tentatives_connexion WHERE tente_le < :expiry')
@@ -48,6 +55,16 @@ final class LoginThrottle
         $stmt = $this->pdo->prepare(
             'DELETE FROM tentatives_connexion WHERE email = :email AND ip = :ip'
         );
-        $stmt->execute(['email' => mb_strtolower(trim($email)), 'ip' => $ip]);
+        $stmt->execute(['email' => $this->email($email), 'ip' => $this->ip($ip)]);
+    }
+
+    private function email(string $email): string
+    {
+        return mb_substr(mb_strtolower(trim($email)), 0, 254);
+    }
+
+    private function ip(string $ip): string
+    {
+        return mb_substr(trim($ip), 0, 64);
     }
 }

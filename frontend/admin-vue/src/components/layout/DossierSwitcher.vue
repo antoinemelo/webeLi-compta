@@ -61,9 +61,15 @@ async function change(event: Event): Promise<void> {
 
 <template>
   <div class="dossier-switcher">
-  <FormField v-slot="{ describedBy }" id="organization-switcher" label="Organisation">
+  <FormField
+    v-slot="{ describedBy }"
+    id="organization-switcher"
+    label="Organisation"
+    hide-label
+  >
     <select
       id="organization-switcher"
+      class="form-select form-select-sm scope-select"
       v-model.number="organizationId"
       :aria-describedby="describedBy"
       :disabled="context.loading"
@@ -74,9 +80,15 @@ async function change(event: Event): Promise<void> {
       </option>
     </select>
   </FormField>
-  <FormField v-slot="{ describedBy }" id="dossier-switcher" label="Dossier" hint="Définit le périmètre de travail.">
+  <FormField
+    v-slot="{ describedBy }"
+    id="dossier-switcher"
+    label="Dossier"
+    hide-label
+  >
     <select
       id="dossier-switcher"
+      class="form-select form-select-sm scope-select"
       :value="visibleSelectedId"
       :aria-describedby="describedBy"
       :disabled="context.loading"

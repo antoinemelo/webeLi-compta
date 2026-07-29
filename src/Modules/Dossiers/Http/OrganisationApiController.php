@@ -80,7 +80,11 @@ final class OrganisationApiController
         $this->assertManage($userId, $data['id']);
         return $this->execute($request, function () use ($data, $userId): array {
             $this->registry->saveLegalIdentity(
-                $data['id'], $data['version'], $data['identity'], $userId
+                $data['id'],
+                $data['version'],
+                $data['identity'],
+                $userId,
+                $data['expected_legal_identity_id']
             );
             return $this->registry->detail($data['id']);
         });

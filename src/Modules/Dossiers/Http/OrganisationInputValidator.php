@@ -65,16 +65,22 @@ final class OrganisationInputValidator
         ];
     }
 
-    /** @return array{id:int,version:int,identity:array<string,mixed>} */
+    /** @return array{id:int,version:int,expected_legal_identity_id:int,identity:array<string,mixed>} */
     public function legalIdentity(Request $request): array
     {
-        $data = $this->only($request, ['id', 'version', 'identity']);
+        $data = $this->only($request, [
+            'id', 'version', 'expected_legal_identity_id', 'identity',
+        ]);
         if (!is_array($data['identity'] ?? null)) {
             throw ApiException::validation(['identity' => ['Objet attendu.']]);
         }
         return [
             'id' => $this->positiveInt($data['id'] ?? null, 'id'),
             'version' => $this->positiveInt($data['version'] ?? null, 'version'),
+            'expected_legal_identity_id' => max(
+                0,
+                (int) ($data['expected_legal_identity_id'] ?? 0)
+            ),
             'identity' => $this->identity($data['identity']),
         ];
     }

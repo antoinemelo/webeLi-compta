@@ -50,6 +50,7 @@ export const useAccountingStore = defineStore('accounting', {
       try {
         await api.post<unknown>(path, data);
         this.notice = notice;
+        window.dispatchEvent(new CustomEvent('compta:configuration-changed'));
       } catch (error) {
         this.error = errorMessage(error);
         throw error;

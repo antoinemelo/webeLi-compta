@@ -43,21 +43,34 @@ function qualificationMigrationHashes(string $root): bool
 {
     $manifest = $root . '/docs/baseline/migrations.sha256';
     $lines = file($manifest, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    if ($lines === false || count($lines) !== 2) {
+    if ($lines === false || $lines === []) {
         fwrite(STDERR, "Manifeste de migrations absent ou incomplet.\n");
         return false;
     }
+    $manifestedPaths = [];
     foreach ($lines as $line) {
         if (preg_match('/^([a-f0-9]{64})  (database\/migrations\/.+\.sql)$/', $line, $match) !== 1) {
             fwrite(STDERR, "Ligne de manifeste invalide : {$line}\n");
             return false;
         }
+        $manifestedPaths[] = $match[2];
         $path = $root . '/' . $match[2];
         $actual = is_file($path) ? hash_file('sha256', $path) : false;
         if (!is_string($actual) || !hash_equals($match[1], $actual)) {
             fwrite(STDERR, "Migration modifiée ou absente : {$match[2]}\n");
             return false;
         }
+    }
+    $migrationPaths = array_map(
+        static fn (string $path): string =>
+            'database/migrations/' . basename($path),
+        glob($root . '/database/migrations/*.sql') ?: []
+    );
+    sort($manifestedPaths, SORT_STRING);
+    sort($migrationPaths, SORT_STRING);
+    if ($manifestedPaths !== $migrationPaths) {
+        fwrite(STDERR, "Le manifeste ne couvre pas toutes les migrations.\n");
+        return false;
     }
     return true;
 }

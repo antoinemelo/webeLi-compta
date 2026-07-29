@@ -958,9 +958,13 @@ final class AssetService
         $duration = (int) (
             $data['duration_months'] ?? $category['duree_defaut_mois']
         );
+        if (preg_match('/^[\p{L}\p{N}][\p{L}\p{N} ._\/-]{0,29}$/u', $code) !== 1) {
+            throw new AssetException(
+                'Code d’immobilisation invalide : utilisez 1 à 30 lettres, chiffres, espaces, points, tirets, barres obliques ou tirets bas.'
+            );
+        }
         if (
-            preg_match('/^[A-Z0-9_-]{1,30}$/', $code) !== 1
-            || $label === ''
+            $label === ''
             || $reference === ''
             || !$this->validDate($acquisitionDate)
             || !$this->validDate($serviceDate)

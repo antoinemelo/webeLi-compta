@@ -10,13 +10,6 @@ const canManageRegistry = computed(() => (
 </script>
 
 <template>
-  <header class="page-heading">
-    <div>
-      <h1>Organisations et dossiers</h1>
-      <p>Créez vos organisations, leurs dossiers comptables et les accès associés.</p>
-    </div>
-  </header>
-
   <OrganisationRegistryPanel v-if="canManageRegistry" />
   <section v-else class="access-message denied" role="alert">
     <strong>Accès refusé</strong>

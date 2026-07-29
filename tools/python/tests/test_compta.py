@@ -364,6 +364,19 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertEqual(Path("backup.sqlite"), restoration.source)
         self.assertEqual(Path("version-zero.sqlite"), inspection.path)
 
+    def test_admin_password_uses_the_canonical_policy_before_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "must-not-be-created.sqlite"
+            with patch.dict(
+                ADMIN.os.environ,
+                {"APP_DB_PATH": str(target)},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(ADMIN.AdminError, "trop prévisible"):
+                    ADMIN.validate_admin_password("ChangeMe123!")
+            self.assertFalse(target.exists())
+        ADMIN.validate_admin_password("Initiale!2026Unique")
+
     def test_sqlite_backup_is_consistent_and_keeps_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

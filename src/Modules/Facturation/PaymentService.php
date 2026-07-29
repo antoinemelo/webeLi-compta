@@ -160,7 +160,10 @@ final class PaymentService
                 || (int) $document['contact_id'] !== (int) $payment['contact_id']
                 || (string) $document['monnaie'] !== (string) $payment['monnaie']
             ) {
-                throw new BillingException('Paiement et facture incompatibles.');
+                throw new BillingException(
+                    'Le paiement sélectionné ne peut être lettré qu’avec une facture '
+                    . 'émise du même contact, du même sens et dans la même devise.'
+                );
             }
             if (
                 $payment['ecriture_id'] !== null

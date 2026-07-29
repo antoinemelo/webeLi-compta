@@ -72,8 +72,42 @@ final class ReportingService
         $query->bindValue(':limit', $perPage, PDO::PARAM_INT);
         $query->bindValue(':offset', $offset, PDO::PARAM_INT);
         $query->execute();
+        $items = $query->fetchAll();
+        $accountsByEntry = [];
+        $entryIds = array_map(
+            static fn (array $item): int => (int) $item['id'],
+            $items
+        );
+        if ($entryIds !== []) {
+            $placeholders = implode(',', array_fill(0, count($entryIds), '?'));
+            $accounts = $this->pdo->prepare(
+                "SELECT DISTINCT l.ecriture_id, c.id, c.numero, c.libelle,
+                        CASE WHEN l.debit_centimes > 0 THEN 'debit' ELSE 'credit' END AS side
+                 FROM lignes_ecriture l
+                 JOIN comptes c ON c.id = l.compte_id
+                 WHERE l.ecriture_id IN ({$placeholders})
+                   AND (l.debit_centimes > 0 OR l.credit_centimes > 0)
+                 ORDER BY c.numero, c.id"
+            );
+            $accounts->execute($entryIds);
+            foreach ($accounts->fetchAll() as $account) {
+                $entryId = (int) $account['ecriture_id'];
+                $side = (string) $account['side'];
+                $accountsByEntry[$entryId][$side][] = [
+                    'id' => (int) $account['id'],
+                    'number' => (string) $account['numero'],
+                    'label' => (string) $account['libelle'],
+                ];
+            }
+        }
+        foreach ($items as &$item) {
+            $entryAccounts = $accountsByEntry[(int) $item['id']] ?? [];
+            $item['debit_accounts'] = $entryAccounts['debit'] ?? [];
+            $item['credit_accounts'] = $entryAccounts['credit'] ?? [];
+        }
+        unset($item);
         return [
-            'items' => $query->fetchAll(),
+            'items' => $items,
             'total' => $total,
             'page' => $page,
             'par_page' => $perPage,

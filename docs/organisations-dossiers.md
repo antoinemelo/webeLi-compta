@@ -17,8 +17,11 @@ plusieurs dossiers réellement exploitables dans la même organisation.
 - un identifiant hors périmètre répond comme une ressource introuvable, sans
   divulguer son nom.
 
-Les mutations exigent le jeton CSRF. Le nom usuel, le statut et l’identité
-juridique utilisent la version optimiste de l’organisation.
+Les mutations exigent le jeton CSRF. Le nom usuel et le statut utilisent la
+version optimiste de l’organisation. L’identité juridique contrôle en plus
+l’identifiant de sa dernière version datée : une modification concurrente des
+coordonnées opérationnelles ne bloque donc plus l’adresse légale, tandis
+qu’une vraie concurrence sur l’historique juridique reste refusée.
 
 ## Gouvernance des accès
 
@@ -63,7 +66,7 @@ Une seule transaction crée le dossier et initialise les modules, le plan
 comptable, l’exercice, sa période, le journal général, les codes TVA et un
 régime TVA initial lorsque Comptabilité est activée. Par prudence, ce régime
 est `non_assujetti`, sans numéro TVA, et commence au premier jour de l’exercice ;
-il reste modifiable depuis `Comptabilité > Clôture > TVA`. Une panne à
+il reste modifiable depuis `Configuration > Référentiels > TVA`. Une panne à
 n’importe quelle étape annule l’ensemble : aucun dossier partiel ne reste
 visible.
 
@@ -87,7 +90,9 @@ effacées pendant le cycle normal.
 L’écran historique est la seule voie de mutation de la raison sociale, de la
 forme juridique, de l’IDE et de l’adresse. L’onglet `Configuration > Entité`
 les affiche en lecture seule et conserve la gestion des coordonnées
-opérationnelles, de l’IBAN de facturation et de la devise du dossier.
+opérationnelles, de la devise et du compte de trésorerie dont l’IBAN est utilisé
+pour la facturation. Le statut TVA daté se règle dans
+`Configuration > Référentiels > TVA`.
 
 ## Archivage, réactivation et suppression
 

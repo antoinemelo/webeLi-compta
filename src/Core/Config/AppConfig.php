@@ -46,6 +46,41 @@ final class AppConfig
         }
         $values['base_url'] = $baseUrl;
 
+        $publicUrl = rtrim(trim((string) ($values['public_url'] ?? '')), '/');
+        if ($publicUrl !== '') {
+            $parts = parse_url($publicUrl);
+            if (!is_array($parts)) {
+                throw new RuntimeException(
+                    'APP_PUBLIC_URL doit être une URL HTTPS complète en production '
+                    . 'et reprendre exactement APP_BASE_URL.'
+                );
+            }
+            $scheme = mb_strtolower((string) ($parts['scheme'] ?? ''));
+            $publicPath = rtrim((string) ($parts['path'] ?? ''), '/');
+            if ($publicPath === '/') {
+                $publicPath = '';
+            }
+            if (
+                !in_array($scheme, ['http', 'https'], true)
+                || trim((string) ($parts['host'] ?? '')) === ''
+                || isset($parts['user'])
+                || isset($parts['pass'])
+                || isset($parts['query'])
+                || isset($parts['fragment'])
+                || $publicPath !== $baseUrl
+                || (
+                    ($values['env'] ?? 'dev') === 'prod'
+                    && $scheme !== 'https'
+                )
+            ) {
+                throw new RuntimeException(
+                    'APP_PUBLIC_URL doit être une URL HTTPS complète en production '
+                    . 'et reprendre exactement APP_BASE_URL.'
+                );
+            }
+        }
+        $values['public_url'] = $publicUrl;
+
         $storage = trim((string) ($values['storage_path'] ?? ''));
         $values['storage_path'] = $storage !== '' ? $storage : $root . '/storage';
         $database = trim((string) ($values['database_path'] ?? ''));
@@ -91,5 +126,15 @@ final class AppConfig
     {
         $path = '/' . ltrim($path, '/');
         return $this->string('base_url') . ($path === '/' ? '/' : $path);
+    }
+
+    public function publicUrl(string $path = ''): string
+    {
+        $base = $this->string('public_url');
+        if ($base === '') {
+            return '';
+        }
+        $path = '/' . ltrim($path, '/');
+        return $base . ($path === '/' ? '/' : $path);
     }
 }

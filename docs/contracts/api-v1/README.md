@@ -55,12 +55,22 @@ Les exemples versionnés sont :
 | GET | `/api/v1/exercises` | exercices du dossier courant, paginés |
 | GET | `/api/v1/references` | types, statuts et devise de base |
 | GET | `/api/v1/dashboard` | projection comptable à une date et pour un exercice |
+| GET | `/api/v1/security` | mode de connexion et disponibilité des seconds facteurs du compte |
+| POST | `/api/v1/security/totp/prepare` | préparation TOTP après revalidation du mot de passe |
+| POST | `/api/v1/security/totp/confirm` | confirmation TOTP et émission unique des codes de récupération |
+| POST | `/api/v1/security/email/prepare` | envoi du code d’activation après revalidation du mot de passe |
+| POST | `/api/v1/security/email/confirm` | confirmation du second facteur par e-mail |
+| POST | `/api/v1/security/disable` | retour au mot de passe seul et révocation des sessions |
+| POST | `/api/v1/security/password` | changement de phrase secrète et révocation des sessions |
 | GET | `/api/v1/configuration` | identité, modules, paiements et audit |
+| GET | `/api/v1/configuration/setup-guide` | état métier ordonné du parcours initial du dossier |
+| POST | `/api/v1/configuration/setup-guide/confirm` | confirmation contrôlée d’une étape prête |
+| POST | `/api/v1/configuration/setup-guide/status` | annulation persistante ou reprise explicite du parcours |
 | GET | `/api/v1/structures/organisations` | registre paginé limité aux organisations autorisées |
 | GET | `/api/v1/structures/organisations/detail` | organisation, historique juridique et dépendances |
 | POST | `/api/v1/structures/organisations` | création par `installation.admin`, sans rôle implicite |
 | POST | `/api/v1/structures/organisations/update` | modification optimiste du nom usuel |
-| POST | `/api/v1/structures/organisations/legal-identities` | nouvelle identité juridique datée et sourcée |
+| POST | `/api/v1/structures/organisations/legal-identities` | nouvelle identité datée et sourcée ; `expected_legal_identity_id` protège uniquement l’historique juridique |
 | POST | `/api/v1/structures/organisations/archive` | archivage après les dossiers actifs |
 | POST | `/api/v1/structures/organisations/reactivate` | réactivation sans attribution de droit |
 | POST | `/api/v1/structures/organisations/delete` | suppression par `installation.admin` si aucune dépendance |
@@ -86,6 +96,8 @@ Les exemples versionnés sont :
 | GET | `/api/v1/configuration/references` | contacts, codes/taux TVA et taux salariaux du dossier |
 | POST | `/api/v1/configuration/references/contacts` | création ou édition optimiste d’un contact multi-rôles |
 | POST | `/api/v1/configuration/references/contacts/delete` | suppression optimiste si aucun document, paiement ou élément salarial n’est lié |
+| POST | `/api/v1/configuration/references/contacts/restore` | réactivation optimiste d’un contact archivé |
+| POST | `/api/v1/configuration/references/vat-regimes` | nouveau régime TVA daté du dossier |
 | POST | `/api/v1/configuration/references/vat-codes` | nouveau code TVA daté |
 | POST | `/api/v1/configuration/references/payroll-rates` | taux sociaux annuels en ppm |
 | POST | `/api/v1/configuration/payroll/employer` | heures de référence ; identité employeur reprise de l’entité |
@@ -184,7 +196,7 @@ Les exemples versionnés sont :
 | POST | `/api/v1/liquidites/paiements/lots` | préparation idempotente d’un lot sortant |
 | POST | `/api/v1/liquidites/paiements/lots/exporter` | génération et téléchargement pain.001, sans transmission |
 | POST | `/api/v1/liquidites/paiements/lots/confirmer` | confirmation, comptabilisation et lettrage depuis le relevé |
-| GET | `/api/v1/facturation` | ventes, achats, contacts 360°, échéancier et récurrences |
+| GET | `/api/v1/facturation` | ventes, achats, documents commerciaux, contacts 360°, échéancier et récurrences |
 | GET | `/api/v1/facturation/export` | export CSV filtré avec date de référence |
 | POST | `/api/v1/facturation/documents` | création d’un document en brouillon |
 | POST | `/api/v1/facturation/documents/modifier` | modification optimiste d’un brouillon et de ses lignes |
@@ -194,6 +206,11 @@ Les exemples versionnés sont :
 | POST | `/api/v1/facturation/documents/pdf` | archive et téléchargement PDF/QR client |
 | POST | `/api/v1/facturation/contacts` | création idempotente dans le registre unique |
 | POST | `/api/v1/facturation/contacts/modifier` | édition optimiste du contact |
+| POST | `/api/v1/facturation/contacts/supprimer` | suppression d’un contact inutilisé ou archivage avec historique |
+| POST | `/api/v1/facturation/contacts/reactiver` | réactivation optimiste d’un contact archivé |
+| POST | `/api/v1/facturation/commerciaux` | création ou édition d’une offre, demande, réponse ou commande brouillon |
+| POST | `/api/v1/facturation/commerciaux/statut` | envoi, réception, acceptation, refus ou archivage |
+| POST | `/api/v1/facturation/commerciaux/convertir` | conversion reliée vers réponse, commande ou facture brouillon |
 | POST | `/api/v1/facturation/recurrences` | nouveau modèle client ou fournisseur |
 | POST | `/api/v1/facturation/recurrences/pause` | suspension ou reprise optimiste |
 | POST | `/api/v1/facturation/recurrences/generer` | génération idempotente de brouillons |
@@ -320,7 +337,10 @@ La lecture Facturation accepte `as_of_date`, `direction=all|sales|purchases`,
 l’export. Les tranches d’aging incluent exactement 0–30, 31–60, 61–90 et plus
 de 90 jours ; les paiements non alloués sont séparés des tranches mais déduits
 du solde net. Les mutations restent scopées par la session et les documents
-émis ne sont jamais réécrits.
+émis ne sont jamais réécrits. Les offres, demandes d’offre, réponses et
+commandes n’ont aucun effet comptable. Leur conversion vers une facture crée
+un brouillon et conserve les liens documentaires ; commande et facture directes
+restent autorisées.
 
 Le contrat pédagogique ne renvoie jamais `solution_json` dans le workspace.
 Une correction est obtenue uniquement par sa route dédiée après autorisation.

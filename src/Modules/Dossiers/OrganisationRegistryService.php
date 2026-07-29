@@ -228,15 +228,14 @@ final class OrganisationRegistryService
         int $expectedVersion,
         array $identity,
         int $actorId,
+        ?int $expectedLegalIdentityId = null,
     ): int {
         $this->validateIdentity($identity);
         return $this->transaction(function () use (
-            $organisationId, $expectedVersion, $identity, $actorId
+            $organisationId, $expectedVersion, $identity, $actorId,
+            $expectedLegalIdentityId
         ): int {
             $before = $this->organisationSnapshot($organisationId);
-            if ((int) $before['version'] !== $expectedVersion) {
-                $this->conflict();
-            }
             $this->assertUidAvailable(trim((string) $identity['uid']), $organisationId);
             $previous = $this->pdo->prepare(
                 'SELECT id, date_debut FROM attributs_juridiques_organisation
@@ -245,6 +244,20 @@ final class OrganisationRegistryService
             );
             $previous->execute([$organisationId]);
             $open = $previous->fetch();
+            $currentLegalIdentityId = $open === false ? 0 : (int) $open['id'];
+            if (
+                $expectedLegalIdentityId !== null
+                && $currentLegalIdentityId !== $expectedLegalIdentityId
+            ) {
+                $this->conflict();
+            }
+            if (
+                (int) $before['version'] !== $expectedVersion
+                && $expectedLegalIdentityId === null
+            ) {
+                $this->conflict();
+            }
+            $writeVersion = (int) $before['version'];
             if ($open !== false) {
                 if ((string) $open['date_debut'] >= (string) $identity['valid_from']) {
                     throw new OrganisationRegistryException(
@@ -277,7 +290,7 @@ final class OrganisationRegistryService
                 trim((string) ($address['city'] ?? '')),
                 trim((string) ($address['canton'] ?? '')),
                 trim((string) ($address['country'] ?? 'CH')) ?: 'CH',
-                $organisationId, $expectedVersion,
+                $organisationId, $writeVersion,
             ]);
             $this->assertUpdated($stmt->rowCount(), $organisationId);
             $this->auditMutation(

@@ -15,6 +15,7 @@ use Compta\Modules\Devises\ExchangeRateException;
 use Compta\Modules\Facturation\BillingException;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
+use Compta\Modules\Facturation\CommercialDocumentService;
 use Compta\Modules\Facturation\AttachmentService;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Facturation\InvoicePdfService;
@@ -30,6 +31,7 @@ final class BillingApiController
         private readonly AccessControl $access,
         private readonly BillingWorkspaceService $workspace,
         private readonly BillingService $billing,
+        private readonly CommercialDocumentService $commercial,
         private readonly ContactService $contacts,
         private readonly PaymentService $payments,
         private readonly RecurringBillingService $recurrences,
@@ -77,6 +79,20 @@ final class BillingApiController
                     $userId, $organisationId, $dossierId, 'facturation.remind'
                 ),
             ];
+            $data['commercial_documents'] = $this->commercial->all(
+                $organisationId,
+                $dossierId
+            );
+            if (is_array($data['contact_360'] ?? null)) {
+                $contactId = (int) $data['contact_360']['contact_id'];
+                $data['contact_360']['commercial_documents'] = array_values(
+                    array_filter(
+                        $data['commercial_documents'],
+                        static fn (array $document): bool =>
+                            (int) $document['contact_id'] === $contactId
+                    )
+                );
+            }
             return $data;
         });
     }
@@ -342,6 +358,86 @@ final class BillingApiController
             );
             return ['updated' => true];
         });
+    }
+
+    public function deleteContact(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.manage');
+        $data = $this->validator->contactDeletion($request);
+        return $this->execute(
+            $request,
+            fn (): array => $this->contacts->remove(
+                $organisationId,
+                $dossierId,
+                $data['contact_id'],
+                $data['version'],
+                $userId
+            )
+        );
+    }
+
+    public function restoreContact(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.manage');
+        $data = $this->validator->contactDeletion($request);
+        return $this->execute($request, function () use (
+            $data,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $this->contacts->restore(
+                $organisationId,
+                $dossierId,
+                $data['contact_id'],
+                $data['version'],
+                $userId
+            );
+            return ['restored' => true];
+        });
+    }
+
+    public function saveCommercialDocument(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.manage');
+        return $this->execute($request, fn (): array => [
+            'id' => $this->commercial->save(
+                $organisationId,
+                $dossierId,
+                $this->validator->commercialDocument($request),
+                $userId
+            ),
+        ]);
+    }
+
+    public function changeCommercialStatus(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.manage');
+        $data = $this->validator->commercialStatus($request);
+        return $this->execute($request, fn (): array => [
+            'number' => $this->commercial->changeStatus(
+                $organisationId,
+                $dossierId,
+                $data['document_id'],
+                $data['version'],
+                $data['status'],
+                $userId
+            ),
+        ]);
+    }
+
+    public function convertCommercialDocument(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.manage');
+        return $this->execute(
+            $request,
+            fn (): array => $this->commercial->convert(
+                $organisationId,
+                $dossierId,
+                $this->validator->commercialConversion($request),
+                $userId
+            )
+        );
     }
 
     public function createRecurrence(Request $request): Response

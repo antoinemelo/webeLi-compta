@@ -84,6 +84,42 @@ export type ShellContext = {
   csrf_token: string;
 };
 
+export type SetupGuideStep = {
+  code:
+    | 'identity'
+    | 'exercises'
+    | 'opening'
+    | 'treasury'
+    | 'billing_account'
+    | 'vat'
+    | 'payroll_rates'
+    | 'payroll_settings'
+    | 'payment_defaults'
+    | 'currencies'
+    | 'accounting';
+  title: string;
+  description: string;
+  path: string;
+  required: boolean;
+  applicable: boolean;
+  completed: boolean;
+  ready: boolean;
+  confirmable: boolean;
+  action_label: string;
+};
+
+export type SetupGuide = {
+  visible: boolean;
+  cancelled: boolean;
+  required_complete: boolean;
+  finished: boolean;
+  progress: {
+    completed: number;
+    total: number;
+  };
+  steps: SetupGuideStep[];
+};
+
 export type OrganisationLegalIdentity = {
   id: number;
   date_debut: string;
@@ -292,18 +328,38 @@ export type ConfigurationPayload = {
       phone: string;
       email: string;
       website: string;
-      billing_iban: string;
       version: number;
     };
     dossier: {
       id: number;
       name: string;
       base_currency: string;
+      billing_treasury_account_id: number | null;
+      billing_iban: string;
+      billing_treasury_accounts: Array<{
+        id: number;
+        label: string;
+        iban: string;
+        currency: string;
+      }>;
+      vat_status: 'non_assujetti' | 'assujetti' | 'volontaire' | 'non_configure';
+      vat_exempt: boolean;
+      vat_effective_from: string;
       version: number;
     };
   };
   modules: ConfigurationModule[];
   payment_terms: PaymentTerm[];
+  payment_defaults: Array<{
+    id: number;
+    direction: 'client' | 'fournisseur';
+    condition_id: number;
+    condition_code: string;
+    condition_label: string;
+    valid_from: string;
+    valid_until: string | null;
+    current: boolean;
+  }>;
   audit: Array<{
     id: number;
     action: string;
@@ -323,6 +379,8 @@ export type ManagedReferencesPayload = {
   contacts: Array<{
     id: number;
     type: 'entreprise' | 'personne';
+    company_contact_id: number | null;
+    company_contact_name: string;
     company: string;
     first_name: string;
     last_name: string;
@@ -337,9 +395,29 @@ export type ManagedReferencesPayload = {
     postal_code: string;
     city: string;
     country: string;
+    active: boolean;
+    offers_count: number;
+    orders_count: number;
     version: number;
   }>;
   vat: {
+    regimes: Array<{
+      id: number;
+      status: 'non_assujetti' | 'assujetti' | 'volontaire';
+      vat_number: string;
+      method: 'effective' | 'tdfn';
+      reporting_mode: 'convenues' | 'recues';
+      frequency: 'mensuelle' | 'trimestrielle' | 'semestrielle' | 'annuelle';
+      valid_from: string;
+      valid_until: string | null;
+      input_material_account_id: number | null;
+      input_investment_account_id: number | null;
+      vat_due_account_id: number | null;
+      vat_settlement_account_id: number | null;
+      corrections_account_id: number | null;
+      source_url: string;
+      verified_on: string;
+    }>;
     codes: Array<{
       id: number;
       code: string;
@@ -571,6 +649,7 @@ export type TreasuryWorkspace = {
   payments: Array<Record<string, unknown> & {
     id: number; contact_id: number; sens: 'encaissement' | 'decaissement';
     date_paiement: string; montant_centimes: number; reference: string;
+    monnaie: string;
     alloue_centimes: number; non_alloue_centimes: number; statut: string;
   }>;
   allocations: Array<Record<string, unknown> & {
@@ -606,7 +685,15 @@ export type TreasuryWorkspace = {
     exercises: Array<{ id: number; libelle: string; date_debut: string; date_fin: string; statut: string }>;
     journals: Array<{ id: number; code: string; libelle: string; type: string }>;
     accounts: Array<{ id: number; numero: string; libelle: string; sens_normal: string }>;
-    contacts: Array<{ id: number; label: string; roles: string }>;
+    contacts: Array<{
+      id: number;
+      label: string;
+      company: string;
+      first_name: string;
+      last_name: string;
+      associated_company: string;
+      roles: string;
+    }>;
     treasury_accounts: Array<{
       id: number; label: string; type: string; iban: string; bic: string;
       currency: string; ledger_account_id: number; ledger_number: string;
@@ -764,6 +851,8 @@ export type AccountingWorkspace = {
       journal: string;
       comptes_debit: string;
       comptes_credit: string;
+      debit_accounts: Array<{ id: number; number: string; label: string }>;
+      credit_accounts: Array<{ id: number; number: string; label: string }>;
       debit_centimes: number;
       credit_centimes: number;
     }>;
@@ -1286,6 +1375,8 @@ export type BillingAgingSide = {
 export type BillingContact = {
   id: number;
   type: 'entreprise' | 'personne';
+  company_contact_id: number | null;
+  company_contact_name: string;
   company: string;
   first_name: string;
   last_name: string;
@@ -1296,6 +1387,9 @@ export type BillingContact = {
   bic: string;
   language: string;
   roles: string[];
+  active: boolean;
+  offers_count: number;
+  orders_count: number;
   version: number;
   address: {
     line1: string;
@@ -1309,6 +1403,53 @@ export type BillingContact = {
     payable_cents: number;
     net_cents: number;
   };
+};
+
+export type CommercialDocument = {
+  id: number;
+  contact_id: number;
+  contact: string;
+  type:
+    | 'offre_client'
+    | 'demande_offre_fournisseur'
+    | 'reponse_offre_fournisseur'
+    | 'commande_client'
+    | 'commande_fournisseur';
+  statut: string;
+  numero: string;
+  numero_externe: string;
+  date_document: string;
+  date_validite: string | null;
+  monnaie: string;
+  total_net_centimes: number;
+  total_tva_centimes: number;
+  total_brut_centimes: number;
+  texte_entete: string;
+  texte_pied: string;
+  note_interne: string;
+  document_source_id: number | null;
+  remplace_par_id: number | null;
+  version: number;
+  lines: Array<{
+    id: number;
+    ordre: number;
+    libelle: string;
+    quantite_milli: number;
+    prix_unitaire_centimes: number;
+    mode_saisie: 'net' | 'brut';
+    compte_id: number | null;
+    code_tva_id: number | null;
+    base_nette_centimes: number;
+    tva_centimes: number;
+    total_brut_centimes: number;
+  }>;
+  links: Array<{
+    id: number;
+    type_lien: 'reponse' | 'remplacement' | 'commande' | 'facture';
+    document_cible_commercial_id: number | null;
+    document_cible_financier_id: number | null;
+    cree_le: string;
+  }>;
 };
 
 export type BillingPayload = {
@@ -1325,10 +1466,12 @@ export type BillingPayload = {
     payables: BillingAgingSide;
   };
   contacts: BillingContact[];
+  commercial_documents: CommercialDocument[];
   contact_360: null | {
     contact_id: number;
     reference_date: string;
     documents: BillingDocument[];
+    commercial_documents: CommercialDocument[];
     payments: BillingPayment[];
     aging: {
       receivables: BillingAgingSide;
@@ -1374,6 +1517,22 @@ export type BillingPayload = {
     }>;
     exercises: Array<{ id: number; label: string }>;
     journals: Array<{ id: number; code: string; label: string; type: string }>;
+    vat_regimes: Array<{
+      id: number;
+      status: 'non_assujetti' | 'assujetti' | 'volontaire';
+      valid_from: string;
+      valid_until: string | null;
+    }>;
+    payment_defaults: Array<{
+      direction: 'client' | 'fournisseur';
+      valid_from: string;
+      valid_until: string | null;
+      condition_id: number;
+      code: string;
+      label: string;
+      days: number;
+      end_of_month: boolean;
+    }>;
     currencies: Array<{
       code: string; active: boolean; is_base: boolean; version: number;
     }>;

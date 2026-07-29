@@ -6,6 +6,7 @@ namespace Compta\Core\Http;
 use Compta\Core\Audit\AuditLogger;
 use Compta\Core\Auth\AccessControl;
 use Compta\Core\Auth\AuthService;
+use Compta\Core\Auth\PasswordResetService;
 use Compta\Core\Config\AppConfig;
 use Compta\Core\Http\Api\ApiException;
 use Compta\Core\Http\Api\ApiResponse;
@@ -59,6 +60,7 @@ final class WebApplication
         private readonly ?ApiRouteRegistry $apiRoutes = null,
         private readonly ?ShellPageController $shellPage = null,
         private readonly ?ModuleAccessService $moduleAccess = null,
+        private readonly ?PasswordResetService $passwordReset = null,
     ) {
         $this->router = new Router();
         $this->routes();
@@ -151,25 +153,270 @@ final class WebApplication
 
     private function routes(): void
     {
-        $this->router->add('GET', '/login', fn (): Response => new Response(
-            $this->view->render('login', ['csrf' => $this->csrf->token()], 'Connexion')
-        ));
-        $this->router->add('POST', '/login', function (Request $request): Response {
-            if (!$this->csrf->validate($request->post['_csrf'] ?? null)) {
-                return $this->error('Jeton CSRF invalide.', 419);
-            }
-            $ok = $this->auth->attempt(
-                $request->post['email'] ?? '',
-                $request->post['password'] ?? '',
-                $request->ip()
+        if ($this->passwordReset !== null) {
+            $this->router->add(
+                'GET',
+                '/mot-de-passe-oublie',
+                function (Request $request): Response {
+                    if ($this->auth->userId() !== null) {
+                        return Response::redirect($this->config->url('/app'), 302);
+                    }
+                    $pending = $this->auth->pendingIdentification(
+                        $request->ip(),
+                        (string) ($request->header('User-Agent') ?? '')
+                    );
+                    return new Response($this->view->render(
+                        'password-reset-request',
+                        [
+                            'csrf' => $this->csrf->token(),
+                            'email' => (string) ($pending['email'] ?? ''),
+                        ],
+                        'Mot de passe oublié'
+                    ));
+                }
             );
-            if (!$ok) {
+            $this->router->add(
+                'POST',
+                '/mot-de-passe-oublie',
+                function (Request $request): Response {
+                    if ($this->auth->userId() !== null) {
+                        return Response::redirect($this->config->url('/app'), 302);
+                    }
+                    if (!$this->csrf->validate($request->post['_csrf'] ?? null)) {
+                        return new Response(
+                            $this->view->render(
+                                'password-reset-request',
+                                [
+                                    'csrf' => $this->csrf->token(),
+                                    'error' => 'Votre session a expiré. Rechargez la page puis réessayez.',
+                                ],
+                                'Mot de passe oublié'
+                            ),
+                            419
+                        );
+                    }
+                    $this->passwordReset?->request(
+                        (string) ($request->post['email'] ?? ''),
+                        $request->ip()
+                    );
+                    return new Response($this->view->render(
+                        'password-reset-request',
+                        [
+                            'csrf' => $this->csrf->token(),
+                            'submitted' => true,
+                        ],
+                        'Consultez votre messagerie'
+                    ));
+                }
+            );
+            $this->router->add(
+                'GET',
+                '/reinitialiser-mot-de-passe',
+                function (Request $request): Response {
+                    if ($this->auth->userId() !== null) {
+                        return Response::redirect($this->config->url('/app'), 302);
+                    }
+                    $selector = (string) ($request->query['selector'] ?? '');
+                    $token = (string) ($request->query['token'] ?? '');
+                    return new Response($this->view->render(
+                        'password-reset',
+                        [
+                            'csrf' => $this->csrf->token(),
+                            'selector' => $selector,
+                            'token' => $token,
+                            'valid' => $this->passwordReset?->tokenIsValid(
+                                $selector,
+                                $token
+                            ) ?? false,
+                        ],
+                        'Choisir un nouveau mot de passe'
+                    ));
+                }
+            );
+            $this->router->add(
+                'POST',
+                '/reinitialiser-mot-de-passe',
+                function (Request $request): Response {
+                    if ($this->auth->userId() !== null) {
+                        return Response::redirect($this->config->url('/app'), 302);
+                    }
+                    $selector = (string) ($request->post['selector'] ?? '');
+                    $token = (string) ($request->post['token'] ?? '');
+                    if (!$this->csrf->validate($request->post['_csrf'] ?? null)) {
+                        return new Response(
+                            $this->view->render(
+                                'password-reset',
+                                [
+                                    'csrf' => $this->csrf->token(),
+                                    'selector' => $selector,
+                                    'token' => $token,
+                                    'valid' => false,
+                                    'error' => 'Votre session a expiré. Ouvrez à nouveau le lien reçu.',
+                                ],
+                                'Choisir un nouveau mot de passe'
+                            ),
+                            419
+                        );
+                    }
+                    try {
+                        $this->passwordReset?->reset(
+                            $selector,
+                            $token,
+                            (string) ($request->post['password'] ?? ''),
+                            (string) ($request->post['password_confirmation'] ?? ''),
+                            $request->ip()
+                        );
+                    } catch (\RuntimeException $exception) {
+                        return new Response(
+                            $this->view->render(
+                                'password-reset',
+                                [
+                                    'csrf' => $this->csrf->token(),
+                                    'selector' => $selector,
+                                    'token' => $token,
+                                    'valid' => $this->passwordReset?->tokenIsValid(
+                                        $selector,
+                                        $token
+                                    ) ?? false,
+                                    'error' => $exception->getMessage(),
+                                ],
+                                'Choisir un nouveau mot de passe'
+                            ),
+                            422
+                        );
+                    }
+                    $this->auth->cancelMfa();
+                    $this->auth->cancelIdentification();
+                    $this->session->regenerate();
+                    $this->csrf->rotate();
+                    return new Response($this->view->render(
+                        'password-reset',
+                        [
+                            'csrf' => $this->csrf->token(),
+                            'success' => true,
+                            'valid' => false,
+                        ],
+                        'Mot de passe modifié'
+                    ));
+                }
+            );
+        }
+        $this->router->add('GET', '/login', function (Request $request): Response {
+            if ($this->auth->userId() !== null) {
+                return Response::redirect($this->config->url('/app'), 302);
+            }
+            $userAgent = (string) ($request->header('User-Agent') ?? '');
+            return new Response(
+                $this->view->render(
+                    'login',
+                    [
+                        'csrf' => $this->csrf->token(),
+                        'challenge' => $this->auth->pendingMfa(),
+                        'identification' => $this->auth->pendingIdentification(
+                            $request->ip(),
+                            $userAgent
+                        ),
+                    ],
+                    'Connexion sécurisée'
+                )
+            );
+        });
+        $this->router->add('POST', '/login', function (Request $request): Response {
+            $submittedEmail = trim($request->post['email'] ?? '');
+            $email = mb_substr($submittedEmail, 0, 254);
+            $userAgent = (string) ($request->header('User-Agent') ?? '');
+            if (!$this->csrf->validate($request->post['_csrf'] ?? null)) {
                 return new Response(
                     $this->view->render('login', [
                         'csrf' => $this->csrf->token(),
-                        'error' => 'Connexion refusée.',
-                    ], 'Connexion'),
+                        'email' => $email,
+                        'challenge' => $this->auth->pendingMfa(),
+                        'identification' => $this->auth->pendingIdentification(
+                            $request->ip(),
+                            $userAgent
+                        ),
+                        'error' => 'Votre session a expiré. Rechargez la page puis réessayez.',
+                    ], 'Connexion sécurisée'),
+                    419
+                );
+            }
+            $stage = trim((string) ($request->post['stage'] ?? 'identify'));
+            if ($stage === 'cancel') {
+                $this->auth->cancelMfa();
+                $this->auth->cancelIdentification();
+                return Response::redirect($this->config->url('/login'), 303);
+            }
+            if ($stage === 'mfa') {
+                $result = $this->auth->completeMfa(
+                    (string) ($request->post['code'] ?? ''),
+                    $request->ip(),
+                    $userAgent
+                );
+                if ($result['status'] === 'authenticated') {
+                    return Response::redirect($this->config->url('/app'));
+                }
+                return new Response(
+                    $this->view->render('login', [
+                        'csrf' => $this->csrf->token(),
+                        'challenge' => $this->auth->pendingMfa(),
+                        'error' => 'Code incorrect, expiré ou déjà utilisé.',
+                    ], 'Vérification en deux étapes'),
                     401
+                );
+            }
+            if ($stage === 'identify') {
+                $identification = $this->auth->identify(
+                    $submittedEmail,
+                    $request->ip(),
+                    $userAgent
+                );
+                return new Response(
+                    $this->view->render('login', [
+                        'csrf' => $this->csrf->token(),
+                        'identification' => $identification,
+                    ], 'Saisir le mot de passe')
+                );
+            }
+            if ($stage !== 'password') {
+                $this->auth->cancelIdentification();
+                return Response::redirect($this->config->url('/login'), 303);
+            }
+            $result = $this->auth->continueWithPassword(
+                $request->post['password'] ?? '',
+                $request->ip(),
+                $userAgent
+            );
+            if ($result['status'] === 'mfa_required') {
+                return new Response(
+                    $this->view->render('login', [
+                        'csrf' => $this->csrf->token(),
+                        'challenge' => $result['challenge'] ?? null,
+                    ], 'Vérification en deux étapes')
+                );
+            }
+            if ($result['status'] === 'identification_expired') {
+                return new Response(
+                    $this->view->render('login', [
+                        'csrf' => $this->csrf->token(),
+                        'error' => 'L’identification a expiré. Saisissez à nouveau votre adresse e-mail.',
+                    ], 'Connexion sécurisée'),
+                    401
+                );
+            }
+            if ($result['status'] !== 'authenticated') {
+                $deliveryFailed = $result['status'] === 'delivery_failed';
+                return new Response(
+                    $this->view->render('login', [
+                        'csrf' => $this->csrf->token(),
+                        'identification' => $this->auth->pendingIdentification(
+                            $request->ip(),
+                            $userAgent
+                        ),
+                        'error' => $deliveryFailed
+                            ? 'Le second facteur est momentanément indisponible. Contactez l’administrateur.'
+                            : 'Mot de passe incorrect.',
+                    ], 'Connexion sécurisée'),
+                    $deliveryFailed ? 503 : 401
                 );
             }
             return Response::redirect($this->config->url('/app'));
@@ -1062,7 +1309,6 @@ final class WebApplication
                 'code_postal' => (string) ($request->post['code_postal'] ?? ''),
                 'localite' => (string) ($request->post['localite'] ?? ''),
                 'pays' => (string) ($request->post['pays'] ?? 'CH'),
-                'iban_facturation' => (string) ($request->post['iban_facturation'] ?? ''),
             ],
             $userId
         );
@@ -1332,9 +1578,15 @@ final class WebApplication
         return new Response($response->body, $response->status, $response->headers + [
             'X-Content-Type-Options' => 'nosniff',
             'X-Frame-Options' => 'DENY',
+            'X-Robots-Tag' => 'noindex, nofollow, noarchive',
             'Referrer-Policy' => 'same-origin',
-            'Content-Security-Policy' => "default-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'",
-            'Cache-Control' => 'no-store',
+            'Permissions-Policy' => 'camera=(), geolocation=(), microphone=()',
+            'Cross-Origin-Opener-Policy' => 'same-origin',
+            'Cross-Origin-Resource-Policy' => 'same-origin',
+            'Strict-Transport-Security' => 'max-age=31536000',
+            'Content-Security-Policy' => "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self' data:; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'",
+            'Cache-Control' => 'no-store, no-cache, must-revalidate, private, max-age=0',
+            'Pragma' => 'no-cache',
         ]);
     }
 }

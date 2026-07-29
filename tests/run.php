@@ -5,6 +5,8 @@ use Compta\Core\Audit\AuditLogger;
 use Compta\Core\Auth\AccessControl;
 use Compta\Core\Auth\AuthService;
 use Compta\Core\Auth\LoginThrottle;
+use Compta\Core\Auth\MfaService;
+use Compta\Core\Auth\PasswordResetService;
 use Compta\Core\Auth\UserRepository;
 use Compta\Core\Config\AppConfig;
 use Compta\Core\Database\BackupService;
@@ -18,8 +20,10 @@ use Compta\Core\Http\Response;
 use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
 use Compta\Core\Http\VueShellRenderer;
+use Compta\Core\Mail\Mailer;
 use Compta\Core\Security\ArraySessionStore;
 use Compta\Core\Security\Csrf;
+use Compta\Core\Security\TotpService;
 use Compta\Core\Support\Html;
 use Compta\Modules\Compta\AccountingSetupService;
 use Compta\Modules\Compta\AccountingCsvService;
@@ -58,6 +62,7 @@ use Compta\Modules\Dossiers\Http\StructureAccessApiController;
 use Compta\Modules\Dossiers\Http\StructureAccessInputValidator;
 use Compta\Modules\Facturation\BillingService;
 use Compta\Modules\Facturation\BillingWorkspaceService;
+use Compta\Modules\Facturation\CommercialDocumentService;
 use Compta\Modules\Facturation\ContactService;
 use Compta\Modules\Facturation\AttachmentService;
 use Compta\Modules\Facturation\InvoicePdfService;
@@ -432,6 +437,7 @@ final class Tests
         $a = AppConfig::load($root, [
             'instance_id' => 'edu',
             'base_url' => '/edu/',
+            'public_url' => 'https://compta.example.test/edu/',
             'storage_path' => '/tmp/compta-test-edu',
             'database_path' => '/tmp/compta-test-edu/db.sqlite',
         ]);
@@ -443,6 +449,20 @@ final class Tests
         ]);
         $this->same('/edu', $a->string('base_url'), 'base path normalisé');
         $this->same('/edu/test', $a->url('/test'), 'URL sous-répertoire');
+        $this->same(
+            'https://compta.example.test/edu/reinitialiser',
+            $a->publicUrl('/reinitialiser'),
+            'URL publique de confiance reprend le sous-répertoire'
+        );
+        $this->throws(
+            fn () => AppConfig::load($root, [
+                'env' => 'prod',
+                'instance_id' => 'insecure',
+                'base_url' => '/compta',
+                'public_url' => 'http://example.test/autre-chemin',
+            ]),
+            'URL publique HTTP ou incohérente refusée en production'
+        );
         $this->true($a->sessionName() !== $b->sessionName(), 'cookies propres aux instances');
         $this->same('/edu/', $a->sessionPath(), 'path cookie propre');
 
@@ -491,7 +511,7 @@ final class Tests
         [$pdo, $runner, $databasePath] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            ['001', '002', '003', '004'],
+            ['001', '002', '003', '004', '005'],
             $applied,
             'base initiale et migrations complémentaires appliquées'
         );
@@ -517,7 +537,7 @@ final class Tests
         $this->true(true, 'écriture concurrente possible après libération du verrou');
 
         $this->same(
-            4,
+            5,
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM schema_migrations"
             )->fetchColumn(),
@@ -710,6 +730,14 @@ final class Tests
         $runner->apply();
         $ids = $this->seedScopes($pdo);
         $users = new UserRepository($pdo);
+        $this->throws(
+            fn () => $users->create('faible@example.test', 'ChangeMe123!'),
+            'mot de passe initial prévisible refusé'
+        );
+        $this->true(
+            $users->create('douze@example.test', 'Abcdef12!xyz') > 0,
+            'mot de passe robuste de douze caractères accepté'
+        );
         $userId = $users->create('eleve@example.test', 'mot-de-passe-tres-long');
         $roleId = (int) $pdo->query("SELECT id FROM roles WHERE code = 'apprenant'")->fetchColumn();
         $stmt = $pdo->prepare(
@@ -763,21 +791,123 @@ final class Tests
         );
 
         $session = new ArraySessionStore();
+        $authCsrf = new Csrf($session);
+        $csrfBeforeLogin = $authCsrf->token();
         $auth = new AuthService(
             $users,
             new LoginThrottle($pdo, 2, 900),
             new AuditLogger($pdo),
-            $session
+            $session,
+            $authCsrf
         );
         $this->false($auth->attempt('eleve@example.test', 'faux', '127.0.0.1'), 'mauvais mot de passe');
         $this->true($auth->attempt('eleve@example.test', 'mot-de-passe-tres-long', '127.0.0.1'), 'connexion valide');
         $this->same($userId, $auth->userId(), 'utilisateur en session');
+        $this->true(
+            $csrfBeforeLogin !== $authCsrf->token(),
+            'jeton CSRF renouvelé après authentification'
+        );
         $auditCount = (int) $pdo->query('SELECT COUNT(*) FROM audit_events')->fetchColumn();
         $this->true($auditCount >= 2, 'connexions auditées');
         $storedIp = (string) $pdo->query(
             "SELECT ip FROM audit_events WHERE action = 'auth.connexion' ORDER BY id DESC LIMIT 1"
         )->fetchColumn();
         $this->same('127.0.0.0', $storedIp, 'IP d’audit anonymisée');
+
+        $totp = new TotpService(str_repeat('cle-securite-compta-', 2));
+        $this->true(
+            $totp->verify(
+                'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',
+                '287082',
+                59
+            ),
+            'TOTP conforme au vecteur RFC 6238'
+        );
+        $protectedSecret = $totp->encrypt('SECRET-TOTP');
+        $this->same(
+            'SECRET-TOTP',
+            $totp->decrypt($protectedSecret),
+            'secret TOTP chiffré au repos et déchiffrable'
+        );
+
+        $mfaSession = new ArraySessionStore();
+        $mailer = new class implements Mailer {
+            /** @var list<array{recipient:string,subject:string,text:string}> */
+            public array $messages = [];
+
+            public function send(string $recipient, string $subject, string $text): void
+            {
+                $this->messages[] = compact('recipient', 'subject', 'text');
+            }
+        };
+        $mfaConfig = AppConfig::load(dirname(__DIR__), [
+            'instance_id' => 'test-mfa',
+            'mfa_encryption_key' => str_repeat('cle-securite-compta-', 2),
+            'mfa_challenge_seconds' => 600,
+            'mfa_max_attempts' => 5,
+            'mail_transport' => 'php',
+        ]);
+        $mfa = new MfaService(
+            $pdo,
+            $users,
+            $mfaSession,
+            new AuditLogger($pdo),
+            $totp,
+            $mailer,
+            $mfaConfig
+        );
+        $users->setLoginMode($userId, 'email');
+        $mfaAuth = new AuthService(
+            $users,
+            new LoginThrottle($pdo, 5, 900),
+            new AuditLogger($pdo),
+            $mfaSession,
+            new Csrf($mfaSession),
+            $mfa
+        );
+        $mfaStart = $mfaAuth->begin(
+            'eleve@example.test',
+            'mot-de-passe-tres-long',
+            '127.0.0.3',
+            'Test'
+        );
+        $this->same('mfa_required', $mfaStart['status'], 'second facteur exigé après le mot de passe');
+        $this->same(null, $mfaAuth->userId(), 'mot de passe seul ne crée aucune session MFA');
+        preg_match('/\\b(\\d{6})\\b/', $mailer->messages[0]['text'] ?? '', $codeMatch);
+        $this->same(6, strlen((string) ($codeMatch[1] ?? '')), 'code e-mail de six chiffres envoyé');
+        $wrongCode = ($codeMatch[1] ?? '') === '000000' ? '000001' : '000000';
+        $this->same(
+            'invalid',
+            $mfaAuth->completeMfa($wrongCode, '127.0.0.3', 'Test')['status'],
+            'code e-mail incorrect refusé'
+        );
+        $this->same(
+            'authenticated',
+            $mfaAuth->completeMfa((string) $codeMatch[1], '127.0.0.3', 'Test')['status'],
+            'code e-mail à usage unique complète la connexion'
+        );
+        $this->same($userId, $mfaAuth->userId(), 'session créée seulement après les deux facteurs');
+        $users->setLoginMode($userId, 'password');
+        $this->same(null, $mfaAuth->userId(), 'changement de sécurité révoque les anciennes sessions');
+        $this->throws(
+            fn () => $mfa->changePassword(
+                $userId,
+                'mot-de-passe-tres-long',
+                'ChangeMe123!',
+                '127.0.0.3'
+            ),
+            'mot de passe trop court ou prévisible refusé'
+        );
+        $mfa->changePassword(
+            $userId,
+            'mot-de-passe-tres-long',
+            'une phrase secrete vraiment unique',
+            '127.0.0.3'
+        );
+        $this->true(
+            $users->verifyPassword($userId, 'une phrase secrete vraiment unique'),
+            'nouvelle phrase secrète hachée et utilisable'
+        );
 
         $blockedSession = new ArraySessionStore();
         $blockedAuth = new AuthService(
@@ -795,6 +925,235 @@ final class Tests
                 '127.0.0.2'
             ),
             'anti-force-brute bloque après le seuil'
+        );
+        $distributedThrottle = new LoginThrottle($pdo, 2, 900);
+        for ($index = 10; $index < 18; $index++) {
+            $distributedThrottle->failure(
+                'cible-distribuee@example.test',
+                '127.0.0.' . $index
+            );
+        }
+        $this->true(
+            $distributedThrottle->blocked(
+                'cible-distribuee@example.test',
+                '127.0.0.99'
+            ),
+            'anti-force-brute bloque aussi une attaque distribuée sur un compte'
+        );
+
+        $stagedSession = new ArraySessionStore();
+        $stagedCsrf = new Csrf($stagedSession);
+        $stagedAuth = new AuthService(
+            $users,
+            new LoginThrottle($pdo, 5, 900),
+            new AuditLogger($pdo),
+            $stagedSession,
+            $stagedCsrf
+        );
+        $csrfBeforeIdentification = $stagedCsrf->token();
+        $knownIdentification = $stagedAuth->identify(
+            ' ELEVE@EXAMPLE.TEST ',
+            '127.0.0.30',
+            'Navigateur test'
+        );
+        $this->same(
+            ['email' => 'eleve@example.test'],
+            $knownIdentification,
+            'première étape normalise l’adresse sans authentifier'
+        );
+        $this->same(
+            null,
+            $stagedAuth->userId(),
+            'adresse e-mail seule ne crée aucune session authentifiée'
+        );
+        $this->true(
+            $csrfBeforeIdentification !== $stagedCsrf->token(),
+            'identification renouvelle le jeton CSRF'
+        );
+        $this->same(
+            null,
+            $stagedAuth->pendingIdentification(
+                '127.0.0.31',
+                'Navigateur test'
+            ),
+            'pré-authentification liée à l’adresse IP'
+        );
+        $unknownIdentification = $stagedAuth->identify(
+            'inconnu@example.test',
+            '127.0.0.30',
+            'Navigateur test'
+        );
+        $this->same(
+            array_keys($knownIdentification),
+            array_keys($unknownIdentification),
+            'compte connu et inconnu produisent la même structure d’identification'
+        );
+        $this->same(
+            'invalid',
+            $stagedAuth->continueWithPassword(
+                'mot-de-passe-incorrect',
+                '127.0.0.30',
+                'Navigateur test'
+            )['status'],
+            'mot de passe inconnu refusé seulement à la seconde étape'
+        );
+        $this->true(
+            $stagedAuth->pendingIdentification(
+                '127.0.0.30',
+                'Navigateur test'
+            ) !== null,
+            'seconde étape conservée après un mot de passe incorrect'
+        );
+        $stagedAuth->identify(
+            'eleve@example.test',
+            '127.0.0.30',
+            'Navigateur test'
+        );
+        $this->same(
+            'authenticated',
+            $stagedAuth->continueWithPassword(
+                'une phrase secrete vraiment unique',
+                '127.0.0.30',
+                'Navigateur test'
+            )['status'],
+            'mot de passe valide termine le flux en deux écrans'
+        );
+        $this->same(
+            null,
+            $stagedAuth->pendingIdentification(
+                '127.0.0.30',
+                'Navigateur test'
+            ),
+            'pré-authentification supprimée après connexion'
+        );
+
+        $resetUserId = $users->create(
+            'recuperation@example.test',
+            'phrase initiale de recuperation'
+        );
+        $users->setLoginMode($resetUserId, 'email');
+        $resetMailer = new class implements Mailer {
+            /** @var list<array{recipient:string,subject:string,text:string}> */
+            public array $messages = [];
+
+            public function send(string $recipient, string $subject, string $text): void
+            {
+                $this->messages[] = compact('recipient', 'subject', 'text');
+            }
+        };
+        $resetConfig = AppConfig::load(dirname(__DIR__), [
+            'instance_id' => 'test-recuperation',
+            'base_url' => '/instance',
+            'public_url' => 'https://compta.example.test/instance',
+            'database_path' => '',
+            'password_reset_seconds' => 900,
+            'password_reset_email_limit' => 3,
+            'password_reset_ip_limit' => 10,
+        ]);
+        $passwordReset = new PasswordResetService(
+            $pdo,
+            $users,
+            new AuditLogger($pdo),
+            $resetMailer,
+            $resetConfig
+        );
+        $passwordReset->request('inconnu@example.test', '127.0.0.40');
+        $this->same(
+            0,
+            count($resetMailer->messages),
+            'demande inconnue répond sans révéler le compte ni envoyer de message'
+        );
+        $passwordReset->request('recuperation@example.test', '127.0.0.40');
+        $this->same(1, count($resetMailer->messages), 'lien de récupération envoyé');
+        $this->true(
+            str_contains(
+                $resetMailer->messages[0]['text'],
+                'https://compta.example.test/instance/reinitialiser-mot-de-passe'
+            ),
+            'URL de récupération issue de la configuration de confiance'
+        );
+        preg_match(
+            '/selector=([a-f0-9]{32})&token=([a-f0-9]{64})/',
+            $resetMailer->messages[0]['text'],
+            $resetMatch
+        );
+        $resetSelector = (string) ($resetMatch[1] ?? '');
+        $resetToken = (string) ($resetMatch[2] ?? '');
+        $this->true(
+            $passwordReset->tokenIsValid($resetSelector, $resetToken),
+            'jeton aléatoire valide avant consommation'
+        );
+        $this->throws(
+            fn () => $passwordReset->reset(
+                $resetSelector,
+                $resetToken,
+                'nouvelle phrase de recuperation',
+                'confirmation differente',
+                '127.0.0.40'
+            ),
+            'confirmation différente refusée sans consommer le lien'
+        );
+        $this->true(
+            $passwordReset->tokenIsValid($resetSelector, $resetToken),
+            'erreur de saisie ne consomme pas le lien'
+        );
+        $securityVersion = $users->securityVersion($resetUserId);
+        $resetSession = new ArraySessionStore([
+            'user_id' => $resetUserId,
+            'auth_security_version' => $securityVersion,
+        ]);
+        $resetAuth = new AuthService(
+            $users,
+            new LoginThrottle($pdo, 5, 900),
+            new AuditLogger($pdo),
+            $resetSession
+        );
+        $passwordReset->reset(
+            $resetSelector,
+            $resetToken,
+            'nouvelle phrase de recuperation',
+            'nouvelle phrase de recuperation',
+            '127.0.0.40'
+        );
+        $this->true(
+            $users->verifyPassword(
+                $resetUserId,
+                'nouvelle phrase de recuperation'
+            ),
+            'mot de passe récupéré haché et utilisable'
+        );
+        $this->false(
+            $passwordReset->tokenIsValid($resetSelector, $resetToken),
+            'lien de récupération à usage unique'
+        );
+        $this->same(
+            null,
+            $resetAuth->userId(),
+            'réinitialisation révoque les sessions existantes'
+        );
+        $this->same(
+            'email',
+            (string) $users->findById($resetUserId)['mode_connexion'],
+            'réinitialisation conserve le second facteur'
+        );
+        $passwordReset->administrativeReset(
+            'recuperation@example.test',
+            'phrase de secours administrative'
+        );
+        $this->true(
+            $users->verifyPassword(
+                $resetUserId,
+                'phrase de secours administrative'
+            ),
+            'commande de secours applique la même révocation sécurisée'
+        );
+        $this->true(
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM audit_events
+                 WHERE utilisateur_id = {$resetUserId}
+                   AND action = 'auth.mot_de_passe_reinitialise'"
+            )->fetchColumn() >= 2,
+            'récupérations autonome et administrative auditées'
         );
     }
 
@@ -878,6 +1237,13 @@ final class Tests
             'conflit de version empêche un écrasement concurrent'
         );
         $afterName = $registry->detail($organisationId);
+        $expectedLegalIdentityId = (int) ($afterName['legal_history'][0]['id'] ?? 0);
+        $registry->updateName(
+            $organisationId,
+            'Atelier Registre Suisse',
+            (int) $afterName['version'],
+            $actorId
+        );
         $registry->saveLegalIdentity(
             $organisationId,
             (int) $afterName['version'],
@@ -894,7 +1260,13 @@ final class Tests
                     'country' => 'CH',
                 ],
             ],
-            $actorId
+            $actorId,
+            $expectedLegalIdentityId
+        );
+        $this->same(
+            'Atelier Registre Suisse',
+            $registry->detail($organisationId)['nom'] ?? '',
+            'identité juridique fusionnée après une modification non juridique concurrente'
         );
         $history = $registry->detail($organisationId)['legal_history'];
         $this->same(2, count($history), 'identités juridiques successives conservées');
@@ -2211,6 +2583,37 @@ final class Tests
         );
         $moduleAccess = new ModuleAccessService($pdo);
         $configuration = new ConfigurationService($pdo, $audit, $moduleAccess);
+        $initialGuide = $configuration->setupGuide(
+            $organisationId,
+            $dossierId
+        );
+        $this->true(
+            $initialGuide['visible']
+            && !($initialGuide['steps'][0]['completed'] ?? true),
+            'parcours initial proposé tant que l’identité datée est absente'
+        );
+        $cancelledGuide = $configuration->updateSetupGuideStatus(
+            $organisationId,
+            $dossierId,
+            'cancel',
+            $userId
+        );
+        $this->true(
+            $cancelledGuide['cancelled']
+            && !$cancelledGuide['visible'],
+            'annulation persistante masque réellement le parcours initial'
+        );
+        $resumedGuide = $configuration->updateSetupGuideStatus(
+            $organisationId,
+            $dossierId,
+            'resume',
+            $userId
+        );
+        $this->true(
+            !$resumedGuide['cancelled']
+            && $resumedGuide['visible'],
+            'parcours initial explicitement reprenable après son annulation'
+        );
 
         $this->same(
             5,
@@ -2293,6 +2696,67 @@ final class Tests
             ],
             $userId
         );
+        (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))
+            ->installForDossier(
+                $organisationId,
+                $dossierId,
+                'personne_morale'
+            );
+        $guideExerciseId = $manager->createExercise(
+            $dossierId,
+            'Exercice de configuration 2026',
+            '2026-01-01',
+            '2026-12-31',
+            $userId
+        );
+        (new AccountingSetupService($pdo, $audit))->createPeriod(
+            $organisationId,
+            $dossierId,
+            $guideExerciseId,
+            '2026',
+            '2026-01-01',
+            '2026-12-31',
+            $userId
+        );
+        $guideReady = $configuration->setupGuide(
+            $organisationId,
+            $dossierId
+        );
+        $this->true(
+            ($guideReady['steps'][0]['completed'] ?? false)
+            && ($guideReady['steps'][1]['confirmable'] ?? false)
+            && ($guideReady['steps'][2]['confirmable'] ?? false),
+            'identité, couverture temporelle et ouverture à zéro reconnues'
+        );
+        $configuration->confirmSetupGuideStep(
+            $organisationId,
+            $dossierId,
+            'exercises',
+            $userId
+        );
+        $configuration->confirmSetupGuideStep(
+            $organisationId,
+            $dossierId,
+            'opening',
+            $userId
+        );
+        $billingTreasuryAccountId = (new TreasuryAccountService(
+            $pdo,
+            $audit
+        ))->create([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'compte_comptable_id' => $this->accountId(
+                $pdo,
+                $dossierId,
+                '1020'
+            ),
+            'libelle' => 'Banque de facturation',
+            'type' => 'banque',
+            'iban' => 'CH9300762011623852957',
+            'bic' => 'POFICHBEXXX',
+            'monnaie' => 'CHF',
+        ]);
         $initial = $configuration->read($organisationId, $dossierId);
         $updatedIdentity = $configuration->updateIdentity(
             $organisationId,
@@ -2313,8 +2777,10 @@ final class Tests
                 'phone' => '+41 22 000 00 00',
                 'email' => 'compta@example.test',
                 'website' => 'https://example.test',
-                'billing_iban' => 'CH9300762011623852957',
+                'billing_treasury_account_id' => $billingTreasuryAccountId,
                 'base_currency' => 'EUR',
+                'vat_exempt' => true,
+                'vat_effective_from' => '2026-01-01',
             ],
             $userId
         );
@@ -2334,8 +2800,22 @@ final class Tests
         );
         $this->same(
             'CH9300762011623852957',
-            $updatedIdentity['organization']['billing_iban'],
-            'IBAN de facturation centralisé avec l’identité légale'
+            $updatedIdentity['dossier']['billing_iban'],
+            'IBAN de facturation issu du compte de trésorerie sélectionné'
+        );
+        $vatGuide = $configuration->setupGuide(
+            $organisationId,
+            $dossierId
+        );
+        $this->true(
+            $vatGuide['steps'][5]['confirmable'] ?? false,
+            'régime TVA technique présenté pour confirmation explicite'
+        );
+        $configuration->confirmSetupGuideStep(
+            $organisationId,
+            $dossierId,
+            'vat',
+            $userId
         );
         $this->throws(
             fn () => $configuration->updateIdentity(
@@ -2373,6 +2853,47 @@ final class Tests
             $net30,
             '2026-01-01',
             $userId
+        );
+        $supplier30 = $configuration->createPaymentTerm(
+            $organisationId,
+            $dossierId,
+            [
+                'code' => 'FOUR30',
+                'label' => 'Fournisseurs à 30 jours',
+                'direction' => 'fournisseur',
+                'days' => 30,
+                'end_of_month' => false,
+                'valid_from' => '2026-01-01',
+                'valid_until' => '',
+            ],
+            $userId
+        );
+        $configuration->setPaymentDefault(
+            $organisationId,
+            $dossierId,
+            'fournisseur',
+            $supplier30,
+            '2026-01-01',
+            $userId
+        );
+        $readyToFinish = $configuration->setupGuide(
+            $organisationId,
+            $dossierId
+        );
+        $this->true(
+            $readyToFinish['required_complete']
+            && ($readyToFinish['steps'][10]['confirmable'] ?? false),
+            'étapes facultatives non bloquantes et parcours prêt à terminer'
+        );
+        $finishedGuide = $configuration->confirmSetupGuideStep(
+            $organisationId,
+            $dossierId,
+            'accounting',
+            $userId
+        );
+        $this->true(
+            $finishedGuide['finished'] && !$finishedGuide['visible'],
+            'parcours terminé masqué après validation finale'
         );
         $terms = new PaymentTermsService($pdo);
         $oldResolution = $terms->resolveDefault(
@@ -2511,6 +3032,10 @@ final class Tests
         $ids = $this->seedScopes($pdo);
         $users = new UserRepository($pdo);
         $userId = $users->create('http@example.test', 'mot-de-passe-tres-long');
+        $recoveryHttpUserId = $users->create(
+            'recovery-http@example.test',
+            'mot-de-passe-recuperation'
+        );
         $roleId = (int) $pdo->query("SELECT id FROM roles WHERE code = 'comptable'")->fetchColumn();
         $pdo->prepare(
             'INSERT INTO utilisateur_roles_dossier (utilisateur_id, dossier_id, role_id) VALUES (?, ?, ?)'
@@ -2580,6 +3105,7 @@ final class Tests
         $config = AppConfig::load(dirname(__DIR__), [
             'instance_id' => 'http-test',
             'base_url' => '/edu',
+            'public_url' => 'https://compta.example.test/edu',
             'database_path' => $dbPath,
             'storage_path' => dirname($dbPath),
             'debug' => true,
@@ -2594,7 +3120,24 @@ final class Tests
             $users,
             new LoginThrottle($pdo, 5, 900),
             new AuditLogger($pdo),
-            $session
+            $session,
+            $csrf
+        );
+        $httpResetMailer = new class implements Mailer {
+            /** @var list<array{recipient:string,subject:string,text:string}> */
+            public array $messages = [];
+
+            public function send(string $recipient, string $subject, string $text): void
+            {
+                $this->messages[] = compact('recipient', 'subject', 'text');
+            }
+        };
+        $httpPasswordReset = new PasswordResetService(
+            $pdo,
+            $users,
+            $httpAudit,
+            $httpResetMailer,
+            $config
         );
         $httpAccess = new AccessControl($pdo);
         $httpModuleAccess = new ModuleAccessService($pdo);
@@ -2742,6 +3285,7 @@ final class Tests
                     $httpContacts
                 ),
                 $httpBilling,
+                new CommercialDocumentService($pdo, $httpAudit, $httpBilling),
                 $httpContacts,
                 $httpPayments,
                 new RecurringBillingService($pdo, $httpAudit, $httpBilling),
@@ -2846,9 +3390,192 @@ final class Tests
             $httpPedagogy,
             $apiRoutes,
             $shellPage,
-            $httpModuleAccess
+            $httpModuleAccess,
+            $httpPasswordReset
         );
 
+        $session->remove('user_id');
+        $forgottenPage = $app->handle(new Request(
+            'GET',
+            '/mot-de-passe-oublie',
+            server: ['REMOTE_ADDR' => '127.0.0.50']
+        ));
+        $this->same(200, $forgottenPage->status, 'page mot de passe oublié accessible');
+        $this->true(
+            str_contains($forgottenPage->body, 'Envoyer le lien sécurisé')
+            && str_contains($forgottenPage->body, 'Aucune information sur'),
+            'demande publique explique la réponse anti-énumération'
+        );
+        $resetRequestCsrf = $csrf->token();
+        $unknownReset = $app->handle(new Request(
+            'POST',
+            '/mot-de-passe-oublie',
+            post: [
+                '_csrf' => $resetRequestCsrf,
+                'email' => 'absent-http@example.test',
+            ],
+            server: ['REMOTE_ADDR' => '127.0.0.50']
+        ));
+        $knownReset = $app->handle(new Request(
+            'POST',
+            '/mot-de-passe-oublie',
+            post: [
+                '_csrf' => $resetRequestCsrf,
+                'email' => 'recovery-http@example.test',
+            ],
+            server: ['REMOTE_ADDR' => '127.0.0.50']
+        ));
+        $this->same(
+            $unknownReset->body,
+            $knownReset->body,
+            'compte connu et inconnu reçoivent exactement la même réponse HTTP'
+        );
+        $this->same(1, count($httpResetMailer->messages), 'HTTP envoie un seul lien au compte actif');
+        preg_match(
+            '/selector=([a-f0-9]{32})&token=([a-f0-9]{64})/',
+            $httpResetMailer->messages[0]['text'] ?? '',
+            $httpResetMatch
+        );
+        $httpSelector = (string) ($httpResetMatch[1] ?? '');
+        $httpToken = (string) ($httpResetMatch[2] ?? '');
+        $resetForm = $app->handle(new Request(
+            'GET',
+            '/reinitialiser-mot-de-passe',
+            query: ['selector' => $httpSelector, 'token' => $httpToken]
+        ));
+        $this->true(
+            $resetForm->status === 200
+            && str_contains($resetForm->body, 'id="new-password"'),
+            'lien HTTP valide présente le formulaire de remplacement'
+        );
+        $resetCompleted = $app->handle(new Request(
+            'POST',
+            '/reinitialiser-mot-de-passe',
+            post: [
+                '_csrf' => $csrf->token(),
+                'selector' => $httpSelector,
+                'token' => $httpToken,
+                'password' => 'nouveau mot de passe HTTP',
+                'password_confirmation' => 'nouveau mot de passe HTTP',
+            ],
+            server: ['REMOTE_ADDR' => '127.0.0.50']
+        ));
+        $this->true(
+            $resetCompleted->status === 200
+            && str_contains($resetCompleted->body, 'Mot de passe modifié'),
+            'remplacement HTTP confirme la révocation'
+        );
+        $this->true(
+            $users->verifyPassword(
+                $recoveryHttpUserId,
+                'nouveau mot de passe HTTP'
+            ),
+            'nouveau mot de passe HTTP immédiatement utilisable'
+        );
+        $replayedReset = $app->handle(new Request(
+            'GET',
+            '/reinitialiser-mot-de-passe',
+            query: ['selector' => $httpSelector, 'token' => $httpToken]
+        ));
+        $this->true(
+            str_contains($replayedReset->body, 'invalide, expiré ou déjà utilisé'),
+            'lien HTTP consommé impossible à rejouer'
+        );
+
+        $loginPage = $app->handle(new Request('GET', '/login'));
+        $this->same(200, $loginPage->status, 'page de connexion accessible');
+        $this->true(
+            str_contains($loginPage->body, 'id="login-presentation-title"')
+            && str_contains($loginPage->body, 'name="stage" value="identify"')
+            && !str_contains($loginPage->body, 'id="password"')
+            && str_contains($loginPage->body, 'Mot de passe oublié ?')
+            && str_contains($loginPage->body, 'M8 8a3 3 0 1 0 0-6'),
+            'premier écran présente le produit et demande uniquement l’adresse'
+        );
+        $this->true(
+            str_contains(
+                $loginPage->headers['Content-Security-Policy'] ?? '',
+                "form-action 'self'"
+            )
+            && ($loginPage->headers['X-Robots-Tag'] ?? '') ===
+                'noindex, nofollow, noarchive'
+            && str_contains(
+                $loginPage->headers['Cache-Control'] ?? '',
+                'no-store'
+            ),
+            'connexion reçoit les en-têtes privés et restrictifs'
+        );
+        $csrfBeforeHttpLogin = $csrf->token();
+        $identifiedLogin = $app->handle(new Request(
+            'POST',
+            '/login',
+            post: [
+                '_csrf' => $csrfBeforeHttpLogin,
+                'stage' => 'identify',
+                'email' => 'http@example.test',
+            ],
+            server: ['REMOTE_ADDR' => '127.0.0.10']
+        ));
+        $this->same(200, $identifiedLogin->status, 'adresse acceptée avant le mot de passe');
+        $this->true(
+            str_contains($identifiedLogin->body, 'http@example.test')
+            && str_contains($identifiedLogin->body, 'id="password"')
+            && !str_contains($identifiedLogin->body, 'id="email"'),
+            'second écran rappelle le compte et ne demande que le mot de passe'
+        );
+        $csrfAfterIdentification = $csrf->token();
+        $this->true(
+            $csrfBeforeHttpLogin !== $csrfAfterIdentification,
+            'passage au mot de passe renouvelle la session CSRF'
+        );
+        $failedLogin = $app->handle(new Request(
+            'POST',
+            '/login',
+            post: [
+                '_csrf' => $csrfAfterIdentification,
+                'stage' => 'password',
+                'password' => 'mot-de-passe-incorrect',
+            ],
+            server: ['REMOTE_ADDR' => '127.0.0.10']
+        ));
+        $this->same(401, $failedLogin->status, 'identifiants invalides refusés');
+        $this->true(
+            str_contains(
+                $failedLogin->body,
+                'Mot de passe incorrect.'
+            )
+            && str_contains(
+                $failedLogin->body,
+                'http@example.test'
+            ),
+            'échec générique et seconde étape conservée'
+        );
+        $successfulLogin = $app->handle(new Request(
+            'POST',
+            '/login',
+            post: [
+                '_csrf' => $csrfAfterIdentification,
+                'stage' => 'password',
+                'password' => 'mot-de-passe-tres-long',
+            ],
+            server: ['REMOTE_ADDR' => '127.0.0.10']
+        ));
+        $this->same(303, $successfulLogin->status, 'connexion valide redirige');
+        $this->same(
+            '/edu/app',
+            $successfulLogin->headers['Location'] ?? '',
+            'connexion respecte le chemin d’instance'
+        );
+        $this->true(
+            $csrfAfterIdentification !== $csrf->token(),
+            'connexion HTTP renouvelle le jeton CSRF'
+        );
+        $authenticatedLogin = $app->handle(new Request('GET', '/login'));
+        $this->same(
+            302,
+            $authenticatedLogin->status,
+            'utilisateur connecté écarté du formulaire de connexion'
+        );
         $session->remove('user_id');
         $anonymousShell = $app->handle(new Request('GET', '/app/compta/etats'));
         $this->same(302, $anonymousShell->status, 'shell Vue profond exige une session');
@@ -3124,6 +3851,7 @@ final class Tests
                 'catalog',
                 'definitions',
                 'capabilities',
+                'commercial_documents',
             ],
             array_keys($apiBillingJson['data'] ?? []),
             'contrat facturation complet et stable'
@@ -3168,6 +3896,53 @@ final class Tests
             200,
             $apiConfiguration->status,
             'configuration centralisée exposée en API'
+        );
+        $setupGuide = $app->handle(new Request(
+            'GET',
+            '/api/v1/configuration/setup-guide'
+        ));
+        $this->same(
+            200,
+            $setupGuide->status,
+            'parcours de configuration exposé dans le dossier courant'
+        );
+        $this->same(
+            11,
+            count($this->responseJson($setupGuide)['data']['steps'] ?? []),
+            'parcours complet, ordonné et contractuel'
+        );
+        $cancelledSetupGuide = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/setup-guide/status',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['action' => 'cancel']]
+        ));
+        $this->same(
+            false,
+            $this->responseJson($cancelledSetupGuide)['data']['visible'] ?? true,
+            'annulation HTTP masque le parcours dans le dossier courant'
+        );
+        $resumedSetupGuide = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/setup-guide/status',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['action' => 'resume']]
+        ));
+        $this->same(
+            true,
+            $this->responseJson($resumedSetupGuide)['data']['visible'] ?? false,
+            'reprise HTTP réactive le parcours dans le dossier courant'
+        );
+        $confirmedExerciseSetup = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/setup-guide/confirm',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => ['step' => 'exercises']]
+        ));
+        $this->same(
+            200,
+            $confirmedExerciseSetup->status,
+            'validation explicite d’une étape protégée par CSRF'
         );
         $apiConsolidation = $app->handle(new Request(
             'GET',
@@ -3853,16 +4628,37 @@ final class Tests
             ]]
         ));
         $this->same(
-            422,
+            200,
             $protectedContactDeletion->status,
-            'contact attaché à une facture protégé contre la suppression'
+            'contact attaché à une facture archivé sans effacer son historique'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT actif FROM contacts WHERE id = {$createdContactId}"
+            )->fetchColumn(),
+            'contact dépendant conservé et marqué comme archivé'
+        );
+        $restoredContact = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/contacts/restore',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => $createdContactId,
+                'version' => 3,
+            ]]
+        ));
+        $this->same(
+            200,
+            $restoredContact->status,
+            'contact archivé réactivé depuis Configuration Vue'
         );
         $this->same(
             1,
             (int) $pdo->query(
-                "SELECT COUNT(*) FROM contacts WHERE id = {$createdContactId}"
+                "SELECT actif FROM contacts WHERE id = {$createdContactId}"
             )->fetchColumn(),
-            'refus de suppression sans mutation partielle du contact'
+            'réactivation conserve le contact et son historique'
         );
         $pdo->exec(
             "DELETE FROM documents_financiers WHERE id = {$contactDocumentId}"
@@ -4073,6 +4869,40 @@ final class Tests
         );
         $session->set('user_id', $registryAdminId);
         $session->set('dossier_id', $vatClearDossier);
+        $vatRegimeSaved = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/vat-regimes',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'status' => 'non_assujetti',
+                'vat_number' => '',
+                'method' => 'effective',
+                'reporting_mode' => 'convenues',
+                'frequency' => 'annuelle',
+                'valid_from' => '2026-07-01',
+                'valid_until' => '',
+                'input_material_account_id' => null,
+                'input_investment_account_id' => null,
+                'vat_due_account_id' => null,
+                'vat_settlement_account_id' => null,
+                'corrections_account_id' => null,
+            ]]
+        ));
+        $this->same(
+            200,
+            $vatRegimeSaved->status,
+            'régime sans TVA daté enregistré depuis le référentiel'
+        );
+        $this->same(
+            'non_assujetti|2026-07-01',
+            (string) $pdo->query(
+                "SELECT statut || '|' || date_debut
+                 FROM tva_regimes
+                 WHERE dossier_id = {$vatClearDossier}
+                 ORDER BY date_debut DESC LIMIT 1"
+            )->fetchColumn(),
+            'régime sans TVA immédiatement applicable au dossier'
+        );
         $vatCleared = $app->handle(new Request(
             'POST',
             '/api/v1/configuration/references/vat/clear',
@@ -7035,6 +7865,10 @@ final class Tests
             'journal détaillé expose toutes les écritures et leurs lignes'
         );
         $this->true(
+            (int) ($journalDetails['items'][0]['account_id'] ?? 0) > 0,
+            'journal détaillé expose le compte ouvrable dans son extrait'
+        );
+        $this->true(
             str_starts_with(
                 $accountingCsv->exportJournal(
                     $ids['organisation_a'],
@@ -7051,10 +7885,10 @@ final class Tests
         $journalImportCsv = "\xEF\xBB\xBF"
             . "ecriture;date;journal;reference;piece;libelle_ecriture;"
             . "compte;libelle_ligne;debit;credit;statut\n"
-            . "IMPORT-1;2027-04-01;{$journalCode};IMP-1;;Import contrôlé;"
-            . "6500;Charge importée;12.50;0.00;validee\n"
-            . "IMPORT-1;2027-04-01;{$journalCode};IMP-1;;Import contrôlé;"
-            . "3400;Produit importé;0.00;12.50;validee\n";
+            . "IMPORT-1;2027-04-01;{$journalCode};;;;"
+            . "6500;;12.50;0.00;validee\n"
+            . "IMPORT-1;2027-04-01;{$journalCode};;;;"
+            . "3400;;0.00;12.50;validee\n";
         $journalImportPreview = $accountingCsv->previewJournalImport(
             $ids['organisation_a'],
             $ids['dossier_a'],
@@ -7139,6 +7973,11 @@ final class Tests
             ['statut' => 'comptabilisee', 'page' => 1, 'par_page' => 2]
         );
         $this->same(2, count($journal['items']), 'pagination serveur du journal');
+        $this->true(
+            ($journal['items'][0]['debit_accounts'] ?? []) !== []
+            && ($journal['items'][0]['credit_accounts'] ?? []) !== [],
+            'journal récent expose les comptes et leurs libellés pour le drill-down'
+        );
         $this->true($journal['total'] >= 5, 'journal filtré et totalisé');
         $ledger = $reports->ledger(
             $ids['organisation_a'],
@@ -9908,8 +10747,36 @@ final class Tests
                 'pays' => 'CH',
             ]
         );
+        $contactPerson = $contacts->create(
+            $organisationId,
+            $dossierId,
+            [
+                'type_personne' => 'personne',
+                'entreprise_id' => $customer,
+                'prenom' => 'Claire',
+                'nom' => 'Contact',
+                'email' => 'claire@example.test',
+            ],
+            ['client'],
+            [
+                'ligne1' => 'Rue du Test 1',
+                'code_postal' => '1000',
+                'localite' => 'Lausanne',
+                'pays' => 'CH',
+            ]
+        );
+        $personRecord = array_values(array_filter(
+            $contacts->all($organisationId, $dossierId),
+            static fn (array $contact): bool =>
+                (int) $contact['id'] === $contactPerson
+        ))[0];
         $this->same(
-            2,
+            'Client SA',
+            (string) $personRecord['entreprise_nom'],
+            'personne reliée facultativement à son entreprise'
+        );
+        $this->same(
+            3,
             count($contacts->all($organisationId, $dossierId)),
             'contacts multi-rôles propres au dossier'
         );
@@ -10041,6 +10908,10 @@ final class Tests
             (int) $billing->document($organisationId, $dossierId, $draftB)['version']
         );
         $this->true($numberA !== $numberB, 'numérotation transactionnelle sans collision');
+        $this->true(
+            str_starts_with($numberA, 'FV-'),
+            'facture de vente numérotée avec le préfixe FV'
+        );
         $this->true(ScorReference::valid(
             (string) $billing->document(
                 $organisationId,
@@ -10351,6 +11222,28 @@ final class Tests
                 'iban_facturation' => 'CH9300762011623852957',
             ]
         );
+        $billingTreasuryAccount = (new TreasuryAccountService(
+            $pdo,
+            $audit
+        ))->create([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'compte_comptable_id' => $bank,
+            'libelle' => 'Banque de facturation',
+            'type' => 'banque',
+            'iban' => 'CH9300762011623852957',
+            'bic' => 'POFICHBEXXX',
+            'monnaie' => 'CHF',
+        ]);
+        $pdo->prepare(
+            'UPDATE dossiers
+             SET compte_tresorerie_facturation_id = ?
+             WHERE id = ? AND organisation_id = ?'
+        )->execute([
+            $billingTreasuryAccount,
+            $dossierId,
+            $organisationId,
+        ]);
         $creditor = $billing->creditorProfile($organisationId, $dossierId);
         $this->same(
             'CH9300762011623852957',
@@ -10661,6 +11554,463 @@ final class Tests
             )->fetchColumn(),
             'récurrence fournisseur historisée sans doublon'
         );
+
+        (new UserRepository($pdo))->create(
+            'commercial@example.test',
+            'mot-de-passe-commercial'
+        );
+        $commercial = new CommercialDocumentService($pdo, $audit, $billing);
+        $commercialLine = static fn (
+            string $label,
+            int $amount,
+            int $accountId,
+            int $vatCode
+        ): array => [
+            'label' => $label,
+            'quantity_milli' => 1000,
+            'unit_price_cents' => $amount,
+            'input_mode' => 'net',
+            'account_id' => $accountId,
+            'vat_code_id' => $vatCode,
+        ];
+        $commercialDocument = function (int $id) use (
+            $commercial,
+            $organisationId,
+            $dossierId
+        ): array {
+            foreach ($commercial->all($organisationId, $dossierId) as $item) {
+                if ((int) $item['id'] === $id) {
+                    return $item;
+                }
+            }
+            throw new RuntimeException('Document commercial de test absent.');
+        };
+        $offer = $commercial->save(
+            $organisationId,
+            $dossierId,
+            [
+                'type' => 'offre_client',
+                'contact_id' => $customer,
+                'document_date' => '2026-10-01',
+                'valid_until' => '2026-10-31',
+                'currency' => 'CHF',
+                'header_text' => 'Notre proposition',
+                'footer_text' => 'Valable trente jours',
+                'lines' => [
+                    $commercialLine(
+                        'Mandat proposé',
+                        25000,
+                        $revenue,
+                        $saleNormal
+                    ),
+                ],
+            ],
+            1
+        );
+        $secondOffer = $commercial->save(
+            $organisationId,
+            $dossierId,
+            [
+                'type' => 'offre_client',
+                'contact_id' => $customer,
+                'document_date' => '2026-10-02',
+                'valid_until' => '',
+                'currency' => 'CHF',
+                'lines' => [
+                    array_replace(
+                        $commercialLine('Autre proposition', 5000, $revenue, $exempt),
+                        ['account_id' => null]
+                    ),
+                ],
+            ],
+            1
+        );
+        $this->same(
+            ['', ''],
+            [
+                (string) $commercialDocument($offer)['numero'],
+                (string) $commercialDocument($secondOffer)['numero'],
+            ],
+            'plusieurs offres brouillon coexistent sans consommer de numéro'
+        );
+        $this->same(
+            null,
+            $commercialDocument($secondOffer)['lines'][0]['compte_id'],
+            'une offre conserve quantités et prix sans exiger de compte comptable'
+        );
+        $offerNumber = $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $offer,
+            (int) $commercialDocument($offer)['version'],
+            'envoye',
+            1
+        );
+        $this->true(
+            str_starts_with($offerNumber, 'OF-2026-'),
+            'offre client numérotée à son envoi'
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $offer,
+            (int) $commercialDocument($offer)['version'],
+            'accepte',
+            1
+        );
+        $clientOrder = $commercial->convert(
+            $organisationId,
+            $dossierId,
+            [
+                'source_document_id' => $offer,
+                'target_type' => 'commande_client',
+                'document_date' => '2026-10-10',
+            ],
+            1
+        );
+        $this->same(
+            $offer,
+            (int) $commercialDocument($clientOrder['id'])['document_source_id'],
+            'commande client reliée à l’offre acceptée'
+        );
+        $clientInvoiceFromOrder = $commercial->convert(
+            $organisationId,
+            $dossierId,
+            [
+                'source_document_id' => $clientOrder['id'],
+                'target_type' => 'facture_client',
+                'document_date' => '2026-10-15',
+                'due_date' => '2026-11-14',
+                'collective_account_id' => $receivable,
+            ],
+            1
+        );
+        $this->same(
+            'brouillon',
+            (string) $billing->document(
+                $organisationId,
+                $dossierId,
+                $clientInvoiceFromOrder['id']
+            )['statut'],
+            'conversion de commande crée une facture brouillon modifiable'
+        );
+        $directOrder = $commercial->save(
+            $organisationId,
+            $dossierId,
+            [
+                'type' => 'commande_client',
+                'contact_id' => $customer,
+                'document_date' => '2026-10-20',
+                'valid_until' => '',
+                'currency' => 'CHF',
+                'lines' => [
+                    $commercialLine('Commande directe', 8000, $revenue, $exempt),
+                ],
+            ],
+            1
+        );
+        $this->same(
+            null,
+            $commercialDocument($directOrder)['document_source_id'],
+            'commande directe possible sans offre préalable'
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $directOrder,
+            (int) $commercialDocument($directOrder)['version'],
+            'envoye',
+            1
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $directOrder,
+            (int) $commercialDocument($directOrder)['version'],
+            'accepte',
+            1
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $directOrder,
+            (int) $commercialDocument($directOrder)['version'],
+            'annule',
+            1
+        );
+        $this->same(
+            'annule',
+            (string) $commercialDocument($directOrder)['statut'],
+            'commande acceptée annulable sans perdre son historique'
+        );
+
+        $requestForQuote = $commercial->save(
+            $organisationId,
+            $dossierId,
+            [
+                'type' => 'demande_offre_fournisseur',
+                'contact_id' => $supplier,
+                'document_date' => '2026-10-01',
+                'valid_until' => '2026-10-15',
+                'currency' => 'CHF',
+                'lines' => [
+                    $commercialLine('Matériel demandé', 12000, $expense, $purchase),
+                ],
+            ],
+            1
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $requestForQuote,
+            (int) $commercialDocument($requestForQuote)['version'],
+            'envoye',
+            1
+        );
+        $supplierResponse = $commercial->convert(
+            $organisationId,
+            $dossierId,
+            [
+                'source_document_id' => $requestForQuote,
+                'target_type' => 'reponse_offre_fournisseur',
+                'document_date' => '2026-10-05',
+                'external_number' => 'OFFRE-FOU-1',
+            ],
+            1
+        );
+        $responseNumber = $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $supplierResponse['id'],
+            (int) $commercialDocument($supplierResponse['id'])['version'],
+            'recu',
+            1
+        );
+        $this->true(
+            str_starts_with($responseNumber, 'ROF-2026-'),
+            'réponse fournisseur enregistrée et numérotée à sa réception'
+        );
+        $replacement = $commercial->convert(
+            $organisationId,
+            $dossierId,
+            [
+                'source_document_id' => $supplierResponse['id'],
+                'target_type' => 'reponse_offre_fournisseur',
+                'document_date' => '2026-10-08',
+                'external_number' => 'OFFRE-FOU-2',
+            ],
+            1
+        );
+        $this->same(
+            'remplace',
+            (string) $commercialDocument($supplierResponse['id'])['statut'],
+            'réponse modifiée conservée comme remplacée'
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $replacement['id'],
+            (int) $commercialDocument($replacement['id'])['version'],
+            'recu',
+            1
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $replacement['id'],
+            (int) $commercialDocument($replacement['id'])['version'],
+            'accepte',
+            1
+        );
+        $supplierOrder = $commercial->convert(
+            $organisationId,
+            $dossierId,
+            [
+                'source_document_id' => $replacement['id'],
+                'target_type' => 'commande_fournisseur',
+                'document_date' => '2026-10-09',
+            ],
+            1
+        );
+        $this->same(
+            'commande_fournisseur',
+            (string) $commercialDocument($supplierOrder['id'])['type'],
+            'réponse fournisseur acceptée convertible en commande'
+        );
+        $refusedResponse = $commercial->save(
+            $organisationId,
+            $dossierId,
+            [
+                'type' => 'reponse_offre_fournisseur',
+                'contact_id' => $supplier,
+                'document_date' => '2026-10-12',
+                'valid_until' => '',
+                'currency' => 'CHF',
+                'external_number' => 'OFFRE-REFUSEE',
+                'lines' => [
+                    $commercialLine('Alternative refusée', 18000, $expense, $purchase),
+                ],
+            ],
+            1
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $refusedResponse,
+            (int) $commercialDocument($refusedResponse)['version'],
+            'recu',
+            1
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $refusedResponse,
+            (int) $commercialDocument($refusedResponse)['version'],
+            'refuse',
+            1
+        );
+        $this->same(
+            'refuse',
+            (string) $commercialDocument($refusedResponse)['statut'],
+            'réponse fournisseur refusée conservée avec son statut'
+        );
+
+        $vat->addRegime([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'statut' => 'non_assujetti',
+            'numero_tva' => '',
+            'methode' => 'effective',
+            'mode_decompte' => 'convenues',
+            'periodicite' => 'annuelle',
+            'date_debut' => '2026-11-01',
+            'compte_impot_prealable_materiel_id' => null,
+            'compte_impot_prealable_investissements_id' => null,
+            'compte_tva_due_id' => null,
+            'compte_decompte_tva_id' => null,
+            'compte_corrections_id' => null,
+            'fermer_precedent' => true,
+        ]);
+        $exemptSale = $billing->createDraft(
+            $organisationId,
+            $dossierId,
+            'facture_client',
+            $customer,
+            '2026-11-10',
+            '2026-12-10',
+            [[
+                'libelle' => 'Vente sans TVA',
+                'quantite_milli' => 1000,
+                'prix_unitaire_centimes' => 10000,
+                'mode_saisie' => 'net',
+                'compte_id' => $revenue,
+                'code_tva_id' => 0,
+                'date_prestation' => '2026-11-10',
+            ]],
+            $receivable
+        );
+        $this->same(
+            '10000|0|10000',
+            (int) $billing->document(
+                $organisationId,
+                $dossierId,
+                $exemptSale
+            )['total_net_centimes']
+                . '|' . (int) $billing->document(
+                    $organisationId,
+                    $dossierId,
+                    $exemptSale
+                )['total_tva_centimes']
+                . '|' . (int) $billing->document(
+                    $organisationId,
+                    $dossierId,
+                    $exemptSale
+                )['total_brut_centimes'],
+            'vente non assujettie sans code ni calcul TVA'
+        );
+        $exemptPurchase = $billing->createDraft(
+            $organisationId,
+            $dossierId,
+            'facture_fournisseur',
+            $supplier,
+            '2026-11-11',
+            '2026-12-11',
+            [[
+                'libelle' => 'Achat brut sans impôt préalable',
+                'quantite_milli' => 1000,
+                'prix_unitaire_centimes' => 10810,
+                'mode_saisie' => 'brut',
+                'compte_id' => $expense,
+                'code_tva_id' => 0,
+                'date_prestation' => '2026-11-11',
+            ]],
+            $payable,
+            'FOU-SANS-TVA-1'
+        );
+        $this->same(
+            '10810|0|10810',
+            (int) $billing->document(
+                $organisationId,
+                $dossierId,
+                $exemptPurchase
+            )['total_net_centimes']
+                . '|' . (int) $billing->document(
+                    $organisationId,
+                    $dossierId,
+                    $exemptPurchase
+                )['total_tva_centimes']
+                . '|' . (int) $billing->document(
+                    $organisationId,
+                    $dossierId,
+                    $exemptPurchase
+                )['total_brut_centimes'],
+            'achat non assujetti saisi TVA comprise et entièrement en charge'
+        );
+        $this->same(
+            null,
+            $billing->lines($exemptPurchase)[0]['code_tva_id'],
+            'aucune référence TVA artificielle sur le document non assujetti'
+        );
+        $exemptRecurrence = $recurrences->create(
+            $organisationId,
+            $dossierId,
+            'facture_client',
+            $customer,
+            'Abonnement sans TVA',
+            'mensuelle',
+            1,
+            '2026-11-20',
+            null,
+            30,
+            $receivable,
+            '',
+            [[
+                'libelle' => 'Échéance non assujettie',
+                'quantite_milli' => 1000,
+                'prix_unitaire_centimes' => 5000,
+                'mode_saisie' => 'net',
+                'compte_id' => $revenue,
+                'code_tva_id' => 0,
+            ]]
+        );
+        $recurrences->generateDue(
+            $organisationId,
+            $dossierId,
+            '2026-11-20'
+        );
+        $generatedExemptInvoice = (int) $pdo->query(
+            "SELECT document_id FROM generations_factures_recurrentes
+             WHERE modele_id = {$exemptRecurrence}"
+        )->fetchColumn();
+        $this->same(
+            0,
+            (int) $billing->document(
+                $organisationId,
+                $dossierId,
+                $generatedExemptInvoice
+            )['total_tva_centimes'],
+            'facture récurrente non assujettie générée sans TVA'
+        );
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après facturation');
     }
 
@@ -10828,8 +12178,8 @@ final class Tests
                 'absence de régime TVA convertie en erreur métier de dépense'
             );
             $this->same(
-                'Aucun régime TVA applicable à cette date. '
-                . 'Configurez-le dans Comptabilité → Clôture → TVA.',
+                'Aucun régime TVA ne couvre la date du document. '
+                . 'Configurez le statut TVA sous Configuration → Entité.',
                 $exception->getMessage(),
                 'prérequis TVA précisément expliqué à l’utilisateur'
             );

@@ -28,6 +28,15 @@ php bin/console qualify
 
 Une application installée dans un sous-répertoire doit définir un
 `APP_INSTANCE_ID`, un `APP_BASE_URL`, un stockage et une base propres.
+`APP_PUBLIC_URL` contient l’URL HTTPS complète de l’instance et sert notamment
+aux liens de récupération du mot de passe.
+
+En cas de récupération administrative :
+
+```bash
+COMPTA_RESET_PASSWORD='une phrase secrète unique' \
+  php bin/console user:reset-password --email=utilisateur@example.test
+```
 
 `qualify` est la porte unique avant livraison : garde des migrations 001–010,
 lint PHP, deux suites de tests, migration vierge avec sauvegarde, diagnostic,

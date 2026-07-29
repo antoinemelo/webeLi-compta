@@ -37,6 +37,10 @@ final class ManagedReferencesService
                 static fn (array $row): array => [
                     'id' => (int) $row['id'],
                     'type' => (string) $row['type_personne'],
+                    'company_contact_id' => $row['entreprise_id'] === null
+                        ? null
+                        : (int) $row['entreprise_id'],
+                    'company_contact_name' => (string) ($row['entreprise_nom'] ?? ''),
                     'company' => (string) $row['raison_sociale'],
                     'first_name' => (string) $row['prenom'],
                     'last_name' => (string) $row['nom'],
@@ -53,11 +57,15 @@ final class ManagedReferencesService
                     'postal_code' => (string) ($row['code_postal'] ?? ''),
                     'city' => (string) ($row['localite'] ?? ''),
                     'country' => (string) ($row['pays'] ?? 'CH'),
+                    'active' => (int) $row['actif'] === 1,
+                    'offers_count' => (int) ($row['offres_actives'] ?? 0),
+                    'orders_count' => (int) ($row['commandes_actives'] ?? 0),
                     'version' => (int) $row['version'],
                 ],
-                $this->contacts->all($organisationId, $dossierId)
+                $this->contacts->all($organisationId, $dossierId, true)
             ),
             'vat' => [
+                'regimes' => $this->vatRegimes($organisationId, $dossierId),
                 'codes' => $this->vatCodes($organisationId, $dossierId),
                 'legal_rates' => $this->legalVatRates(),
                 'accounts' => $this->accounts($organisationId, $dossierId),
@@ -143,6 +151,7 @@ final class ManagedReferencesService
         ): int {
             $identity = [
                 'type_personne' => $data['type'],
+                'entreprise_id' => $data['company_contact_id'],
                 'raison_sociale' => $data['company'],
                 'prenom' => $data['first_name'],
                 'nom' => $data['last_name'],
@@ -197,140 +206,37 @@ final class ManagedReferencesService
         });
     }
 
+    /** @return array{action:'deleted'|'archived',dependencies:list<string>} */
     public function deleteContact(
         int $organisationId,
         int $dossierId,
         int $contactId,
         int $expectedVersion,
         int $actorId,
-    ): void {
-        $this->transaction(function () use (
+    ): array {
+        return $this->contacts->remove(
             $organisationId,
             $dossierId,
             $contactId,
             $expectedVersion,
             $actorId
-        ): void {
-            $contact = $this->pdo->prepare(
-                'SELECT type_personne, raison_sociale, prenom, nom, version
-                 FROM contacts
-                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
-                   AND actif = 1'
-            );
-            $contact->execute([$contactId, $organisationId, $dossierId]);
-            $row = $contact->fetch();
-            if ($row === false) {
-                throw new ConfigurationException('Contact absent du dossier.');
-            }
-            if ((int) $row['version'] !== $expectedVersion) {
-                throw new ConfigurationException(
-                    'Le contact a été modifié par une autre session. Rechargez la page.'
-                );
-            }
+        );
+    }
 
-            $dependencies = [
-                'documents_financiers' => 'facture, achat ou vente',
-                'paiements' => 'paiement',
-                'modeles_factures_recurrentes' => 'facture récurrente',
-                'modeles_depenses_recurrentes' => 'dépense récurrente',
-                'ordres_paiement_sortants' => 'ordre de paiement',
-            ];
-            $blockers = [];
-            foreach ($dependencies as $table => $label) {
-                $count = $this->pdo->prepare(
-                    "SELECT COUNT(*) FROM {$table}
-                     WHERE organisation_id = ? AND dossier_id = ? AND contact_id = ?"
-                );
-                $count->execute([$organisationId, $dossierId, $contactId]);
-                $total = (int) $count->fetchColumn();
-                if ($total > 0) {
-                    $blockers[] = "{$total} {$label}" . ($total > 1 ? 's' : '');
-                }
-            }
-
-            $employee = $this->pdo->prepare(
-                'SELECT id FROM employes
-                 WHERE organisation_id = ? AND dossier_id = ? AND contact_id = ?'
-            );
-            $employee->execute([$organisationId, $dossierId, $contactId]);
-            $employeeId = $employee->fetchColumn();
-            if ($employeeId !== false) {
-                foreach ([
-                    'fiches_salaires' => 'fiche de salaire',
-                    'certificats_salaires' => 'certificat de salaire',
-                    'paiements_salaires' => 'paiement salarial',
-                ] as $table => $label) {
-                    $count = $this->pdo->prepare(
-                        "SELECT COUNT(*) FROM {$table}
-                         WHERE organisation_id = ? AND dossier_id = ?
-                           AND employe_id = ?"
-                    );
-                    $count->execute([
-                        $organisationId,
-                        $dossierId,
-                        (int) $employeeId,
-                    ]);
-                    $total = (int) $count->fetchColumn();
-                    if ($total > 0) {
-                        $blockers[] = "{$total} {$label}" . ($total > 1 ? 's' : '');
-                    }
-                }
-            }
-            if ($blockers !== []) {
-                throw new ConfigurationException(
-                    'Suppression impossible : ' . implode(', ', $blockers) . ' lié(s).'
-                );
-            }
-
-            if ($employeeId !== false) {
-                $this->pdo->prepare(
-                    'DELETE FROM contrats_salariaux
-                     WHERE organisation_id = ? AND dossier_id = ? AND employe_id = ?'
-                )->execute([
-                    $organisationId,
-                    $dossierId,
-                    (int) $employeeId,
-                ]);
-                $this->pdo->prepare(
-                    'DELETE FROM employes
-                     WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
-                )->execute([
-                    (int) $employeeId,
-                    $organisationId,
-                    $dossierId,
-                ]);
-            }
-            $delete = $this->pdo->prepare(
-                'DELETE FROM contacts
-                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
-                   AND version = ?'
-            );
-            $delete->execute([
-                $contactId,
-                $organisationId,
-                $dossierId,
-                $expectedVersion,
-            ]);
-            if ($delete->rowCount() !== 1) {
-                throw new ConfigurationException(
-                    'Le contact a été modifié par une autre session.'
-                );
-            }
-            $name = trim(
-                (string) $row['raison_sociale'] . ' '
-                . (string) $row['prenom'] . ' '
-                . (string) $row['nom']
-            );
-            $this->audit->log(
-                'configuration.contact_supprime',
-                $actorId,
-                $organisationId,
-                $dossierId,
-                'contact',
-                (string) $contactId,
-                ['nom' => $name]
-            );
-        });
+    public function restoreContact(
+        int $organisationId,
+        int $dossierId,
+        int $contactId,
+        int $expectedVersion,
+        int $actorId,
+    ): void {
+        $this->contacts->restore(
+            $organisationId,
+            $dossierId,
+            $contactId,
+            $expectedVersion,
+            $actorId
+        );
     }
 
     /** @param array<string,mixed> $data */
@@ -367,6 +273,34 @@ final class ManagedReferencesService
             return $data['id'];
         }
         return $this->vat->addCode($payload, $actorId);
+    }
+
+    /** @param array<string,mixed> $data */
+    public function saveVatRegime(
+        int $organisationId,
+        int $dossierId,
+        array $data,
+        int $actorId,
+    ): int {
+        return $this->vat->addRegime([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'statut' => $data['status'],
+            'numero_tva' => $data['vat_number'],
+            'methode' => $data['method'],
+            'mode_decompte' => $data['reporting_mode'],
+            'periodicite' => $data['frequency'],
+            'date_debut' => $data['valid_from'],
+            'date_fin' => $data['valid_until'] ?: null,
+            'compte_impot_prealable_materiel_id' =>
+                $data['input_material_account_id'],
+            'compte_impot_prealable_investissements_id' =>
+                $data['input_investment_account_id'],
+            'compte_tva_due_id' => $data['vat_due_account_id'],
+            'compte_decompte_tva_id' => $data['vat_settlement_account_id'],
+            'compte_corrections_id' => $data['corrections_account_id'],
+            'fermer_precedent' => true,
+        ], $actorId);
     }
 
     public function deleteVatCode(
@@ -525,6 +459,23 @@ final class ManagedReferencesService
         return $this->treasury->create($payload, $actorId);
     }
 
+    /** @return array{action:'deleted'|'archived',dependencies:list<string>} */
+    public function removeTreasuryAccount(
+        int $organisationId,
+        int $dossierId,
+        int $accountId,
+        int $expectedVersion,
+        int $actorId,
+    ): array {
+        return $this->treasury->remove(
+            $organisationId,
+            $dossierId,
+            $accountId,
+            $expectedVersion,
+            $actorId
+        );
+    }
+
     /** @param array<string,mixed> $data */
     public function saveJournal(
         int $organisationId,
@@ -612,6 +563,50 @@ final class ManagedReferencesService
             $data['end_date'],
             $actorId
         );
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function vatRegimes(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, statut, numero_tva, methode, mode_decompte,
+                    periodicite, date_debut, date_fin,
+                    compte_impot_prealable_materiel_id,
+                    compte_impot_prealable_investissements_id,
+                    compte_tva_due_id, compte_decompte_tva_id,
+                    compte_corrections_id, source_reglementaire, verifie_le
+             FROM tva_regimes
+             WHERE organisation_id = ? AND dossier_id = ?
+             ORDER BY date_debut DESC, id DESC'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'status' => (string) $row['statut'],
+            'vat_number' => (string) $row['numero_tva'],
+            'method' => (string) $row['methode'],
+            'reporting_mode' => (string) $row['mode_decompte'],
+            'frequency' => (string) $row['periodicite'],
+            'valid_from' => (string) $row['date_debut'],
+            'valid_until' => $row['date_fin'] === null
+                ? null
+                : (string) $row['date_fin'],
+            'input_material_account_id' =>
+                $row['compte_impot_prealable_materiel_id'] === null
+                    ? null : (int) $row['compte_impot_prealable_materiel_id'],
+            'input_investment_account_id' =>
+                $row['compte_impot_prealable_investissements_id'] === null
+                    ? null : (int) $row['compte_impot_prealable_investissements_id'],
+            'vat_due_account_id' => $row['compte_tva_due_id'] === null
+                ? null : (int) $row['compte_tva_due_id'],
+            'vat_settlement_account_id' =>
+                $row['compte_decompte_tva_id'] === null
+                    ? null : (int) $row['compte_decompte_tva_id'],
+            'corrections_account_id' => $row['compte_corrections_id'] === null
+                ? null : (int) $row['compte_corrections_id'],
+            'source_url' => (string) $row['source_reglementaire'],
+            'verified_on' => (string) $row['verifie_le'],
+        ], $stmt->fetchAll());
     }
 
     /** @return list<array<string,mixed>> */

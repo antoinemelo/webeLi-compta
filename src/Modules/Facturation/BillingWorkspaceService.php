@@ -445,7 +445,11 @@ final class BillingWorkspaceService
         array $documents,
         array $payments,
     ): array {
-        $contacts = $this->contactService->all($organisationId, $dossierId);
+        $contacts = $this->contactService->all(
+            $organisationId,
+            $dossierId,
+            true
+        );
         $result = [];
         foreach ($contacts as $contact) {
             $summary = $this->balanceFromRows(
@@ -456,6 +460,10 @@ final class BillingWorkspaceService
             $result[] = [
                 'id' => (int) $contact['id'],
                 'type' => (string) $contact['type_personne'],
+                'company_contact_id' => $contact['entreprise_id'] === null
+                    ? null
+                    : (int) $contact['entreprise_id'],
+                'company_contact_name' => (string) ($contact['entreprise_nom'] ?? ''),
                 'company' => (string) $contact['raison_sociale'],
                 'first_name' => (string) $contact['prenom'],
                 'last_name' => (string) $contact['nom'],
@@ -472,6 +480,9 @@ final class BillingWorkspaceService
                 'roles' => array_values(array_filter(
                     explode(',', (string) $contact['roles'])
                 )),
+                'active' => (int) $contact['actif'] === 1,
+                'offers_count' => (int) ($contact['offres_actives'] ?? 0),
+                'orders_count' => (int) ($contact['commandes_actives'] ?? 0),
                 'version' => (int) $contact['version'],
                 'address' => [
                     'line1' => (string) ($contact['ligne1'] ?? ''),
@@ -684,6 +695,26 @@ final class BillingWorkspaceService
                 'label' => (string) $row['libelle'],
                 'type' => (string) $row['type'],
             ], $catalog['journals']),
+            'vat_regimes' => array_map(static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'status' => (string) $row['statut'],
+                'valid_from' => (string) $row['date_debut'],
+                'valid_until' => $row['date_fin'] === null
+                    ? null
+                    : (string) $row['date_fin'],
+            ], $catalog['vat_regimes']),
+            'payment_defaults' => array_map(static fn (array $row): array => [
+                'direction' => (string) $row['direction'],
+                'valid_from' => (string) $row['date_debut'],
+                'valid_until' => $row['date_fin'] === null
+                    ? null
+                    : (string) $row['date_fin'],
+                'condition_id' => (int) $row['condition_id'],
+                'code' => (string) $row['code'],
+                'label' => (string) $row['libelle'],
+                'days' => (int) $row['delai_jours'],
+                'end_of_month' => (int) $row['fin_de_mois'] === 1,
+            ], $catalog['payment_defaults']),
             'currencies' => $catalog['currencies'],
             'exchange_rates' => $catalog['exchange_rates'],
         ];

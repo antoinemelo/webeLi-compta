@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
@@ -19,6 +20,7 @@ import { useNotificationStore } from '@/stores/notifications';
 import { useOrganisationRegistryStore } from '@/stores/organisationRegistry';
 
 const context = useContextStore();
+const route = useRoute();
 const notifications = useNotificationStore();
 const store = useOrganisationRegistryStore();
 useToastFeedback(store, false);
@@ -232,7 +234,23 @@ watch(
   { immediate: true }
 );
 
-void store.load();
+watch(
+  () => [route.query.organisation, route.query.section],
+  async ([organisation, section]) => {
+    if (!store.payload) await store.load();
+    const organisationId = Number(organisation || 0);
+    if (organisationId > 0 && store.selected?.id !== organisationId) {
+      await store.select(organisationId);
+    }
+    if (
+      section === 'information'
+      && store.selected
+    ) {
+      detailSection.value = 'information';
+    }
+  },
+  { immediate: true }
+);
 
 async function applyFilters(): Promise<void> {
   store.page = 1;
@@ -298,6 +316,7 @@ async function saveLegalIdentity(): Promise<void> {
     await store.saveLegalIdentity({
       id: store.selected.id,
       version: store.selected.version,
+      expected_legal_identity_id: store.selected.legal_history[0]?.id ?? 0,
       identity: {
         valid_from: legalDraft.valid_from,
         legal_name: legalDraft.legal_name,
@@ -845,7 +864,7 @@ async function removeDossier(): Promise<void> {
               </label>
             </fieldset>
             <fieldset class="choice-field">
-              <legend>Association</legend>
+              <legend>Fonctionnalités associatives</legend>
               <label><input v-model="dossierDraft.association" type="checkbox"> Installer l’overlay association</label>
               <label><input v-model="dossierDraft.projects" type="checkbox" :disabled="!dossierDraft.association"> Comptes de projets</label>
               <label><input v-model="dossierDraft.restricted_funds" type="checkbox" :disabled="!dossierDraft.association"> Fonds affectés</label>
