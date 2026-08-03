@@ -30,7 +30,9 @@ Les exemples versionnés sont :
 - `context.success.json` ;
 - `collection.success.json` ;
 - `dashboard.success.json` ;
+- `security.success.json` ;
 - `configuration.success.json` ;
+- `setup-guide.success.json` ;
 - `accounting.success.json` ;
 - `managed-references.success.json` ;
 - `expenses.success.json` ;
@@ -93,20 +95,30 @@ Les exemples versionnés sont :
 | POST | `/api/v1/configuration/modules` | activation d’un module du dossier |
 | POST | `/api/v1/configuration/payment-terms` | nouvelle condition de paiement datée |
 | POST | `/api/v1/configuration/payment-defaults` | nouveau défaut client ou fournisseur |
+| POST | `/api/v1/configuration/payment-accounting` | choix du premier lettrage ou du lettrage complet comme déclencheur comptable |
+| POST | `/api/v1/configuration/audit/clear` | effacement explicite du journal d’audit du dossier |
 | GET | `/api/v1/configuration/references` | contacts, codes/taux TVA et taux salariaux du dossier |
 | POST | `/api/v1/configuration/references/contacts` | création ou édition optimiste d’un contact multi-rôles |
 | POST | `/api/v1/configuration/references/contacts/delete` | suppression optimiste si aucun document, paiement ou élément salarial n’est lié |
 | POST | `/api/v1/configuration/references/contacts/restore` | réactivation optimiste d’un contact archivé |
+| POST | `/api/v1/configuration/references/currencies` | activation ou désactivation d’une devise autorisée |
+| POST | `/api/v1/configuration/references/exchange-rates` | création ou correction d’un taux de change daté |
+| POST | `/api/v1/configuration/references/exchange-mapping` | correspondance des comptes pour les écarts de change |
 | POST | `/api/v1/configuration/references/vat-regimes` | nouveau régime TVA daté du dossier |
 | POST | `/api/v1/configuration/references/vat-codes` | nouveau code TVA daté |
+| POST | `/api/v1/configuration/references/vat-codes/delete` | suppression d’un code TVA sans dépendance |
+| POST | `/api/v1/configuration/references/vat/clear` | effacement coordonné de toute la configuration TVA |
 | POST | `/api/v1/configuration/references/payroll-rates` | taux sociaux annuels en ppm |
 | POST | `/api/v1/configuration/payroll/employer` | heures de référence ; identité employeur reprise de l’entité |
 | POST | `/api/v1/configuration/payroll/mapping` | mapping des comptes de salaires |
 | POST | `/api/v1/configuration/references/treasury-accounts` | création ou édition optimiste d’un compte de trésorerie |
+| POST | `/api/v1/configuration/references/treasury-accounts/remove` | archivage ou suppression d’un compte de trésorerie selon ses dépendances |
 | POST | `/api/v1/configuration/references/journals` | création ou édition optimiste d’un journal |
 | POST | `/api/v1/configuration/references/exercises` | création ou changement de statut d’un exercice |
 | POST | `/api/v1/configuration/references/periods` | création ou changement de statut d’une période |
 | GET | `/api/v1/salaires` | employés, contrats, fiches, dettes, paiements et récapitulatifs annuels |
+| POST | `/api/v1/salaires/employeur` | paramètres employeur utilisés par les calculs salariaux |
+| POST | `/api/v1/salaires/mapping` | comptes de comptabilisation des salaires |
 | POST | `/api/v1/salaires/employes` | création ou modification optimiste d’un employé genevois |
 | POST | `/api/v1/salaires/employes/supprimer` | suppression d’un employé sans historique salarial |
 | POST | `/api/v1/salaires/contrats` | création ou modification optimiste d’un contrat daté |
@@ -116,6 +128,9 @@ Les exemples versionnés sont :
 | POST | `/api/v1/salaires/fiches/valider` | validation et gel des snapshots |
 | POST | `/api/v1/salaires/fiches/comptabiliser` | écriture salariale dans le grand livre |
 | POST | `/api/v1/salaires/fiches/annuler` | correction par contre-passation |
+| POST | `/api/v1/salaires/paiements` | saisie d’un paiement salarial indépendant de la dette |
+| POST | `/api/v1/salaires/allocations` | allocation d’un paiement à une ou plusieurs dettes salariales |
+| POST | `/api/v1/salaires/paiements/comptabiliser` | comptabilisation idempotente du paiement salarial |
 | POST | `/api/v1/salaires/taux-ocas/previsualiser` | lecture sans écriture de `taux_par_annee` |
 | POST | `/api/v1/salaires/taux-ocas/confirmer` | import contrôlé, audité et idempotent |
 | POST | `/api/v1/salaires/certificats/preparer` | préparation d’un certificat interne |
@@ -123,10 +138,19 @@ Les exemples versionnés sont :
 | GET | `/api/v1/salaires/certificats/exporter` | export nominatif audité, non transmis |
 | GET | `/api/v1/accounting` | exercice, journal, extrait et plan issus du moteur comptable |
 | POST | `/api/v1/accounting/entries` | création et éventuelle validation d’une écriture |
+| GET | `/api/v1/accounting/entries/draft` | lecture détaillée d’une écriture encore en brouillon |
+| POST | `/api/v1/accounting/entries/delete` | suppression contrôlée d’une écriture en brouillon |
+| POST | `/api/v1/accounting/exchange-revaluations` | comptabilisation d’une réévaluation de change |
+| POST | `/api/v1/accounting/exchange-revaluations/reverse` | contre-passation d’une réévaluation de change |
 | POST | `/api/v1/accounting/chart/types` | libellés des types de comptes |
 | POST | `/api/v1/accounting/chart/sense-rules` | préfixes de fonctionnement créditeur |
 | POST | `/api/v1/accounting/chart/rubrics` | création, édition, ordre ou retrait d’une rubrique |
 | POST | `/api/v1/accounting/chart/accounts` | création, édition, ordre ou désactivation d’un compte |
+| GET | `/api/v1/accounting/chart/export` | export CSV du plan comptable courant |
+| POST | `/api/v1/accounting/chart/import/preview` | contrôle d’un plan comptable CSV sans mutation |
+| POST | `/api/v1/accounting/chart/import` | import confirmé du plan comptable |
+| POST | `/api/v1/accounting/chart/reset/preview` | aperçu des effets d’une réinitialisation du plan |
+| POST | `/api/v1/accounting/chart/reset` | réinitialisation confirmée du plan comptable |
 | POST | `/api/v1/accounting/opening` | enregistrement ou validation des soldes d’ouverture |
 | GET | `/api/v1/accounting/opening/export` | export CSV propre aux soldes d’ouverture |
 | POST | `/api/v1/accounting/opening/import/preview` | contrôle d’un CSV d’ouverture sans mutation |
@@ -135,7 +159,7 @@ Les exemples versionnés sont :
 | GET | `/api/v1/accounting/journal/export` | export CSV détaillé et réimportable du journal |
 | POST | `/api/v1/accounting/journal/import/preview` | contrôle d’écritures CSV groupées et équilibrées |
 | POST | `/api/v1/accounting/journal/import` | import atomique et anti-rejeu des écritures du journal |
-| GET | `/api/v1/accounting/reports/export` | export CSV paramétré et empreinte du grand livre |
+| GET | `/api/v1/accounting/reports/export` | export paramétré CSV ou PDF (`format=csv|pdf`) des états financiers |
 | POST | `/api/v1/accounting/vat/periods` | création d’une période TVA |
 | POST | `/api/v1/accounting/vat/statements/prepare` | préparation ou rectification depuis les sources |
 | POST | `/api/v1/accounting/vat/statements/control` | contrôle et rapprochement avec le grand livre TVA |
@@ -147,12 +171,13 @@ Les exemples versionnés sont :
 | POST | `/api/v1/accounting/tax-file/adjustments` | ajustement fiscal préparatoire idempotent |
 | POST | `/api/v1/accounting/tax-file/adjustments/status` | validation ou mise à l’écart d’un ajustement |
 | POST | `/api/v1/accounting/archives` | archive financière immuable et vérifiable |
+| POST | `/api/v1/accounting/archives/delete` | suppression d’une archive en double si l’exercice reste ouvert |
 | GET | `/api/v1/accounting/archives/download` | téléchargement JSON avec empreinte |
 | GET | `/api/v1/accounting/assets` | registre, échéancier et réconciliation des immobilisations |
 | POST | `/api/v1/accounting/assets/categories` | création ou modification d’une catégorie et de ses comptes |
 | POST | `/api/v1/accounting/assets/records` | création ou correction d’une fiche avant comptabilisation |
-| POST | `/api/v1/accounting/assets/depreciations` | dotation périodique idempotente via le grand livre |
-| POST | `/api/v1/accounting/assets/depreciations/reverse` | contre-passation d’une dotation |
+| POST | `/api/v1/accounting/assets/depreciations` | dotations d’une période groupée, atomiques et idempotentes via le grand livre |
+| POST | `/api/v1/accounting/assets/depreciations/reverse` | contre-passation atomique des dotations d’une période groupée |
 | POST | `/api/v1/accounting/assets/disposals` | cession ou mise au rebut comptabilisée |
 | POST | `/api/v1/accounting/assets/disposals/reverse` | contre-passation d’une sortie |
 | GET | `/api/v1/consolidation` | groupes autorisés, candidats visibles, modes, membres, mappings, balance, réconciliation et éliminations |
@@ -174,10 +199,12 @@ Les exemples versionnés sont :
 | POST | `/api/v1/consolidation/eliminations` | écriture équilibrée, justifiée et immuable hors grand livre |
 | GET | `/api/v1/liquidites` | dépenses, récurrences, pièces et catalogues du dossier |
 | POST | `/api/v1/liquidites/depenses` | création d’une dépense en brouillon |
+| POST | `/api/v1/liquidites/depenses/modifier` | modification optimiste d’un brouillon et de ses lignes |
 | POST | `/api/v1/liquidites/depenses/soumettre` | soumission à approbation |
 | POST | `/api/v1/liquidites/depenses/approuver` | approbation explicite |
+| POST | `/api/v1/liquidites/depenses/refuser` | refus explicite d’une dépense soumise |
 | POST | `/api/v1/liquidites/depenses/comptabiliser` | comptabilisation via `EntryService` |
-| POST | `/api/v1/liquidites/depenses/annuler` | annulation et contre-passation si nécessaire |
+| POST | `/api/v1/liquidites/depenses/annuler` | annulation d’un brouillon ou d’une dépense approuvée non comptabilisée |
 | POST | `/api/v1/liquidites/recurrences` | création d’un modèle récurrent |
 | POST | `/api/v1/liquidites/recurrences/pause` | suspension ou reprise optimiste |
 | POST | `/api/v1/liquidites/recurrences/generer` | génération idempotente des échéances |
@@ -203,7 +230,8 @@ Les exemples versionnés sont :
 | POST | `/api/v1/facturation/documents/emettre` | émission et numérotation idempotente |
 | POST | `/api/v1/facturation/documents/comptabiliser` | comptabilisation via `EntryService` |
 | POST | `/api/v1/facturation/documents/avoirs` | création d’un brouillon d’avoir |
-| POST | `/api/v1/facturation/documents/pdf` | archive et téléchargement PDF/QR client |
+| POST | `/api/v1/facturation/documents/extourner` | contre-passation du solde ouvert, avec conservation des lettrages actifs |
+| POST | `/api/v1/facturation/documents/pdf` | archive et téléchargement PDF d’une facture client ou fournisseur, avec QR client lorsque possible |
 | POST | `/api/v1/facturation/contacts` | création idempotente dans le registre unique |
 | POST | `/api/v1/facturation/contacts/modifier` | édition optimiste du contact |
 | POST | `/api/v1/facturation/contacts/supprimer` | suppression d’un contact inutilisé ou archivage avec historique |
@@ -211,11 +239,13 @@ Les exemples versionnés sont :
 | POST | `/api/v1/facturation/commerciaux` | création ou édition d’une offre, demande, réponse ou commande brouillon |
 | POST | `/api/v1/facturation/commerciaux/statut` | envoi, réception, acceptation, refus ou archivage |
 | POST | `/api/v1/facturation/commerciaux/convertir` | conversion reliée vers réponse, commande ou facture brouillon |
+| POST | `/api/v1/facturation/commerciaux/pdf` | téléchargement PDF d’une offre, demande ou commande sans effet comptable |
 | POST | `/api/v1/facturation/recurrences` | nouveau modèle client ou fournisseur |
 | POST | `/api/v1/facturation/recurrences/pause` | suspension ou reprise optimiste |
 | POST | `/api/v1/facturation/recurrences/generer` | génération idempotente de brouillons |
 | POST | `/api/v1/facturation/rappels` | traçage d’un rappel |
 | POST | `/api/v1/facturation/paiements` | saisie d’un paiement indépendant |
+| POST | `/api/v1/facturation/paiements/pdf` | téléchargement du justificatif de paiement et de ses allocations |
 | POST | `/api/v1/facturation/paiements/comptabiliser` | comptabilisation idempotente d’un paiement lettré |
 | POST | `/api/v1/facturation/allocations` | allocation N–N d’un paiement |
 | POST | `/api/v1/facturation/allocations/avoirs` | allocation d’un avoir |
@@ -315,8 +345,10 @@ existants. Elles exigent `compta.edit`, `compta.setup`, `compta.validate`,
 Tous les montants transmis sont des centimes entiers.
 
 Un export de rapport exige les dates exactes et inclut ces paramètres ainsi que
-l’empreinte du grand livre. Une archive contient en plus une empreinte de son
-contenu complet ; elle est immuable et vérifiée au téléchargement. L’export
+l’empreinte du grand livre. Une archive contient en plus le journal complet de
+l’exercice et une empreinte de son contenu ; elle est vérifiée au
+téléchargement. Une archive créée en double ne peut être supprimée que tant que
+l’exercice reste ouvert : celles d’un exercice fermé sont protégées. L’export
 eCH-0217 est validé mais jamais déclaré transmis automatiquement.
 
 Les dépenses utilisent le même document fournisseur, les mêmes contacts, codes
@@ -339,8 +371,10 @@ de 90 jours ; les paiements non alloués sont séparés des tranches mais dédui
 du solde net. Les mutations restent scopées par la session et les documents
 émis ne sont jamais réécrits. Les offres, demandes d’offre, réponses et
 commandes n’ont aucun effet comptable. Leur conversion vers une facture crée
-un brouillon et conserve les liens documentaires ; commande et facture directes
-restent autorisées.
+un brouillon et conserve les liens documentaires. Une commande suit les états
+`brouillon → envoye → livre → facture` : la conversion en facture est refusée
+avant `livre`, côté interface comme côté service. La création directe d’une
+commande ou d’une facture reste autorisée.
 
 Le contrat pédagogique ne renvoie jamais `solution_json` dans le workspace.
 Une correction est obtenue uniquement par sa route dédiée après autorisation.
@@ -348,6 +382,26 @@ Un contexte réel renvoie un workspace indisponible et aucune donnée
 pédagogique ; modèles et assignations sont limités à une organisation de nature
 `pedagogique`. Les créations et validations réutilisent `EntryService`, sans
 moteur de saisie parallèle.
+
+## Sécurité du compte et configuration initiale
+
+`GET /api/v1/security` n’expose ni secret TOTP ni code de récupération. Il
+indique uniquement le mode actif, le nombre de codes restants et la
+disponibilité des méthodes selon la configuration du serveur. Les mutations de
+sécurité exigent le mot de passe courant ; un changement de mot de passe ou de
+second facteur révoque les autres sessions.
+
+Le contrat du guide distingue :
+
+- `progress.completed`, nombre de critères métier effectivement satisfaits ;
+- la position d’affichage, calculée par Vue depuis l’étape courante ;
+- `cancelled`, abandon explicite et persistant pour le dossier ;
+- `finished`, conclusion validée lorsque tous les prérequis obligatoires sont
+  encore vrais.
+
+`POST /api/v1/configuration/setup-guide/status` accepte seulement
+`{"action":"cancel"}` ou `{"action":"resume"}`. Réduire visuellement le guide
+n’appelle pas cette route et ne modifie aucune donnée.
 
 ## Erreurs
 

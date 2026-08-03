@@ -229,16 +229,33 @@ final class DashboardReadService
     ): array {
         $stmt = $this->pdo->prepare(
             "WITH accounting AS (
-                SELECT l.compte_id,
+                SELECT t.id AS treasury_account_id,
                        SUM(l.debit_centimes - l.credit_centimes) AS balance_cents
                 FROM lignes_ecriture l
                 JOIN ecritures e ON e.id = l.ecriture_id
+                JOIN comptes_tresorerie t
+                  ON t.organisation_id = e.organisation_id
+                 AND t.dossier_id = e.dossier_id
+                 AND (
+                   t.id = l.compte_tresorerie_operationnel_id
+                   OR (
+                     l.compte_tresorerie_operationnel_id IS NULL
+                     AND t.compte_comptable_id = l.compte_id
+                     AND NOT EXISTS (
+                       SELECT 1 FROM comptes_tresorerie t2
+                       WHERE t2.organisation_id = t.organisation_id
+                         AND t2.dossier_id = t.dossier_id
+                         AND t2.compte_comptable_id = t.compte_comptable_id
+                         AND t2.id <> t.id
+                     )
+                   )
+                 )
                 WHERE e.organisation_id = :organisation
                   AND e.dossier_id = :dossier
                   AND e.exercice_id = :exercise
                   AND e.date_comptable <= :as_of_date
                   AND e.statut IN ('validee', 'contre_passee')
-                GROUP BY l.compte_id
+                GROUP BY t.id
              ),
              ranked_bank AS (
                 SELECT sb.compte_tresorerie_id, sb.montant_centimes,
@@ -264,7 +281,7 @@ final class DashboardReadService
                     b.monnaie AS bank_balance_currency
              FROM comptes_tresorerie t
              JOIN comptes c ON c.id = t.compte_comptable_id
-             LEFT JOIN accounting a ON a.compte_id = t.compte_comptable_id
+             LEFT JOIN accounting a ON a.treasury_account_id = t.id
              LEFT JOIN ranked_bank b
                ON b.compte_tresorerie_id = t.id AND b.rang = 1
              WHERE t.organisation_id = :organisation
@@ -553,6 +570,40 @@ final class DashboardReadService
                   AND p.statut = 'valide'
                   AND p.date_paiement <= :as_of_date
                   AND p.montant_base_centimes > COALESCE(a.allocated_cents, 0)
+                  AND (
+                    p.compte_collectif_id IS NULL
+                    OR (
+                      NOT EXISTS (
+                        SELECT 1 FROM comptes_tresorerie t
+                        WHERE t.organisation_id = p.organisation_id
+                          AND t.dossier_id = p.dossier_id
+                          AND t.compte_comptable_id = p.compte_collectif_id
+                      )
+                      AND EXISTS (
+                        SELECT 1 FROM comptes c
+                        WHERE c.id = p.compte_collectif_id
+                          AND c.organisation_id = p.organisation_id
+                          AND c.dossier_id = p.dossier_id
+                          AND c.actif = 1 AND c.imputable = 1
+                          AND c.type = CASE p.sens
+                            WHEN 'encaissement' THEN 'actif' ELSE 'passif' END
+                          AND (
+                            c.marque = CASE p.sens
+                              WHEN 'encaissement' THEN 'client_collectif'
+                              ELSE 'fournisseur_collectif' END
+                            OR EXISTS (
+                              SELECT 1 FROM documents_financiers d
+                              WHERE d.organisation_id = p.organisation_id
+                                AND d.dossier_id = p.dossier_id
+                                AND d.compte_collectif_id = c.id
+                                AND d.type = CASE p.sens
+                                  WHEN 'encaissement' THEN 'facture_client'
+                                  ELSE 'facture_fournisseur' END
+                            )
+                          )
+                      )
+                    )
+                  )
              )
              SELECT sens, COUNT(*) AS payment_count,
                     COALESCE(SUM(remaining_cents), 0) AS amount_cents

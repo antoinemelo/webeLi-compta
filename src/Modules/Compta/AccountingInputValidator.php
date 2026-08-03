@@ -293,11 +293,11 @@ final class AccountingInputValidator
         );
     }
 
-    /** @return array{exercise_id:int,type:string,date_start:string,date_end:string} */
+    /** @return array{exercise_id:int,type:string,date_start:string,date_end:string,format:string} */
     public function reportExport(Request $request): array
     {
         $this->rejectUnknown(array_keys($request->query), [
-            'exercise_id', 'type', 'date_start', 'date_end',
+            'exercise_id', 'type', 'date_start', 'date_end', 'format',
         ]);
         $type = trim((string) ($request->query['type'] ?? ''));
         if (!in_array($type, [
@@ -321,6 +321,12 @@ final class AccountingInputValidator
                 'date_end' => ['La fin doit suivre le début.'],
             ]);
         }
+        $format = trim((string) ($request->query['format'] ?? 'csv'));
+        if (!in_array($format, ['csv', 'pdf'], true)) {
+            throw ApiException::validation([
+                'format' => ['Format d’export invalide.'],
+            ]);
+        }
         return [
             'exercise_id' => $this->positiveInteger(
                 $request->query['exercise_id'] ?? null,
@@ -329,6 +335,7 @@ final class AccountingInputValidator
             'type' => $type,
             'date_start' => $start,
             'date_end' => $end,
+            'format' => $format,
         ];
     }
 
@@ -376,7 +383,7 @@ final class AccountingInputValidator
             }
             $unknown = array_diff(
                 array_keys($line),
-                ['account_id', 'label', 'debit_cents', 'credit_cents']
+                ['account_id', 'treasury_account_id', 'label', 'debit_cents', 'credit_cents']
             );
             if ($unknown !== []) {
                 $errors["lines.{$index}"][] = 'Champ de ligne inconnu.';
@@ -384,8 +391,13 @@ final class AccountingInputValidator
             $accountId = $line['account_id'] ?? null;
             $debit = $line['debit_cents'] ?? null;
             $credit = $line['credit_cents'] ?? null;
+            $treasuryAccountId = $line['treasury_account_id'] ?? 0;
             if (!is_int($accountId) || $accountId < 1) {
                 $errors["lines.{$index}.account_id"][] = 'Compte requis.';
+            }
+            if (!is_int($treasuryAccountId) || $treasuryAccountId < 0) {
+                $errors["lines.{$index}.treasury_account_id"][] =
+                    'Compte de trésorerie invalide.';
             }
             if (!is_int($debit) || $debit < 0 || !is_int($credit) || $credit < 0) {
                 $errors["lines.{$index}"][] = 'Montants entiers positifs requis.';
@@ -394,6 +406,7 @@ final class AccountingInputValidator
             }
             $lines[] = [
                 'account_id' => (int) $accountId,
+                'treasury_account_id' => (int) $treasuryAccountId,
                 'label' => is_string($line['label'] ?? null)
                     ? trim($line['label'])
                     : '',
@@ -477,7 +490,8 @@ final class AccountingInputValidator
     {
         $data = $this->only($request, [
             'action', 'id', 'structure_level', 'code', 'label', 'type',
-            'parent_id', 'position', 'version', 'ordered_ids', 'rubrics',
+            'parent_id', 'position', 'version', 'show_subtotal', 'ordered_ids',
+            'rubrics',
         ]);
         $action = (string) ($data['action'] ?? '');
         if (!in_array($action, ['save', 'save_batch', 'delete', 'reorder'], true)) {
@@ -510,6 +524,7 @@ final class AccountingInputValidator
                         "rubrics.{$index}.version",
                         0
                     ),
+                    'show_subtotal' => (bool) ($rubric['show_subtotal'] ?? false),
                 ];
             }
             if ($rubrics === [] && ($data['ordered_ids'] ?? []) === []) {
@@ -531,6 +546,7 @@ final class AccountingInputValidator
             ),
             'position' => $this->integer($data['position'] ?? 0, 'position', 0),
             'version' => $this->integer($data['version'] ?? 0, 'version', 0),
+            'show_subtotal' => (bool) ($data['show_subtotal'] ?? false),
             'ordered_ids' => $this->positiveIntegerList(
                 $data['ordered_ids'] ?? [],
                 'ordered_ids'
@@ -547,7 +563,11 @@ final class AccountingInputValidator
             'version', 'ordered_ids', 'accounts',
         ]);
         $action = (string) ($data['action'] ?? '');
-        if (!in_array($action, ['save', 'save_batch', 'delete', 'reorder'], true)) {
+        if (!in_array(
+            $action,
+            ['save', 'save_batch', 'delete', 'reactivate', 'reorder'],
+            true
+        )) {
             throw ApiException::validation(['action' => ['Action invalide.']]);
         }
         $accounts = [];
@@ -675,15 +695,19 @@ final class AccountingInputValidator
         ];
     }
 
-    /** @return array{exercise_id:int,validate:bool,balances:array<int,int>} */
+    /** @return array{exercise_id:int,validate:bool,balances:array<int,int>,treasury_balances:array<int,int>} */
     public function opening(Request $request): array
     {
-        $data = $this->only($request, ['exercise_id', 'validate', 'balances']);
+        $data = $this->only($request, [
+            'exercise_id', 'validate', 'balances', 'treasury_balances',
+        ]);
         if (
             !is_int($data['exercise_id'] ?? null)
             || $data['exercise_id'] < 1
             || !is_bool($data['validate'] ?? null)
             || !is_array($data['balances'] ?? null)
+            || (isset($data['treasury_balances'])
+                && !is_array($data['treasury_balances']))
         ) {
             throw ApiException::validation([
                 'opening' => ['Données d’ouverture invalides.'],
@@ -701,10 +725,25 @@ final class AccountingInputValidator
             }
             $balances[(int) $accountId] = $cents;
         }
+        $treasuryBalances = [];
+        foreach (($data['treasury_balances'] ?? []) as $accountId => $cents) {
+            if (
+                preg_match('/^[1-9][0-9]*$/', (string) $accountId) !== 1
+                || !is_int($cents)
+            ) {
+                throw ApiException::validation([
+                    'treasury_balances' => [
+                        'Soldes entiers par compte de trésorerie requis.',
+                    ],
+                ]);
+            }
+            $treasuryBalances[(int) $accountId] = $cents;
+        }
         return [
             'exercise_id' => $data['exercise_id'],
             'validate' => $data['validate'],
             'balances' => $balances,
+            'treasury_balances' => $treasuryBalances,
         ];
     }
 

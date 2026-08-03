@@ -511,7 +511,7 @@ final class Tests
         [$pdo, $runner, $databasePath] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            ['001', '002', '003', '004', '005'],
+            ['001', '002', '003', '004', '005', '006', '007'],
             $applied,
             'base initiale et migrations complémentaires appliquées'
         );
@@ -537,7 +537,7 @@ final class Tests
         $this->true(true, 'écriture concurrente possible après libération du verrou');
 
         $this->same(
-            5,
+            7,
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM schema_migrations"
             )->fetchColumn(),
@@ -2285,6 +2285,18 @@ final class Tests
             $organisationId, $dossierId, $customerId, 'encaissement',
             '2026-04-10', 7000, 'À lettrer', null,
         ]);
+        $pdo->prepare(
+            "INSERT INTO paiements
+             (organisation_id, dossier_id, contact_id, sens, date_paiement,
+              montant_centimes, reference, compte_collectif_id)
+             VALUES (?, ?, ?, 'encaissement', '2026-04-11', 9000,
+                     'Ancien candidat trésorerie', ?)"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $customerId,
+            $bankAccount,
+        ]);
         $allocation = $pdo->prepare(
             'INSERT INTO allocations
              (organisation_id, dossier_id, paiement_id, avoir_id,
@@ -2410,7 +2422,7 @@ final class Tests
         $this->same(
             7000,
             (int) $projection['operations']['payments_to_process']['amount_cents'],
-            'paiement non alloué signalé à traiter'
+            'paiement non alloué signalé sans ancien candidat de trésorerie'
         );
         $this->same(
             $countsBefore,
@@ -3004,6 +3016,43 @@ final class Tests
             ),
             'snapshot de paiement du document émis immuable'
         );
+        $initialPaymentAccounting = $configuration->read(
+            $organisationId,
+            $dossierId
+        )['payment_accounting'];
+        $this->same(
+            'premier_lettrage|0',
+            $initialPaymentAccounting['trigger']
+                . '|' . $initialPaymentAccounting['version'],
+            'premier lettrage proposé par défaut sans ligne technique'
+        );
+        $configuration->setPaymentAccounting(
+            $organisationId,
+            $dossierId,
+            'lettrage_complet',
+            0,
+            $userId
+        );
+        $savedPaymentAccounting = $configuration->read(
+            $organisationId,
+            $dossierId
+        )['payment_accounting'];
+        $this->same(
+            'lettrage_complet|1',
+            $savedPaymentAccounting['trigger']
+                . '|' . $savedPaymentAccounting['version'],
+            'déclencheur de comptabilisation des paiements versionné'
+        );
+        $this->throws(
+            fn () => $configuration->setPaymentAccounting(
+                $organisationId,
+                $dossierId,
+                'premier_lettrage',
+                0,
+                $userId
+            ),
+            'politique de paiement protégée contre une modification concurrente'
+        );
         $this->same(
             1,
             (int) $pdo->query(
@@ -3403,8 +3452,13 @@ final class Tests
         $this->same(200, $forgottenPage->status, 'page mot de passe oublié accessible');
         $this->true(
             str_contains($forgottenPage->body, 'Envoyer le lien sécurisé')
-            && str_contains($forgottenPage->body, 'Aucune information sur'),
+            && str_contains($forgottenPage->body, 'Aucune information sur')
+            && str_contains($forgottenPage->body, 'class="login-page"')
+            && str_contains($forgottenPage->body, 'class="login-shell"')
+            && str_contains($forgottenPage->body, 'id="password-reset-form"')
+            && !str_contains($forgottenPage->body, 'container-xl py-4'),
             'demande publique explique la réponse anti-énumération'
+            . ' dans le shell d’accès pleine largeur'
         );
         $resetRequestCsrf = $csrf->token();
         $unknownReset = $app->handle(new Request(
@@ -3445,8 +3499,13 @@ final class Tests
         ));
         $this->true(
             $resetForm->status === 200
-            && str_contains($resetForm->body, 'id="new-password"'),
+            && str_contains($resetForm->body, 'id="new-password"')
+            && str_contains($resetForm->body, 'class="login-page"')
+            && str_contains($resetForm->body, 'class="login-shell"')
+            && str_contains($resetForm->body, 'id="password-reset-form"')
+            && !str_contains($resetForm->body, 'container-xl py-4'),
             'lien HTTP valide présente le formulaire de remplacement'
+            . ' dans le shell d’accès pleine largeur'
         );
         $resetCompleted = $app->handle(new Request(
             'POST',
@@ -3866,6 +3925,83 @@ final class Tests
             $apiBillingJson['data']['reference_date'] ?? '',
             'date de référence visible dans le contrat facturation'
         );
+        $httpBillingCustomer = $httpContacts->create(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            [
+                'type_personne' => 'entreprise',
+                'raison_sociale' => 'Client HTTP facturation',
+            ],
+            ['client'],
+            [
+                'ligne1' => 'Rue HTTP 1',
+                'code_postal' => '1200',
+                'localite' => 'Genève',
+                'pays' => 'CH',
+            ]
+        );
+        $httpTestVatRegime = $httpVatConfiguration->addRegime([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'statut' => 'non_assujetti',
+            'numero_tva' => '',
+            'methode' => 'effective',
+            'mode_decompte' => 'convenues',
+            'periodicite' => 'annuelle',
+            'date_debut' => '2026-01-01',
+            'compte_impot_prealable_materiel_id' => null,
+            'compte_impot_prealable_investissements_id' => null,
+            'compte_tva_due_id' => null,
+            'compte_decompte_tva_id' => null,
+            'compte_corrections_id' => null,
+        ]);
+        $httpBillingDraft = $app->handle(new Request(
+            'POST',
+            '/api/v1/facturation/documents',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'type' => 'facture_client',
+                'contact_id' => $httpBillingCustomer,
+                'document_date' => '2026-06-30',
+                'due_date' => '2026-07-30',
+                'collective_account_id' => $this->accountId(
+                    $pdo,
+                    $ids['dossier_a'],
+                    '1100'
+                ),
+                'currency' => 'CHF',
+                'exchange_rate_id' => null,
+                'external_number' => '',
+                'attachment' => null,
+                'lines' => [[
+                    'label' => 'Prestation HTTP',
+                    'quantity_milli' => 1000,
+                    'unit_price_cents' => 10000,
+                    'input_mode' => 'net',
+                    'account_id' => $this->accountId(
+                        $pdo,
+                        $ids['dossier_a'],
+                        '3000'
+                    ),
+                    'vat_code_id' => null,
+                    'service_date' => '2026-06-30',
+                ]],
+            ]]
+        ));
+        $this->same(
+            201,
+            $httpBillingDraft->status,
+            'brouillon de facture créé par le contrat HTTP sans référence de trésorerie étrangère'
+        );
+        $httpBillingDraftId = (int) (
+            $this->responseJson($httpBillingDraft)['data']['id'] ?? 0
+        );
+        $pdo->prepare('DELETE FROM lignes_document WHERE document_id = ?')
+            ->execute([$httpBillingDraftId]);
+        $pdo->prepare('DELETE FROM documents_financiers WHERE id = ?')
+            ->execute([$httpBillingDraftId]);
+        $pdo->prepare('DELETE FROM tva_regimes WHERE id = ?')
+            ->execute([$httpTestVatRegime]);
         $billingExport = $app->handle(new Request(
             'GET',
             '/api/v1/facturation/export',
@@ -4151,6 +4287,72 @@ final class Tests
         );
         $configurationTreasuryId = (int) (
             $this->responseJson($treasuryFromConfiguration)['data']['id'] ?? 0
+        );
+        $secondTreasuryFromConfiguration = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/treasury-accounts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'id' => 0,
+                'version' => 0,
+                'ledger_account_id' => $treasuryLedgerId,
+                'label' => 'Seconde caisse HTTP',
+                'type' => 'caisse',
+                'iban' => '',
+                'bic' => '',
+                'currency' => 'CHF',
+                'accounting_multiplier' => 1,
+                'active' => true,
+            ]]
+        ));
+        $secondConfigurationTreasuryId = (int) (
+            $this->responseJson(
+                $secondTreasuryFromConfiguration
+            )['data']['id'] ?? 0
+        );
+        $paymentWithOperationalTreasury = $app->handle(new Request(
+            'POST',
+            '/api/v1/facturation/paiements',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'contact_id' => $httpBillingCustomer,
+                'direction' => 'encaissement',
+                'date' => '2026-06-30',
+                'amount_cents' => 10000,
+                'reference' => 'HTTP-TREASURY-DIMENSION',
+                'ledger_account_id' => $treasuryLedgerId,
+                'treasury_account_id' => $configurationTreasuryId,
+                'currency' => 'CHF',
+                'exchange_rate_id' => null,
+            ]]
+        ));
+        $this->same(
+            201,
+            $paymentWithOperationalTreasury->status,
+            'paiement HTTP conserve le compte opérationnel choisi parmi plusieurs caisses'
+        );
+        $httpPaymentId = (int) (
+            $this->responseJson(
+                $paymentWithOperationalTreasury
+            )['data']['id'] ?? 0
+        );
+        $this->same(
+            $configurationTreasuryId,
+            (int) $pdo->query(
+                "SELECT compte_tresorerie_operationnel_id FROM paiements
+                 WHERE id = {$httpPaymentId}"
+            )->fetchColumn(),
+            'dimension de trésorerie opérationnelle persistée par la facturation'
+        );
+        $pdo->prepare('DELETE FROM paiements WHERE id = ?')
+            ->execute([$httpPaymentId]);
+        $pdo->prepare('DELETE FROM comptes_tresorerie WHERE id = ?')
+            ->execute([$secondConfigurationTreasuryId]);
+        $httpContacts->remove(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $httpBillingCustomer,
+            1
         );
         $updatedTreasuryFromConfiguration = $app->handle(new Request(
             'POST',
@@ -4983,6 +5185,29 @@ final class Tests
             )->fetchColumn(),
             'taux salarial conservé sans flottant'
         );
+        $payrollVersion = (int) $pdo->query(
+            "SELECT version FROM taux_salaires_annuels
+             WHERE dossier_id = {$ids['dossier_a']} AND annee = 2026"
+        )->fetchColumn();
+        $samePayrollImport = $app->handle(new Request(
+            'POST',
+            '/api/v1/configuration/references/payroll-rates',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => $payrollPayload]
+        ));
+        $this->same(
+            200,
+            $samePayrollImport->status,
+            'réimport CSV salarial identique accepté'
+        );
+        $this->same(
+            $payrollVersion,
+            (int) $pdo->query(
+                "SELECT version FROM taux_salaires_annuels
+                 WHERE dossier_id = {$ids['dossier_a']} AND annee = 2026"
+            )->fetchColumn(),
+            'réimport CSV salarial identique sans nouvelle version'
+        );
         $injectedReferenceScope = $app->handle(new Request(
             'POST',
             '/api/v1/configuration/references/payroll-rates',
@@ -5257,7 +5482,9 @@ final class Tests
             'context.success.json',
             'collection.success.json',
             'dashboard.success.json',
+            'security.success.json',
             'configuration.success.json',
+            'setup-guide.success.json',
             'accounting.success.json',
             'assets.success.json',
             'consolidation.success.json',
@@ -5339,6 +5566,14 @@ final class Tests
         );
         $entryCash = $this->accountId($pdo, $ids['dossier_a'], '1000');
         $entrySales = $this->accountId($pdo, $ids['dossier_a'], '3400');
+        $entryCashTreasury = (int) $pdo->query(
+            "SELECT id FROM comptes_tresorerie
+             WHERE organisation_id = {$ids['organisation_a']}
+               AND dossier_id = {$ids['dossier_a']}
+               AND compte_comptable_id = {$entryCash}
+               AND actif = 1
+             ORDER BY id LIMIT 1"
+        )->fetchColumn();
         $apiAccounting = $app->handle(new Request(
             'GET',
             '/api/v1/accounting',
@@ -5363,7 +5598,7 @@ final class Tests
         );
         $this->same(
             [
-                'exercise', 'categories', 'assets', 'selected_asset',
+                'exercise', 'categories', 'assets', 'schedule', 'selected_asset',
                 'reconciliation', 'catalog', 'pagination', 'definitions',
                 'capabilities',
             ],
@@ -5427,8 +5662,6 @@ final class Tests
                 'acquisition_date' => '2026-02-01',
                 'in_service_date' => '2026-02-15',
                 'acquisition_value_cents' => 240000,
-                'residual_value_cents' => 0,
-                'duration_months' => 36,
                 'note' => '',
             ]]
         ));
@@ -5451,10 +5684,12 @@ final class Tests
         $assetDetailJson = $this->responseJson($assetDetail);
         $this->true(
             ($assetDetailJson['data']['selected_asset']['code'] ?? '') === 'PC-001'
+            && ($assetDetailJson['data']['selected_asset']['duration_months'] ?? 0) === 36
+            && ($assetDetailJson['data']['selected_asset']['residual_value_cents'] ?? 0) === 1
             && count(
                 $assetDetailJson['data']['selected_asset']['schedule'] ?? []
-            ) > 30,
-            'registre et plan prévisionnel relus depuis la source métier'
+            ) >= 12,
+            'registre et échéancier trimestriel relus depuis la source métier'
         );
         $assetInjectedScope = $app->handle(new Request(
             'GET',
@@ -5490,6 +5725,7 @@ final class Tests
                 'lines' => [
                     [
                         'account_id' => $entryCash,
+                        'treasury_account_id' => $entryCashTreasury,
                         'label' => '',
                         'debit_cents' => 2530,
                         'credit_cents' => 0,
@@ -5530,7 +5766,7 @@ final class Tests
                 'attachment_reference' => 'PIECE-1',
                 'validate' => false,
                 'lines' => [
-                    ['account_id' => $entryCash, 'label' => 'Débit initial', 'debit_cents' => 1750, 'credit_cents' => 0],
+                    ['account_id' => $entryCash, 'treasury_account_id' => $entryCashTreasury, 'label' => 'Débit initial', 'debit_cents' => 1750, 'credit_cents' => 0],
                     ['account_id' => $entrySales, 'label' => 'Crédit initial', 'debit_cents' => 0, 'credit_cents' => 1750],
                 ],
             ]]
@@ -5565,7 +5801,7 @@ final class Tests
                 'attachment_reference' => 'PIECE-2',
                 'validate' => true,
                 'lines' => [
-                    ['account_id' => $entryCash, 'label' => 'Débit final', 'debit_cents' => 1800, 'credit_cents' => 0],
+                    ['account_id' => $entryCash, 'treasury_account_id' => $entryCashTreasury, 'label' => 'Débit final', 'debit_cents' => 1800, 'credit_cents' => 0],
                     ['account_id' => $entrySales, 'label' => 'Crédit final', 'debit_cents' => 0, 'credit_cents' => 1800],
                 ],
             ]]
@@ -5823,7 +6059,7 @@ final class Tests
                 'attachment_reference' => '',
                 'validate' => true,
                 'lines' => [
-                    ['account_id' => $entryCash, 'label' => '', 'debit_cents' => 12550, 'credit_cents' => 0],
+                    ['account_id' => $entryCash, 'treasury_account_id' => $entryCashTreasury, 'label' => '', 'debit_cents' => 12550, 'credit_cents' => 0],
                     ['account_id' => $entrySales, 'label' => '', 'debit_cents' => 0, 'credit_cents' => 12550],
                 ],
             ]]
@@ -6188,6 +6424,48 @@ final class Tests
             $csv->headers['Content-Type'],
             'export CSV HTTP par le contrat Vue'
         );
+        $pdf = $app->handle(new Request('GET', '/api/v1/accounting/reports/export', query: [
+            'exercise_id' => (string) $exerciseId,
+            'type' => 'balance',
+            'format' => 'pdf',
+            'date_start' => '2026-01-01',
+            'date_end' => '2026-12-31',
+        ]));
+        $this->same(
+            'application/pdf',
+            $pdf->headers['Content-Type'] ?? '',
+            'export PDF des états financiers par le contrat Vue'
+        );
+        $this->true(
+            str_starts_with($pdf->body, '%PDF-'),
+            'état financier généré comme véritable document PDF'
+        );
+        $this->same(
+            'attachment; filename="balance-2026-12-31.pdf"',
+            $pdf->headers['Content-Disposition'] ?? '',
+            'nom du PDF financier déterministe'
+        );
+        $allFinancialPdfsAreValid = true;
+        foreach (['grand_livre', 'bilan', 'resultat', 'flux_tresorerie'] as $reportType) {
+            $reportPdf = $app->handle(new Request(
+                'GET',
+                '/api/v1/accounting/reports/export',
+                query: [
+                    'exercise_id' => (string) $exerciseId,
+                    'type' => $reportType,
+                    'format' => 'pdf',
+                    'date_start' => '2026-01-01',
+                    'date_end' => '2026-12-31',
+                ]
+            ));
+            $allFinancialPdfsAreValid = $allFinancialPdfsAreValid
+                && ($reportPdf->headers['Content-Type'] ?? '') === 'application/pdf'
+                && str_starts_with($reportPdf->body, '%PDF-');
+        }
+        $this->true(
+            $allFinancialPdfsAreValid,
+            'les quatre états financiers proposés sont exportables en PDF'
+        );
         $plan = $app->handle(new Request('GET', '/compta/plan'));
         $this->same(303, $plan->status, 'ancien plan comptable redirigé');
         $this->same(
@@ -6303,6 +6581,39 @@ final class Tests
                  WHERE dossier_id = {$ids['dossier_a']}"
             )->fetchColumn(),
             'règles API persistées par le service existant'
+        );
+        $inactiveAccountId = (int) $pdo->query(
+            "SELECT id FROM comptes
+             WHERE dossier_id = {$ids['dossier_a']} AND numero = '6500'"
+        )->fetchColumn();
+        $pdo->exec(
+            "UPDATE comptes SET actif = 0, version = version + 1
+             WHERE id = {$inactiveAccountId}"
+        );
+        $inactiveAccountVersion = (int) $pdo->query(
+            "SELECT version FROM comptes WHERE id = {$inactiveAccountId}"
+        )->fetchColumn();
+        $accountReactivation = $app->handle(new Request(
+            'POST',
+            '/api/v1/accounting/chart/accounts',
+            server: ['HTTP_X_CSRF_TOKEN' => $csrf->token()],
+            json: ['data' => [
+                'action' => 'reactivate',
+                'id' => $inactiveAccountId,
+                'version' => $inactiveAccountVersion,
+            ]]
+        ));
+        $this->same(
+            200,
+            $accountReactivation->status,
+            'compte désactivé réactivé par l’API du plan comptable'
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT actif FROM comptes WHERE id = {$inactiveAccountId}"
+            )->fetchColumn(),
+            'réactivation du compte persistée par l’API'
         );
         $scopeInjection = $app->handle(new Request(
             'POST',
@@ -6544,20 +6855,20 @@ final class Tests
             'personne_morale'
         );
         $setup = new AccountingSetupService($pdo, $audit);
-        $julyPeriodId = $setup->createPeriod(
+        $thirdQuarterPeriodId = $setup->createPeriod(
             $ids['organisation_a'],
             $ids['dossier_a'],
             $exerciseId,
-            'Juillet 2026',
+            'Troisième trimestre 2026',
             '2026-07-01',
-            '2026-07-31'
+            '2026-09-30'
         );
         $setup->createPeriod(
             $ids['organisation_a'],
             $ids['dossier_a'],
             $exerciseId,
-            'Août 2026 à juin 2027',
-            '2026-08-01',
+            'Octobre 2026 à juin 2027',
+            '2026-10-01',
             '2027-06-30'
         );
         $journalId = $setup->createJournal(
@@ -6607,7 +6918,7 @@ final class Tests
                 'in_service_date' => '2026-07-15',
                 'acquisition_value_cents' => 120_001,
                 'residual_value_cents' => 1,
-                'duration_months' => 12,
+                'duration_months' => 24,
                 'note' => 'Test exercice décalé',
             ]
         );
@@ -6618,9 +6929,9 @@ final class Tests
             'plan linéaire répartit exactement la base amortissable'
         );
         $this->same(
-            '2026-07-15|2026-07-31',
+            '2026-07-15|2026-09-30',
             $plan[0]['start_date'] . '|' . $plan[0]['end_date'],
-            'prorata de mise en service borné à son mois civil'
+            'première échéance bornée à la fin du trimestre civil'
         );
         $this->same(
             360,
@@ -6628,15 +6939,16 @@ final class Tests
             'plan annuel calculé sur 360 jours conventionnels'
         );
         $this->same(
-            16,
+            76,
             $plan[0]['days'],
-            'premier mois calculé sur une base mensuelle de 30 jours'
+            'premier trimestre proratisé selon la convention 30/360'
         );
         $this->same(
-            30,
+            90,
             $plan[1]['days'],
-            'mois complet limité à 30 jours'
+            'trimestre complet limité à 90 jours'
         );
+        $this->same(5, count($plan), 'échéancier annuel produit cinq lignes avec deux proratas');
         $this->same(
             '2027-07-14',
             $plan[array_key_last($plan)]['end_date'],
@@ -6674,7 +6986,7 @@ final class Tests
         $setup->closePeriod(
             $ids['organisation_a'],
             $ids['dossier_a'],
-            $julyPeriodId
+            $thirdQuarterPeriodId
         );
         $workspace = $assets->read(
             $ids['organisation_a'],
@@ -6683,13 +6995,45 @@ final class Tests
             $assetId
         );
         $schedule = $workspace['selected_asset']['schedule'];
-        $julyScheduleId = (int) $schedule[0]['id'];
-        $augustScheduleId = (int) $schedule[1]['id'];
+        $thirdQuarterScheduleId = (int) $schedule[0]['id'];
+        $fourthQuarterScheduleId = (int) $schedule[1]['id'];
+        $this->same(
+            12,
+            (int) $workspace['selected_asset']['duration_months'],
+            'durée utile héritée de la catégorie malgré une valeur envoyée par le client'
+        );
+        $this->same(
+            ['1500 — Machines et appareils', 'MACH', 'M-001'],
+            [
+                (string) $workspace['schedule'][0]['asset_account'],
+                (string) $workspace['schedule'][0]['category_code'],
+                (string) $workspace['schedule'][0]['asset_code'],
+            ],
+            'échéancier global expose compte actif, catégorie et code actif'
+        );
+        $this->same(
+            ['M-001', 'FAC-IMM-001', 120001],
+            [
+                $workspace['reconciliation'][0]['assets'][0]['code'],
+                $workspace['reconciliation'][0]['assets'][0]['acquisition_reference'],
+                $workspace['reconciliation'][0]['assets'][0]['acquisition_value_cents'],
+            ],
+            'détail de réconciliation expose la valeur et la référence de l’actif'
+        );
+        $this->same(
+            [120001, 0, 120001],
+            [
+                $workspace['reconciliation'][0]['ledger_gross_movements'][0]['debit_cents'],
+                $workspace['reconciliation'][0]['ledger_gross_movements'][0]['credit_cents'],
+                $workspace['reconciliation'][0]['ledger_gross_movements'][0]['net_cents'],
+            ],
+            'détail de réconciliation restitue les mouvements validés du compte actif'
+        );
         $this->throws(
             fn () => $assets->postDepreciation(
                 $ids['organisation_a'],
                 $ids['dossier_a'],
-                $julyScheduleId,
+                $thirdQuarterScheduleId,
                 $exerciseId,
                 $journalId
             ),
@@ -6698,7 +7042,7 @@ final class Tests
         $augustEntry = $assets->postDepreciation(
             $ids['organisation_a'],
             $ids['dossier_a'],
-            $augustScheduleId,
+            $fourthQuarterScheduleId,
             $exerciseId,
             $journalId
         );
@@ -6707,7 +7051,7 @@ final class Tests
             $assets->postDepreciation(
                 $ids['organisation_a'],
                 $ids['dossier_a'],
-                $augustScheduleId,
+                $fourthQuarterScheduleId,
                 $exerciseId,
                 $journalId
             ),
@@ -6716,8 +7060,8 @@ final class Tests
         $reversalEntry = $assets->reverseDepreciation(
             $ids['organisation_a'],
             $ids['dossier_a'],
-            $augustScheduleId,
-            '2026-08-31'
+            $fourthQuarterScheduleId,
+            '2026-12-31'
         );
         $this->true(
             $reversalEntry > $augustEntry,
@@ -6726,7 +7070,7 @@ final class Tests
         $repostedEntry = $assets->postDepreciation(
             $ids['organisation_a'],
             $ids['dossier_a'],
-            $augustScheduleId,
+            $fourthQuarterScheduleId,
             $exerciseId,
             $journalId
         );
@@ -6737,11 +7081,11 @@ final class Tests
         $pdo->prepare(
             "UPDATE periodes SET statut = 'ouverte', version = version + 1
              WHERE id = ?"
-        )->execute([$julyPeriodId]);
+        )->execute([$thirdQuarterPeriodId]);
         $assets->postDepreciation(
             $ids['organisation_a'],
             $ids['dossier_a'],
-            $julyScheduleId,
+            $thirdQuarterScheduleId,
             $exerciseId,
             $journalId
         );
@@ -6750,7 +7094,7 @@ final class Tests
             $ids['dossier_a'],
             $assetId,
             'cession',
-            '2026-09-15',
+            '2027-01-15',
             90000,
             $bankAccount,
             $exerciseId,
@@ -6763,7 +7107,7 @@ final class Tests
                 $ids['dossier_a'],
                 $assetId,
                 'cession',
-                '2026-09-15',
+                '2027-01-15',
                 90000,
                 $bankAccount,
                 $exerciseId,
@@ -6796,7 +7140,7 @@ final class Tests
             $ids['organisation_a'],
             $ids['dossier_a'],
             $assetId,
-            '2026-09-15'
+            '2027-01-15'
         );
         $this->true(
             $exitReversal > $disposalEntry,
@@ -6818,6 +7162,74 @@ final class Tests
             $restored['selected_asset']['totals']['posted_depreciation_cents']
                 + $restored['selected_asset']['totals']['remaining_depreciable_cents'],
             'dotations plus base restante concordent au centime'
+        );
+        $groupedAssetIds = [];
+        foreach ([
+            ['code' => 'C1', 'label' => 'Actif groupé 1', 'reference' => 'FAC-C1'],
+            ['code' => 'C2', 'label' => 'Actif groupé 2', 'reference' => 'FAC-C2'],
+        ] as $groupedAsset) {
+            $groupedAssetIds[] = $assets->createAsset(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                [
+                    'category_id' => $categoryId,
+                    'code' => $groupedAsset['code'],
+                    'label' => $groupedAsset['label'],
+                    'acquisition_reference' => $groupedAsset['reference'],
+                    'acquisition_document_id' => null,
+                    'acquisition_attachment_id' => null,
+                    'acquisition_date' => '2027-03-31',
+                    'in_service_date' => '2027-04-01',
+                    'acquisition_value_cents' => 12_001,
+                    'residual_value_cents' => 1,
+                    'note' => '',
+                ]
+            );
+        }
+        $groupedWorkspace = $assets->read(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $exerciseId
+        );
+        $groupedRows = array_values(array_filter(
+            $groupedWorkspace['schedule'],
+            static fn (array $row): bool => in_array(
+                (int) $row['asset_id'],
+                $groupedAssetIds,
+                true
+            ) && $row['start_date'] === '2027-04-01'
+        ));
+        $this->same(
+            ['C1', 'C2'],
+            array_column($groupedRows, 'asset_code'),
+            'une période commune expose tous les actifs sous-jacents'
+        );
+        $groupedScheduleIds = array_map(
+            static fn (array $row): int => (int) $row['id'],
+            $groupedRows
+        );
+        $groupedEntryIds = $assets->postDepreciations(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $groupedScheduleIds,
+            $exerciseId,
+            $journalId
+        );
+        $this->same(
+            2,
+            count($groupedEntryIds),
+            'un clic comptabilise atomiquement toutes les dotations de la période'
+        );
+        $groupedReversalIds = $assets->reverseDepreciations(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $groupedScheduleIds,
+            '2027-06-30'
+        );
+        $this->same(
+            2,
+            count($groupedReversalIds),
+            'la contre-passation couvre également toute la période groupée'
         );
         $this->throws(
             fn () => $assets->read(
@@ -7335,6 +7747,49 @@ final class Tests
             ),
             'compte inutilisé supprimable'
         );
+        $referencedAccount = $chart->create(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            '6995',
+            'Compte référencé sans écriture',
+            'charge',
+            'debit'
+        );
+        $dependentAccount = $chart->create(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            '6994',
+            'Sous-compte de test',
+            'charge',
+            'debit',
+            $referencedAccount
+        );
+        $this->same(
+            'desactive',
+            $chart->removeOrDeactivate(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $referencedAccount
+            ),
+            'compte référencé hors écriture désactivé au lieu de provoquer une erreur SQLite'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT actif FROM comptes WHERE id = {$referencedAccount}"
+            )->fetchColumn(),
+            'compte référencé conservé inactif'
+        );
+        $chart->removeOrDeactivate(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $dependentAccount
+        );
+        $chart->removeOrDeactivate(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $referencedAccount
+        );
         $chart->removeOrDeactivate(
             $ids['organisation_a'],
             $ids['dossier_a'],
@@ -7770,6 +8225,23 @@ final class Tests
             '2027-01-01',
             '2027-12-31'
         );
+        $openingTreasuryAccounts = new TreasuryAccountService($pdo, $audit);
+        $openingTreasuryAccounts->create([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'compte_comptable_id' => $bank,
+            'libelle' => 'Banque d’ouverture témoin',
+            'type' => 'banque',
+            'monnaie' => 'CHF',
+        ]);
+        $openingTreasuryAccount = $openingTreasuryAccounts->create([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'compte_comptable_id' => $bank,
+            'libelle' => 'Banque d’ouverture',
+            'type' => 'banque',
+            'monnaie' => 'CHF',
+        ]);
         $this->throws(
             fn () => $entries->saveOpeningDraft(
                 $ids['organisation_a'],
@@ -7785,7 +8257,9 @@ final class Tests
             $ids['dossier_a'],
             $nextExercise,
             $journalOpening,
-            [$bank => 150000, $capital => 150000]
+            [$capital => 150000],
+            null,
+            [$openingTreasuryAccount => 150000]
         );
         $openingState = $entries->openingState(
             $ids['organisation_a'],
@@ -7794,13 +8268,20 @@ final class Tests
         );
         $this->same('brouillon', $openingState['status'], 'ouverture enregistrée en brouillon');
         $this->same(150000, $openingState['soldes'][$bank], 'solde débiteur naturel préparé');
+        $this->same(
+            150000,
+            $openingState['soldes_tresorerie'][$openingTreasuryAccount],
+            'solde d’ouverture conservé sur le compte de trésorerie opérationnel'
+        );
         $this->same(150000, $openingState['soldes'][$capital], 'solde créditeur naturel préparé');
         $editedDraft = $entries->saveOpeningDraft(
             $ids['organisation_a'],
             $ids['dossier_a'],
             $nextExercise,
             $journalOpening,
-            [$bank => 175000, $capital => 175000]
+            [$capital => 175000],
+            null,
+            [$openingTreasuryAccount => 175000]
         );
         $this->same($openingDraft, $editedDraft, 'brouillon d’ouverture édité sans doublon');
         $accountingCsv = new AccountingCsvService($pdo, $chart, $entries);
@@ -8025,6 +8506,33 @@ final class Tests
             'bic' => 'POFICHBEXXX',
             'monnaie' => 'CHF',
         ]);
+        $subtotalRubrics = [];
+        foreach ($chart->rubrics($ids['organisation_a'], $ids['dossier_a']) as $rubric) {
+            if (!in_array((string) $rubric['code'], ['10', '100'], true)) {
+                continue;
+            }
+            $chart->saveRubric(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                (int) $rubric['id'],
+                (string) $rubric['niveau_structure'],
+                (string) $rubric['code'],
+                (string) $rubric['libelle'],
+                (string) $rubric['type'],
+                $rubric['parent_id'] === null ? null : (int) $rubric['parent_id'],
+                (int) $rubric['ordre'],
+                (int) $rubric['version'],
+                $reportActorId,
+                true
+            );
+            $subtotalRubrics[] = (string) $rubric['code'];
+        }
+        sort($subtotalRubrics, SORT_NATURAL);
+        $this->same(
+            ['10', '100'],
+            $subtotalRubrics,
+            'rubriques de trésorerie et actifs circulants configurables en sous-totaux'
+        );
         $financial = new FinancialReportingService($pdo, $reports);
         $financial2027 = $financial->read(
             $ids['organisation_a'],
@@ -8038,6 +8546,24 @@ final class Tests
             && $financial2027['controls']['balance_sheet_balanced']
             && $financial2027['controls']['result_reconciled'],
             'balance, résultat et bilan réconciliés dans la projection financière'
+        );
+        $assetPresentation = array_values(array_filter(
+            $financial2027['balance_sheet']['presentation_items'],
+            static fn (array $row): bool => ($row['row_kind'] ?? '') === 'subtotal'
+                && $row['type'] === 'actif'
+        ));
+        $this->same(
+            ['100', '10'],
+            array_column($assetPresentation, 'numero'),
+            'sous-totaux imbriqués rendus du niveau le plus précis au plus large'
+        );
+        $this->same(
+            [175000, 175000],
+            array_map(
+                static fn (array $row): int => (int) $row['current_cents'],
+                $assetPresentation
+            ),
+            'sous-totaux calculés sur tous les comptes descendants sans double comptage'
         );
         $this->same(
             175000,
@@ -8312,6 +8838,33 @@ final class Tests
             )->fetchColumn(),
             'historique du compte désactivé conservé'
         );
+        $inactiveVersion = (int) $pdo->query(
+            "SELECT version FROM comptes WHERE id = {$admin}"
+        )->fetchColumn();
+        $chart->reactivateAccount(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $admin,
+            $inactiveVersion,
+            $reportActorId
+        );
+        $this->same(
+            1,
+            (int) $pdo->query(
+                "SELECT actif FROM comptes WHERE id = {$admin}"
+            )->fetchColumn(),
+            'compte désactivé réactivable depuis le plan comptable'
+        );
+        $this->throws(
+            fn () => $chart->reactivateAccount(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $admin,
+                $inactiveVersion,
+                $reportActorId
+            ),
+            'un compte déjà réactivé ne peut pas être réactivé une seconde fois'
+        );
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après opérations comptables');
         $this->true($periodA1 > 0, 'périodes rattachées à l’exercice');
     }
@@ -8327,6 +8880,10 @@ final class Tests
         $directory = $this->tempDir() . '/backups';
         $backup = BackupService::create($pdo, $directory, 'test-instance');
         $this->true(is_file($backup), 'sauvegarde créée');
+        $this->true(
+            !is_file($backup . '-wal') && !is_file($backup . '-shm'),
+            'sauvegarde portable conservée dans un fichier SQLite unique'
+        );
         $copy = ConnectionFactory::sqlite($backup);
         $this->true(IntegrityChecker::check($copy)['ok'], 'sauvegarde restaurable/intègre');
         $restoredPath = $this->tempDir() . '/restored.sqlite';
@@ -11006,6 +11563,16 @@ final class Tests
             )->fetchColumn(),
             'un paiement réparti sur plusieurs factures'
         );
+        $paymentPdf = (new InvoicePdfService($pdo, $audit))->payment(
+            $organisationId,
+            $dossierId,
+            $splitPayment,
+            $billing->creditorProfile($organisationId, $dossierId)
+        );
+        $this->true(
+            str_starts_with($paymentPdf, '%PDF-'),
+            'justificatif PDF de paiement généré avec ses allocations'
+        );
 
         $clientInvoice = $billing->createDraft(
             $organisationId,
@@ -11040,7 +11607,7 @@ final class Tests
             $customer,
             'encaissement',
             '2026-04-15',
-            10810,
+            4000,
             'REGLEMENT-CLIENT',
             $bank
         );
@@ -11049,7 +11616,7 @@ final class Tests
             $dossierId,
             $settlement,
             $clientInvoice,
-            10810
+            4000
         );
         $settlementEntry = $payments->post(
             $organisationId,
@@ -11064,7 +11631,7 @@ final class Tests
             (int) $pdo->query(
                 "SELECT ecriture_id FROM paiements WHERE id = {$settlement}"
             )->fetchColumn(),
-            'paiement intégralement lettré comptabilisé dans le grand livre'
+            'paiement partiel lettré comptabilisé dans le grand livre'
         );
         $supplierInvoice = $billing->createDraft(
             $organisationId,
@@ -11116,6 +11683,198 @@ final class Tests
             ),
             'comptabilisation de facture idempotente'
         );
+        $clientVersion = (int) $billing->document(
+            $organisationId,
+            $dossierId,
+            $clientInvoice
+        )['version'];
+        $clientReversal = $billing->reverseInvoice(
+            $organisationId,
+            $dossierId,
+            $clientInvoice,
+            $clientVersion,
+            '2026-04-20'
+        );
+        $reversedClient = $billing->document(
+            $organisationId,
+            $dossierId,
+            $clientInvoice
+        );
+        $this->same(
+            'annule',
+            (string) $reversedClient['statut'],
+            'facture partiellement lettrée fermée après extourne du reliquat'
+        );
+        $this->same(
+            $clientReversal,
+            (int) $reversedClient['ecriture_annulation_id'],
+            'écriture du reliquat reliée à la facture partiellement lettrée'
+        );
+        $this->same(
+            4000,
+            (int) $pdo->query(
+                "SELECT COALESCE(SUM(montant_centimes), 0) FROM allocations
+                 WHERE document_id = {$clientInvoice} AND statut = 'valide'"
+            )->fetchColumn(),
+            'lettrage existant conservé pendant l’extourne'
+        );
+        $clientReversalTotals = $pdo->query(
+            "SELECT COALESCE(SUM(debit_centimes), 0) AS debit,
+                    COALESCE(SUM(credit_centimes), 0) AS credit
+             FROM lignes_ecriture WHERE ecriture_id = {$clientReversal}"
+        )->fetch();
+        $this->same(
+            [6810, 6810],
+            [
+                (int) $clientReversalTotals['debit'],
+                (int) $clientReversalTotals['credit'],
+            ],
+            'extourne limitée au solde restant de la facture'
+        );
+        $this->same(
+            'validee',
+            (string) $pdo->query(
+                "SELECT statut FROM ecritures WHERE id = {$clientEntry}"
+            )->fetchColumn(),
+            'écriture d’origine conservée pour sa part déjà réglée'
+        );
+        $clientVatAfterReversal = $pdo->query(
+            "SELECT COALESCE(SUM(t.base_nette_centimes), 0) AS base,
+                    COALESCE(SUM(t.tva_centimes), 0) AS tva,
+                    COALESCE(SUM(t.total_brut_centimes), 0) AS brut
+             FROM tva_lignes t
+             JOIN lignes_ecriture l ON l.id = t.ligne_ecriture_id
+             WHERE l.ecriture_id IN ({$clientEntry}, {$clientReversal})"
+        )->fetch();
+        $this->same(
+            [3700, 300, 4000],
+            [
+                (int) $clientVatAfterReversal['base'],
+                (int) $clientVatAfterReversal['tva'],
+                (int) $clientVatAfterReversal['brut'],
+            ],
+            'TVA du reliquat seule contre-passée'
+        );
+        $this->same(
+            $clientReversal,
+            $billing->reverseInvoice(
+                $organisationId,
+                $dossierId,
+                $clientInvoice,
+                $clientVersion,
+                '2026-04-20'
+            ),
+            'rejeu de l’extourne partielle sans écriture dupliquée'
+        );
+        $supplierVersion = (int) $billing->document(
+            $organisationId,
+            $dossierId,
+            $supplierInvoice
+        )['version'];
+        $supplierReversal = $billing->reverseInvoice(
+            $organisationId,
+            $dossierId,
+            $supplierInvoice,
+            $supplierVersion,
+            '2026-04-20'
+        );
+        $reversedSupplier = $billing->document(
+            $organisationId,
+            $dossierId,
+            $supplierInvoice
+        );
+        $this->same(
+            'annule',
+            (string) $reversedSupplier['statut'],
+            'extourne conserve la facture avec un statut non exigible'
+        );
+        $this->same(
+            $supplierReversal,
+            (int) $reversedSupplier['ecriture_annulation_id'],
+            'écriture inverse reliée à la facture extournée'
+        );
+        $this->same(
+            $supplierReversal,
+            $billing->reverseInvoice(
+                $organisationId,
+                $dossierId,
+                $supplierInvoice,
+                $supplierVersion,
+                '2026-04-20'
+            ),
+            'rejeu de l’extourne sans écriture dupliquée'
+        );
+        $reversalPairs = $pdo->query(
+            "SELECT o.debit_centimes AS od, o.credit_centimes AS oc,
+                    r.debit_centimes AS rd, r.credit_centimes AS rc
+             FROM lignes_ecriture o
+             JOIN lignes_ecriture r ON r.ordre = o.ordre
+             WHERE o.ecriture_id = {$supplierEntry}
+               AND r.ecriture_id = {$supplierReversal}
+             ORDER BY o.ordre"
+        )->fetchAll();
+        $exactReversal = $reversalPairs !== [];
+        foreach ($reversalPairs as $pair) {
+            $exactReversal = $exactReversal
+                && (int) $pair['od'] === (int) $pair['rc']
+                && (int) $pair['oc'] === (int) $pair['rd'];
+        }
+        $this->true($exactReversal, 'extourne comptable exactement inverse');
+        $vatReversal = $pdo->query(
+            "SELECT COALESCE(SUM(t.base_nette_centimes), 0) AS base,
+                    COALESCE(SUM(t.tva_centimes), 0) AS tva,
+                    COALESCE(SUM(t.total_brut_centimes), 0) AS brut
+             FROM tva_lignes t
+             JOIN lignes_ecriture l ON l.id = t.ligne_ecriture_id
+             WHERE l.ecriture_id IN ({$supplierEntry}, {$supplierReversal})"
+        )->fetch();
+        $this->same(
+            [0, 0, 0],
+            [
+                (int) $vatReversal['base'],
+                (int) $vatReversal['tva'],
+                (int) $vatReversal['brut'],
+            ],
+            'snapshots TVA exactement inversés par l’extourne'
+        );
+        $supplierWorkspace = (new BillingWorkspaceService(
+            $pdo,
+            $billing,
+            $payments,
+            $contacts
+        ))->documents(
+            $organisationId,
+            $dossierId,
+            '2026-04-30',
+            [
+                'direction' => 'all',
+                'status' => 'all',
+                'search' => '',
+                'contact_id' => null,
+            ]
+        );
+        $supplierWorkspaceRow = array_values(array_filter(
+            $supplierWorkspace,
+            static fn (array $row): bool => (int) $row['id'] === $supplierInvoice
+        ))[0];
+        $this->same(
+            0,
+            (int) $supplierWorkspaceRow['open_cents'],
+            'facture extournée sans montant restant dû'
+        );
+        $clientWorkspaceRow = array_values(array_filter(
+            $supplierWorkspace,
+            static fn (array $row): bool => (int) $row['id'] === $clientInvoice
+        ))[0];
+        $this->same(
+            [4000, 0, 'solde'],
+            [
+                (int) $clientWorkspaceRow['allocated_cents'],
+                (int) $clientWorkspaceRow['open_cents'],
+                (string) $clientWorkspaceRow['payment_state'],
+            ],
+            'facture extournée conserve son lettrage et devient entièrement soldée'
+        );
 
         $multi = $billing->createDraft(
             $organisationId,
@@ -11145,6 +11904,41 @@ final class Tests
             $multi,
             $exercise,
             $journal
+        );
+        $multiWorkspace = (new BillingWorkspaceService(
+            $pdo,
+            $billing,
+            $payments,
+            $contacts
+        ))->documents(
+            $organisationId,
+            $dossierId,
+            '2026-05-31',
+            [
+                'direction' => 'sales',
+                'status' => 'all',
+                'search' => '',
+                'contact_id' => null,
+            ]
+        );
+        $multiWorkspaceRow = array_values(array_filter(
+            $multiWorkspace,
+            static fn (array $row): bool => (int) $row['id'] === $multi
+        ))[0];
+        $this->same(
+            [
+                'comptabilise',
+                ['Normal', 'Réduit', 'Exonéré'],
+                [1000, 1000, 1000],
+                [10000, 10000, 10000],
+            ],
+            [
+                (string) $multiWorkspaceRow['status'],
+                array_column($multiWorkspaceRow['lines'], 'label'),
+                array_column($multiWorkspaceRow['lines'], 'quantity_milli'),
+                array_column($multiWorkspaceRow['lines'], 'unit_price_cents'),
+            ],
+            'facture comptabilisée conserve quantité et prix unitaire par ligne'
         );
         $credit = $billing->creditFrom(
             $organisationId,
@@ -11607,6 +12401,17 @@ final class Tests
             ],
             1
         );
+        $commercialPdf = (new InvoicePdfService($pdo, $audit))->commercial(
+            $organisationId,
+            $dossierId,
+            $offer,
+            $billing->creditorProfile($organisationId, $dossierId),
+            1
+        );
+        $this->true(
+            str_starts_with($commercialPdf, '%PDF-'),
+            'offre client imprimable dans le format PDF unifié'
+        );
         $secondOffer = $commercial->save(
             $organisationId,
             $dossierId,
@@ -11647,7 +12452,7 @@ final class Tests
             1
         );
         $this->true(
-            str_starts_with($offerNumber, 'OF-2026-'),
+            str_starts_with($offerNumber, 'OC-2026-'),
             'offre client numérotée à son envoi'
         );
         $commercial->changeStatus(
@@ -11673,16 +12478,90 @@ final class Tests
             (int) $commercialDocument($clientOrder['id'])['document_source_id'],
             'commande client reliée à l’offre acceptée'
         );
-        $clientInvoiceFromOrder = $commercial->convert(
+        $orderBeforeEdit = $commercialDocument($clientOrder['id']);
+        $commercial->save(
             $organisationId,
             $dossierId,
             [
-                'source_document_id' => $clientOrder['id'],
-                'target_type' => 'facture_client',
-                'document_date' => '2026-10-15',
-                'due_date' => '2026-11-14',
-                'collective_account_id' => $receivable,
+                'id' => $clientOrder['id'],
+                'version' => (int) $orderBeforeEdit['version'],
+                'type' => 'commande_client',
+                'contact_id' => $customer,
+                'document_date' => '2026-10-11',
+                'valid_until' => '',
+                'currency' => 'CHF',
+                'source_document_id' => $offer,
+                'lines' => [
+                    $commercialLine(
+                        'Commande ajustée',
+                        12500,
+                        $revenue,
+                        $exempt
+                    ),
+                ],
             ],
+            1
+        );
+        $this->same(
+            'Commande ajustée',
+            (string) $commercialDocument($clientOrder['id'])['lines'][0]['libelle'],
+            'commande issue d’une offre modifiable sans briser sa traçabilité'
+        );
+        $invoiceFromOrder = [
+            'source_document_id' => $clientOrder['id'],
+            'target_type' => 'facture_client',
+            'document_date' => '2026-10-15',
+            'due_date' => '2026-11-14',
+            'collective_account_id' => $receivable,
+        ];
+        $this->throws(
+            fn () => $commercial->convert(
+                $organisationId,
+                $dossierId,
+                $invoiceFromOrder,
+                1
+            ),
+            'commande brouillon non facturable avant livraison'
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $clientOrder['id'],
+            (int) $commercialDocument($clientOrder['id'])['version'],
+            'envoye',
+            1
+        );
+        $this->same(
+            'envoye',
+            (string) $commercialDocument($clientOrder['id'])['statut'],
+            'envoi de commande distinct de la livraison'
+        );
+        $this->throws(
+            fn () => $commercial->convert(
+                $organisationId,
+                $dossierId,
+                $invoiceFromOrder,
+                1
+            ),
+            'commande envoyée non facturable avant livraison'
+        );
+        $commercial->changeStatus(
+            $organisationId,
+            $dossierId,
+            $clientOrder['id'],
+            (int) $commercialDocument($clientOrder['id'])['version'],
+            'livre',
+            1
+        );
+        $this->same(
+            'livre',
+            (string) $commercialDocument($clientOrder['id'])['statut'],
+            'livraison de commande confirmée séparément'
+        );
+        $clientInvoiceFromOrder = $commercial->convert(
+            $organisationId,
+            $dossierId,
+            $invoiceFromOrder,
             1
         );
         $this->same(
@@ -11693,6 +12572,51 @@ final class Tests
                 $clientInvoiceFromOrder['id']
             )['statut'],
             'conversion de commande crée une facture brouillon modifiable'
+        );
+        $convertedInvoice = $billing->document(
+            $organisationId,
+            $dossierId,
+            $clientInvoiceFromOrder['id']
+        );
+        $billing->updateDraft(
+            $organisationId,
+            $dossierId,
+            $clientInvoiceFromOrder['id'],
+            (int) $convertedInvoice['version'],
+            'facture_client',
+            $customer,
+            '2026-10-15',
+            '2026-11-14',
+            [[
+                'libelle' => 'Facture de commande ajustée',
+                'quantite_milli' => 1000,
+                'prix_unitaire_centimes' => 13000,
+                'mode_saisie' => 'net',
+                'compte_id' => $revenue,
+                'code_tva_id' => $exempt,
+                'date_prestation' => '2026-10-15',
+            ]],
+            $receivable
+        );
+        $convertedInvoiceLine = $billing->lines(
+            $clientInvoiceFromOrder['id']
+        )[0];
+        $this->same(
+            'Facture de commande ajustée',
+            (string) $convertedInvoiceLine['libelle'],
+            'facture convertie modifiable malgré sa traçabilité commerciale'
+        );
+        $linkedFinancialLine = $pdo->query(
+            'SELECT cl.ligne_cible_financiere_id
+             FROM conversions_lignes_documents cl
+             JOIN conversions_documents c ON c.id = cl.conversion_id
+             WHERE c.document_cible_financier_id = '
+            . (int) $clientInvoiceFromOrder['id']
+        )->fetchColumn();
+        $this->same(
+            (int) $convertedInvoiceLine['id'],
+            (int) $linkedFinancialLine,
+            'traçabilité commerciale rattachée aux lignes corrigées de la facture'
         );
         $directOrder = $commercial->save(
             $organisationId,
@@ -11727,7 +12651,7 @@ final class Tests
             $dossierId,
             $directOrder,
             (int) $commercialDocument($directOrder)['version'],
-            'accepte',
+            'livre',
             1
         );
         $commercial->changeStatus(
@@ -11741,7 +12665,7 @@ final class Tests
         $this->same(
             'annule',
             (string) $commercialDocument($directOrder)['statut'],
-            'commande acceptée annulable sans perdre son historique'
+            'commande livrée annulable sans perdre son historique'
         );
 
         $requestForQuote = $commercial->save(
@@ -11778,6 +12702,21 @@ final class Tests
             ],
             1
         );
+        $parallelSupplierResponse = $commercial->convert(
+            $organisationId,
+            $dossierId,
+            [
+                'source_document_id' => $requestForQuote,
+                'target_type' => 'reponse_offre_fournisseur',
+                'document_date' => '2026-10-06',
+                'external_number' => 'OFFRE-FOU-PARALLELE',
+            ],
+            1
+        );
+        $this->true(
+            $parallelSupplierResponse['id'] !== $supplierResponse['id'],
+            'plusieurs offres fournisseur reliées à une même demande coexistent'
+        );
         $responseNumber = $commercial->changeStatus(
             $organisationId,
             $dossierId,
@@ -11787,7 +12726,7 @@ final class Tests
             1
         );
         $this->true(
-            str_starts_with($responseNumber, 'ROF-2026-'),
+            str_starts_with($responseNumber, 'OF-2026-'),
             'réponse fournisseur enregistrée et numérotée à sa réception'
         );
         $replacement = $commercial->convert(
@@ -11970,6 +12909,178 @@ final class Tests
             null,
             $billing->lines($exemptPurchase)[0]['code_tva_id'],
             'aucune référence TVA artificielle sur le document non assujetti'
+        );
+        $billing->issue(
+            $organisationId,
+            $dossierId,
+            $exemptPurchase,
+            (int) $billing->document(
+                $organisationId,
+                $dossierId,
+                $exemptPurchase
+            )['version']
+        );
+        $exemptWorkspace = (new BillingWorkspaceService(
+            $pdo,
+            $billing,
+            $payments,
+            $contacts
+        ))->documents(
+            $organisationId,
+            $dossierId,
+            '2026-11-30',
+            [
+                'direction' => 'purchases',
+                'status' => 'all',
+                'search' => '',
+                'contact_id' => null,
+            ]
+        );
+        $exemptWorkspaceRow = array_values(array_filter(
+            $exemptWorkspace,
+            static fn (array $row): bool => (int) $row['id'] === $exemptPurchase
+        ))[0];
+        $this->same(
+            ['emis', 1, 1000, 10810, 'brut', 0, 0, 10810],
+            [
+                (string) $exemptWorkspaceRow['status'],
+                count($exemptWorkspaceRow['lines']),
+                (int) $exemptWorkspaceRow['lines'][0]['quantity_milli'],
+                (int) $exemptWorkspaceRow['lines'][0]['unit_price_cents'],
+                (string) $exemptWorkspaceRow['lines'][0]['input_mode'],
+                (int) $exemptWorkspaceRow['lines'][0]['vat_code_id'],
+                (int) $exemptWorkspaceRow['lines'][0]['vat_cents'],
+                (int) $exemptWorkspaceRow['lines'][0]['gross_cents'],
+            ],
+            'achat émis conserve le prix TVA comprise sans impôt récupérable'
+        );
+        $exemptPurchasePdf = (new InvoicePdfService($pdo, $audit))->archive(
+            $organisationId,
+            $dossierId,
+            $exemptPurchase,
+            $billing->creditorProfile($organisationId, $dossierId)
+        );
+        $this->true(
+            str_starts_with($exemptPurchasePdf, '%PDF-'),
+            'facture achat TVA comprise non récupérable générable en PDF'
+        );
+        $supplierVatPurchase = $billing->createDraft(
+            $organisationId,
+            $dossierId,
+            'facture_fournisseur',
+            $supplier,
+            '2026-11-12',
+            '2026-12-12',
+            [
+                [
+                    'libelle' => 'Achat brut avec TVA non récupérable',
+                    'quantite_milli' => 2000,
+                    'prix_unitaire_centimes' => 5405,
+                    'mode_saisie' => 'brut',
+                    'compte_id' => $expense,
+                    'code_tva_id' => $purchase,
+                    'date_prestation' => '2026-11-12',
+                ],
+                [
+                    'libelle' => 'Achat net avec TVA non récupérable',
+                    'quantite_milli' => 1000,
+                    'prix_unitaire_centimes' => 10000,
+                    'mode_saisie' => 'net',
+                    'compte_id' => $expense,
+                    'code_tva_id' => $purchase,
+                    'date_prestation' => '2026-11-12',
+                ],
+            ],
+            $payable,
+            'FOU-TVA-INCLUSE-1'
+        );
+        $supplierVatLine = $billing->lines($supplierVatPurchase)[0];
+        $this->same(
+            [10000, 810, 10810, 0, 'brut'],
+            [
+                (int) $supplierVatLine['base_nette_centimes'],
+                (int) $supplierVatLine['tva_centimes'],
+                (int) $supplierVatLine['total_brut_centimes'],
+                (int) $supplierVatLine['tva_deductible_centimes'],
+                (string) $supplierVatLine['mode_saisie'],
+            ],
+            'TVA fournisseur calculée sur prix brut mais non récupérable'
+        );
+        $supplierVatNetLine = $billing->lines($supplierVatPurchase)[1];
+        $this->same(
+            [10000, 810, 10810, 0, 'net'],
+            [
+                (int) $supplierVatNetLine['base_nette_centimes'],
+                (int) $supplierVatNetLine['tva_centimes'],
+                (int) $supplierVatNetLine['total_brut_centimes'],
+                (int) $supplierVatNetLine['tva_deductible_centimes'],
+                (string) $supplierVatNetLine['mode_saisie'],
+            ],
+            'TVA fournisseur calculée sur prix net mais non récupérable'
+        );
+        $billing->issue(
+            $organisationId,
+            $dossierId,
+            $supplierVatPurchase,
+            (int) $billing->document(
+                $organisationId,
+                $dossierId,
+                $supplierVatPurchase
+            )['version']
+        );
+        $supplierVatEntry = $billing->post(
+            $organisationId,
+            $dossierId,
+            $supplierVatPurchase,
+            $exercise,
+            $journal
+        );
+        $this->same(
+            21620,
+            (int) $pdo->query(
+                "SELECT SUM(debit_centimes) FROM lignes_ecriture
+                 WHERE ecriture_id = {$supplierVatEntry}
+                   AND compte_id = {$expense}"
+            )->fetchColumn(),
+            'TVA fournisseur non récupérable entièrement comptabilisée en charge'
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM lignes_ecriture
+                 WHERE ecriture_id = {$supplierVatEntry}
+                   AND compte_id = {$inputVat}"
+            )->fetchColumn(),
+            'aucune ligne d’impôt préalable pour le dossier non assujetti'
+        );
+        $supplierVatWorkspace = (new BillingWorkspaceService(
+            $pdo,
+            $billing,
+            $payments,
+            $contacts
+        ))->documents(
+            $organisationId,
+            $dossierId,
+            '2026-11-30',
+            [
+                'direction' => 'purchases',
+                'status' => 'all',
+                'search' => '',
+                'contact_id' => null,
+            ]
+        );
+        $supplierVatWorkspaceRow = array_values(array_filter(
+            $supplierVatWorkspace,
+            static fn (array $row): bool => (int) $row['id'] === $supplierVatPurchase
+        ))[0];
+        $this->same(
+            [810, 0, 'brut'],
+            [
+                (int) $supplierVatWorkspaceRow['lines'][0]['vat_cents'],
+                (int) $supplierVatWorkspaceRow['lines'][0]['deductible_vat_cents'],
+                (string) $supplierVatWorkspaceRow['lines'][0]['input_mode'],
+            ],
+            'consultation distingue TVA fournisseur et TVA récupérable'
         );
         $exemptRecurrence = $recurrences->create(
             $organisationId,
@@ -12205,7 +13316,49 @@ final class Tests
             [$line],
             $proofId
         );
-        $created = $expenses->read($organisationId, $dossierId)['expenses'][0];
+        try {
+            $expenses->createDraft(
+                $organisationId,
+                $dossierId,
+                $supplier,
+                '2026-02-01',
+                '2026-03-01',
+                'FOU-2026-001',
+                $payable,
+                [$line]
+            );
+            $this->true(false, 'doublon fournisseur expliqué précisément');
+        } catch (ExpenseException $exception) {
+            $this->true(
+                str_contains(
+                    $exception->getMessage(),
+                    'déjà utilisée par la dépense brouillon #'
+                ),
+                'doublon fournisseur expliqué précisément'
+            );
+        }
+        $secondExpenseId = $expenses->createDraft(
+            $organisationId,
+            $dossierId,
+            $supplier,
+            '2026-02-01',
+            '2026-03-01',
+            'FOU-2026-002',
+            $payable,
+            [$line]
+        );
+        $this->true($secondExpenseId > $expenseId, 'deuxième dépense distincte acceptée');
+        $expenses->cancel(
+            $organisationId,
+            $dossierId,
+            $secondExpenseId,
+            2,
+            '2026-02-01'
+        );
+        $created = array_values(array_filter(
+            $expenses->read($organisationId, $dossierId)['expenses'],
+            static fn (array $item): bool => (int) $item['id'] === $expenseId
+        ))[0];
         $expenseVatCodes = array_column(
             $expenses->read($organisationId, $dossierId)['catalog']['vat_codes'],
             'code'
@@ -12311,19 +13464,35 @@ final class Tests
         )->fetch();
         $this->same(10810, (int) $totals['debit'], 'débits fournisseur équilibrés');
         $this->same(10810, (int) $totals['credit'], 'crédits fournisseur équilibrés');
+        $expenseJournal = (new ReportingService($pdo))->journal(
+            $organisationId,
+            $dossierId,
+            ['exercice_id' => $exercise]
+        );
+        $expenseEntry = array_values(array_filter(
+            $expenseJournal['items'],
+            static fn (array $item): bool => (int) $item['id'] === $entryId
+        ))[0];
+        $this->same(
+            'depense',
+            $expenseEntry['financial_document_workflow'],
+            'journal identifie DEP comme dépense et non comme facture'
+        );
         $this->same(
             0,
             (int) $pdo->query('SELECT COUNT(*) FROM paiements')->fetchColumn(),
             'paiement non créé par la comptabilisation'
         );
-        $reversal = $expenses->cancel(
-            $organisationId,
-            $dossierId,
-            $expenseId,
-            5,
-            '2026-02-01'
+        $this->throws(
+            fn () => $expenses->cancel(
+                $organisationId,
+                $dossierId,
+                $expenseId,
+                5,
+                '2026-02-01'
+            ),
+            'dépense comptabilisée non annulable'
         );
-        $this->true(is_int($reversal) && $reversal > 0, 'annulation par contre-passation');
 
         $recurrenceId = $expenses->createRecurrence(
             $organisationId,
@@ -12377,6 +13546,20 @@ final class Tests
         $this->true(
             str_starts_with($generatedNumber, 'DEP-2026-'),
             'brouillon sans justificatif numérique soumis explicitement'
+        );
+        $expenses->reject(
+            $organisationId,
+            $dossierId,
+            $generatedId,
+            3
+        );
+        $rejected = array_values(array_filter(
+            $expenses->read($organisationId, $dossierId)['expenses'],
+            static fn (array $item): bool => $item['id'] === $generatedId
+        ))[0];
+        $this->true(
+            $rejected['rejected'] === true && $rejected['status'] === 'annule',
+            'dépense soumise refusée et distinguée d’une annulation'
         );
         $this->same(
             [],
@@ -13091,6 +14274,103 @@ CSV;
             array_key_exists('difference_cents', $state),
             'état banque/comptabilité/écart calculé'
         );
+        $postFinanceBalance = (int) $state['accounting_balance_cents'];
+        $ubsTreasury = $accounts->create([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'compte_comptable_id' => $bankAccount,
+            'libelle' => 'UBS',
+            'type' => 'banque',
+            'monnaie' => 'CHF',
+        ]);
+        $this->same(
+            3,
+            count($accounts->list(
+                $ids['organisation_a'],
+                $ids['dossier_a']
+            )),
+            'plusieurs comptes de trésorerie partagent un compte général'
+        );
+        $this->throws(
+            fn () => $accounts->create([
+                'organisation_id' => $ids['organisation_a'],
+                'dossier_id' => $ids['dossier_a'],
+                'compte_comptable_id' => $bankAccount,
+                'libelle' => 'Banque EUR incompatible',
+                'type' => 'banque',
+                'monnaie' => 'EUR',
+            ]),
+            'devise commune imposée aux comptes partageant le grand livre'
+        );
+        $ubsEntry = $entries->postGenerated([
+            'organisation_id' => $ids['organisation_a'],
+            'dossier_id' => $ids['dossier_a'],
+            'exercice_id' => $exercise,
+            'journal_id' => $journal,
+            'date_comptable' => '2026-12-31',
+            'libelle' => 'Apport UBS',
+            'source_type' => 'test',
+            'source_id' => 'ubs-apport',
+            'source_action' => 'multi-tresorerie',
+            'lignes' => [
+                [
+                    'compte_id' => $bankAccount,
+                    'compte_tresorerie_operationnel_id' => $ubsTreasury,
+                    'debit_centimes' => 22200,
+                ],
+                ['compte_id' => $salesAccount, 'credit_centimes' => 22200],
+            ],
+        ], 'test-treasury:ubs-apport');
+        $this->same(
+            22200,
+            (int) (new TreasuryStateService($pdo))->state(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $ubsTreasury,
+                '2026-12-31'
+            )['accounting_balance_cents'],
+            'solde UBS isolé malgré le compte général 1020 commun'
+        );
+        $this->same(
+            $postFinanceBalance,
+            (int) (new TreasuryStateService($pdo))->state(
+                $ids['organisation_a'],
+                $ids['dossier_a'],
+                $bankTreasury,
+                '2026-12-31'
+            )['accounting_balance_cents'],
+            'solde PostFinance inchangé par le mouvement UBS'
+        );
+        $sameLedgerTransfer = (new InternalTransferService($pdo, $entries))->post(
+            $ids['organisation_a'],
+            $ids['dossier_a'],
+            $bankTreasury,
+            $ubsTreasury,
+            $exercise,
+            $journal,
+            '2026-12-31',
+            700,
+            'Transfert PostFinance vers UBS',
+            'pf-ubs-2026-01'
+        );
+        $this->same(
+            2,
+            (int) $pdo->query(
+                "SELECT COUNT(DISTINCT compte_tresorerie_operationnel_id)
+                 FROM lignes_ecriture
+                 WHERE ecriture_id = {$sameLedgerTransfer}"
+            )->fetchColumn(),
+            'transfert entre deux banques 1020 ventilé sur les deux comptes'
+        );
+        $this->same(
+            $ubsTreasury,
+            (int) $pdo->query(
+                "SELECT compte_tresorerie_operationnel_id
+                 FROM lignes_ecriture
+                 WHERE ecriture_id = {$ubsEntry} AND compte_id = {$bankAccount}"
+            )->fetchColumn(),
+            'dimension opérationnelle conservée dans le grand livre'
+        );
         $this->true(IntegrityChecker::check($pdo)['ok'], 'intégrité après trésorerie');
     }
 
@@ -13128,6 +14408,8 @@ CSV;
         (new PlanSeeder($pdo, dirname(__DIR__) . '/database/seeds'))
             ->installForDossier($organisationId, $dossierId, 'personne_morale');
         $bankAccount = $this->accountId($pdo, $dossierId, '1020');
+        $cashAccount = $this->accountId($pdo, $dossierId, '1000');
+        $furnitureAccount = $this->accountId($pdo, $dossierId, '1510');
         $payable = $this->accountId($pdo, $dossierId, '2000');
         $expenseAccount = $this->accountId($pdo, $dossierId, '6500');
         $inputVat = $this->accountId($pdo, $dossierId, '1170');
@@ -13139,6 +14421,14 @@ CSV;
             'type' => 'banque',
             'iban' => 'CH9300762011623852957',
             'bic' => 'POFICHBEXXX',
+            'monnaie' => 'CHF',
+        ]);
+        (new TreasuryAccountService($pdo, $audit))->create([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'compte_comptable_id' => $cashAccount,
+            'libelle' => 'Caisse principale',
+            'type' => 'caisse',
             'monnaie' => 'CHF',
         ]);
         $vat = new VatConfigurationService($pdo, $audit);
@@ -13290,6 +14580,20 @@ CSV;
         ]);
         $bankLineId = (int) $pdo->lastInsertId();
         $payments = new PaymentService($pdo, $audit, $entries);
+        $this->throws(
+            fn () => $payments->create(
+                $organisationId,
+                $dossierId,
+                $supplier,
+                'encaissement',
+                '2026-03-20',
+                100,
+                'COLLECTIF-CAISSE-INTERDIT',
+                $bankAccount,
+                collectiveAccountId: $cashAccount
+            ),
+            'compte de caisse exclu des comptes collectifs à lettrer'
+        );
         $pdo->prepare(
             "INSERT INTO documents_financiers
              (organisation_id, dossier_id, contact_id, type, statut, numero,
@@ -13534,6 +14838,173 @@ CSV;
             $manualPayment,
             $secondExpenseId,
             1000
+        );
+        $journalPaymentEntry = $entries->createDraft([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'exercice_id' => $exercise,
+            'journal_id' => $journal,
+            'date_comptable' => '2026-03-22',
+            'libelle' => 'Paiement fournisseur saisi au journal',
+            'reference' => 'JRN-PAY-001',
+            'lignes' => [
+                [
+                    'compte_id' => $payable,
+                    'debit_centimes' => 750,
+                ],
+                [
+                    'compte_id' => $bankAccount,
+                    'credit_centimes' => 750,
+                ],
+            ],
+        ]);
+        $entries->validate(
+            $organisationId,
+            $dossierId,
+            $journalPaymentEntry
+        );
+        $journalPayment = $pdo->query(
+            "SELECT origine, contact_id, ecriture_id
+             FROM paiements WHERE ecriture_id = {$journalPaymentEntry}"
+        )->fetch();
+        $this->true(
+            $journalPayment !== false
+            && $journalPayment['origine'] === 'journal'
+            && $journalPayment['contact_id'] === null,
+            'journal trésorerie contre passif crée un paiement sans contact'
+        );
+        $ordinaryEntry = $entries->createDraft([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'exercice_id' => $exercise,
+            'journal_id' => $journal,
+            'date_comptable' => '2026-03-22',
+            'libelle' => 'Frais bancaires sans lettrage',
+            'reference' => 'JRN-FEE-001',
+            'lignes' => [
+                [
+                    'compte_id' => $expenseAccount,
+                    'debit_centimes' => 25,
+                ],
+                [
+                    'compte_id' => $bankAccount,
+                    'credit_centimes' => 25,
+                ],
+            ],
+        ]);
+        $entries->validate(
+            $organisationId,
+            $dossierId,
+            $ordinaryEntry
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM paiements
+                 WHERE ecriture_id = {$ordinaryEntry}"
+            )->fetchColumn(),
+            'journal trésorerie contre charge ne crée aucun paiement'
+        );
+        $cashFurnitureEntry = $entries->createDraft([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'exercice_id' => $exercise,
+            'journal_id' => $journal,
+            'date_comptable' => '2026-03-22',
+            'libelle' => 'Mobilier payé comptant en caisse',
+            'reference' => 'JRN-CASH-FURNITURE-001',
+            'lignes' => [
+                [
+                    'compte_id' => $furnitureAccount,
+                    'debit_centimes' => 25000,
+                ],
+                [
+                    'compte_id' => $cashAccount,
+                    'credit_centimes' => 25000,
+                ],
+            ],
+        ]);
+        $entries->validate(
+            $organisationId,
+            $dossierId,
+            $cashFurnitureEntry
+        );
+        $this->same(
+            0,
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM paiements
+                 WHERE ecriture_id = {$cashFurnitureEntry}"
+            )->fetchColumn(),
+            'achat de mobilier payé en caisse exclu du lettrage'
+        );
+        $otherSupplier = (new ContactService($pdo, $audit))->create(
+            $organisationId,
+            $dossierId,
+            [
+                'type_personne' => 'entreprise',
+                'raison_sociale' => 'Autre créancier SA',
+            ],
+            ['fournisseur']
+        );
+        $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, statut, numero,
+              date_document, date_echeance, adresse_snapshot_json,
+              contact_snapshot_json, compte_collectif_id, workflow,
+              total_net_centimes, total_tva_centimes, total_brut_centimes)
+             VALUES (?, ?, ?, 'facture_fournisseur', 'comptabilise',
+                     'FA-AUTRE-001', '2026-03-01', '2026-03-31',
+                     '{}', '{}', ?, 'facturation', 500, 0, 500)"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $otherSupplier,
+            $payable,
+        ]);
+        $otherSupplierDocument = (int) $pdo->lastInsertId();
+        $crossContactPayment = $payments->create(
+            $organisationId,
+            $dossierId,
+            $supplier,
+            'decaissement',
+            '2026-03-22',
+            1000,
+            'MULTI-CONTACT',
+            $bankAccount,
+            collectiveAccountId: $payable
+        );
+        $payments->allocatePayment(
+            $organisationId,
+            $dossierId,
+            $crossContactPayment,
+            $otherSupplierDocument,
+            500
+        );
+        $this->same(
+            $otherSupplier,
+            (int) $pdo->query(
+                "SELECT d.contact_id
+                 FROM allocations a
+                 JOIN documents_financiers d ON d.id = a.document_id
+                 WHERE a.paiement_id = {$crossContactPayment}
+                   AND a.statut = 'valide'"
+            )->fetchColumn(),
+            'contact du lettrage peut différer du contact indicatif du paiement'
+        );
+        $crossContactState = $pdo->query(
+            "SELECT ecriture_id,
+                    montant_centimes - COALESCE((
+                        SELECT SUM(a.montant_centimes)
+                        FROM allocations a
+                        WHERE a.paiement_id = p.id AND a.statut = 'valide'
+                    ), 0) AS non_alloue
+             FROM paiements p WHERE p.id = {$crossContactPayment}"
+        )->fetch();
+        $this->true(
+            $crossContactState !== false
+            && $crossContactState['ecriture_id'] !== null
+            && (int) $crossContactState['non_alloue'] === 500,
+            'premier lettrage comptabilise une fois le paiement et conserve le reliquat'
         );
         $setup->closePeriod($organisationId, $dossierId, $period);
         $this->throws(

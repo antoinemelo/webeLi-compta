@@ -360,6 +360,10 @@ export type ConfigurationPayload = {
     valid_until: string | null;
     current: boolean;
   }>;
+  payment_accounting: {
+    trigger: 'premier_lettrage' | 'lettrage_complet';
+    version: number;
+  };
   audit: Array<{
     id: number;
     action: string;
@@ -566,6 +570,7 @@ export type ExpenseItem = {
   number: string;
   external_number: string;
   status: 'brouillon' | 'a_approuver' | 'approuve' | 'comptabilise' | 'annule';
+  rejected: boolean;
   version: number;
   contact_id: number;
   supplier: string;
@@ -647,19 +652,26 @@ export type TreasuryWorkspace = {
     status: 'proposee' | 'acceptee' | 'refusee'; entry_id: number | null;
   }>;
   payments: Array<Record<string, unknown> & {
-    id: number; contact_id: number; sens: 'encaissement' | 'decaissement';
+    id: number; contact_id: number | null; sens: 'encaissement' | 'decaissement';
     date_paiement: string; montant_centimes: number; reference: string;
-    monnaie: string;
+    monnaie: string; contact: string; origine: 'liquidites' | 'journal' | 'lot';
+    ecriture_id: number | null; ligne_bancaire_id: number | null;
+    compte_tresorerie_numero: string; compte_tresorerie_libelle: string;
+    compte_collectif_numero: string; compte_collectif_libelle: string;
     alloue_centimes: number; non_alloue_centimes: number; statut: string;
+    matching_eligible: boolean;
   }>;
   allocations: Array<Record<string, unknown> & {
     id: number; paiement_id: number | null; document_id: number;
     montant_centimes: number; statut: 'valide' | 'annule';
-    document_numero: string; contact: string; date_source?: string;
+    document_numero: string;
+    document_type: 'facture_client' | 'facture_fournisseur';
+    contact_id: number; contact: string; date_source?: string;
   }>;
   open_documents: Array<{
     id: number; number: string; type: 'facture_client' | 'facture_fournisseur';
-    workflow: string; contact_id: number; due_date: string; currency: string;
+    workflow: string; status: 'comptabilise'; contact_id: number;
+    collective_account_id: number; due_date: string; currency: string;
     gross_cents: number; allocated_cents: number; open_cents: number; contact: string;
   }>;
   payable_debts: Array<{
@@ -684,7 +696,11 @@ export type TreasuryWorkspace = {
   catalog: {
     exercises: Array<{ id: number; libelle: string; date_debut: string; date_fin: string; statut: string }>;
     journals: Array<{ id: number; code: string; libelle: string; type: string }>;
-    accounts: Array<{ id: number; numero: string; libelle: string; sens_normal: string }>;
+    accounts: Array<{
+      id: number; numero: string; libelle: string;
+      type: 'actif' | 'passif' | 'fonds_propres' | 'produit' | 'charge' | 'hors_bilan';
+      sens_normal: string; marque: string; lettrable: boolean;
+    }>;
     contacts: Array<{
       id: number;
       label: string;
@@ -705,7 +721,10 @@ export type TreasuryWorkspace = {
     accept_suggestion: boolean; match: boolean;
     prepare_payments: boolean; export_payments: boolean; confirm_payments: boolean;
   };
-  definitions: { banking: string; matching: string; pain001: string };
+  definitions: {
+    banking: string; matching: string; pain001: string;
+    payment_accounting: string;
+  };
 };
 
 export type PublicMarketValue = {
@@ -795,6 +814,13 @@ export type AccountingWorkspace = {
       label: string;
       normal_side: 'debit' | 'credit';
     }>;
+    treasury_accounts: Array<{
+      id: number;
+      ledger_account_id: number;
+      label: string;
+      type: 'banque' | 'poste' | 'caisse' | 'carte';
+      currency: string;
+    }>;
   };
   chart: {
     types: Array<{
@@ -812,6 +838,7 @@ export type AccountingWorkspace = {
       structure_level: 'classe' | 'groupe_principal' | 'groupe' | 'sous_groupe';
       type: 'actif' | 'passif' | 'produit' | 'charge' | 'hors_bilan';
       parent_id: number | null;
+      show_subtotal: boolean;
       path: string;
       order: number;
       version: number;
@@ -836,6 +863,7 @@ export type AccountingWorkspace = {
     number: string;
     version: number;
     soldes: Record<string, number>;
+    soldes_tresorerie: Record<string, number>;
     total_debit_centimes: number;
     total_credit_centimes: number;
   };
@@ -848,6 +876,11 @@ export type AccountingWorkspace = {
       reference: string;
       statut: string;
       source_type: string;
+      source_id: string;
+      financial_document_id: number | null;
+      financial_document_number: string | null;
+      financial_document_type: string | null;
+      financial_document_workflow: string | null;
       journal: string;
       comptes_debit: string;
       comptes_credit: string;
@@ -917,7 +950,16 @@ export type AccountingWorkspace = {
       items: Array<{
         id: number; numero: string; libelle: string;
         type: 'actif' | 'passif' | 'fonds_propres';
+        rubrique_id: number | null;
         rubrique_chemin: string; solde_centimes: number;
+        current_cents: number; previous_cents: number;
+      }>;
+      presentation_items: Array<{
+        row_kind: 'account' | 'subtotal'; id?: number;
+        numero: string; libelle: string;
+        type: 'actif' | 'passif' | 'fonds_propres';
+        rubrique_id?: number | null; rubric_id?: number;
+        rubric_level?: 'classe' | 'groupe_principal' | 'groupe' | 'sous_groupe';
         current_cents: number; previous_cents: number;
       }>;
       total_actif_centimes: number; total_passif_centimes: number;
@@ -928,8 +970,15 @@ export type AccountingWorkspace = {
     };
     income_statement: {
       items: Array<{
-        number: string; label: string; type: string; rubric_path: string;
+        number: string; label: string; type: string; rubric_id: number | null;
+        rubric_path: string;
         current_cents: number; previous_cents: number; delta_cents: number;
+      }>;
+      presentation_items: Array<{
+        row_kind: 'account' | 'subtotal'; number: string; label: string;
+        type: string; rubric_id: number | null;
+        rubric_level?: 'classe' | 'groupe_principal' | 'groupe' | 'sous_groupe';
+        current_cents: number; previous_cents: number; delta_cents?: number;
       }>;
       current: {
         label: string; products_cents: number; expenses_cents: number;
@@ -1121,6 +1170,27 @@ export type AssetWorkspace = {
   };
   categories: AssetCategory[];
   assets: AssetRecord[];
+  schedule: Array<{
+    id: number;
+    order: number;
+    asset_id: number;
+    asset_code: string;
+    asset_label: string;
+    category_id: number;
+    category_code: string;
+    category_label: string;
+    asset_account_id: number;
+    asset_account: string;
+    start_date: string;
+    end_date: string;
+    posting_date: string;
+    days: number;
+    amount_cents: number;
+    status: 'planifiee' | 'comptabilisee' | 'contre_passee' | 'annulee';
+    entry_id: number | null;
+    reversal_entry_id: number | null;
+    version: number;
+  }>;
   selected_asset: null | AssetRecord & {
     schedule: Array<{
       id: number;
@@ -1161,6 +1231,30 @@ export type AssetWorkspace = {
     asset_account: string;
     accumulated_account_id: number;
     accumulated_account: string;
+    assets: Array<{
+      id: number;
+      code: string;
+      label: string;
+      acquisition_reference: string;
+      acquisition_document_id: number | null;
+      acquisition_date: string;
+      in_service_date: string;
+      acquisition_value_cents: number;
+    }>;
+    ledger_gross_movements: Array<{
+      entry_id: number;
+      entry_number: string;
+      date: string;
+      journal: string;
+      reference: string;
+      label: string;
+      status: 'validee' | 'contre_passee';
+      source_type: string;
+      source_id: string;
+      debit_cents: number;
+      credit_cents: number;
+      net_cents: number;
+    }>;
     register_gross_cents: number;
     ledger_gross_cents: number;
     gross_difference_cents: number;
@@ -1341,6 +1435,7 @@ export type BillingDocument = {
   open_cents: number;
   reminder_count: number;
   entry_id: number | null;
+  reversal_entry_id: number | null;
   origin_document_id: number | null;
   scor_reference: string;
   has_archived_pdf: boolean;
@@ -1354,6 +1449,7 @@ export type BillingDocument = {
     vat_code_id: number;
     net_cents: number;
     vat_cents: number;
+    deductible_vat_cents: number;
     gross_cents: number;
   }>;
 };
@@ -1415,7 +1511,18 @@ export type CommercialDocument = {
     | 'reponse_offre_fournisseur'
     | 'commande_client'
     | 'commande_fournisseur';
-  statut: string;
+  statut:
+    | 'brouillon'
+    | 'envoye'
+    | 'livre'
+    | 'recu'
+    | 'accepte'
+    | 'refuse'
+    | 'remplace'
+    | 'commande'
+    | 'facture'
+    | 'annule'
+    | 'archive';
   numero: string;
   numero_externe: string;
   date_document: string;
@@ -1507,6 +1614,14 @@ export type BillingPayload = {
   }>;
   catalog: {
     accounts: Array<{ id: number; number: string; label: string }>;
+    treasury_accounts: Array<{
+      id: number;
+      ledger_account_id: number;
+      ledger_number: string;
+      label: string;
+      type: 'banque' | 'poste' | 'caisse' | 'carte';
+      currency: string;
+    }>;
     vat_codes: Array<{
       id: number;
       code: string;
@@ -1567,6 +1682,7 @@ export type BillingPayment = {
   currency: string;
   reference: string;
   status: string;
+  matching_eligible: boolean;
 };
 
 export type PayrollWorkspace = {

@@ -47,13 +47,30 @@ final class TreasuryStateService
              FROM lignes_ecriture l
              JOIN ecritures e ON e.id = l.ecriture_id
              WHERE e.organisation_id = ? AND e.dossier_id = ?
-               AND l.compte_id = ? AND e.date_comptable <= ?
+               AND l.compte_id = ?
+               AND (
+                 l.compte_tresorerie_operationnel_id = ?
+                 OR (
+                   l.compte_tresorerie_operationnel_id IS NULL
+                   AND NOT EXISTS (
+                     SELECT 1 FROM comptes_tresorerie t2
+                     WHERE t2.organisation_id = ? AND t2.dossier_id = ?
+                       AND t2.compte_comptable_id = l.compte_id
+                       AND t2.id <> ?
+                   )
+                 )
+               )
+               AND e.date_comptable <= ?
                AND e.statut IN ('validee', 'contre_passee')"
         );
         $accounting->execute([
             $organisationId,
             $dossierId,
             $account['compte_comptable_id'],
+            $treasuryAccountId,
+            $organisationId,
+            $dossierId,
+            $treasuryAccountId,
             $asOfDate,
         ]);
         $accountingCents = (int) $accounting->fetchColumn()

@@ -82,6 +82,55 @@ final class ExpenseService
         }
     }
 
+    /**
+     * @param list<array<string,mixed>> $lines
+     */
+    public function updateDraft(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $expectedVersion,
+        int $contactId,
+        string $documentDate,
+        string $dueDate,
+        string $externalNumber,
+        int $collectiveAccountId,
+        array $lines,
+        ?int $attachmentId = null,
+        ?int $actorId = null,
+    ): void {
+        $this->assertReferences(
+            $organisationId,
+            $dossierId,
+            $contactId,
+            $collectiveAccountId
+        );
+        $this->assertLineAccounts($organisationId, $dossierId, $lines);
+        try {
+            $this->billing->updateDraft(
+                $organisationId,
+                $dossierId,
+                $documentId,
+                $expectedVersion,
+                'facture_fournisseur',
+                $contactId,
+                $documentDate,
+                $dueDate,
+                $lines,
+                $collectiveAccountId,
+                $externalNumber,
+                attachmentId: $attachmentId,
+                actorId: $actorId,
+                workflow: 'depense'
+            );
+        } catch (BillingException|VatException $exception) {
+            throw new ExpenseException(
+                $exception->getMessage(),
+                previous: $exception
+            );
+        }
+    }
+
     public function attachProof(
         int $organisationId,
         int $dossierId,
@@ -226,6 +275,38 @@ final class ExpenseService
         );
     }
 
+    public function reject(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): void {
+        $stmt = $this->pdo->prepare(
+            "UPDATE documents_financiers
+             SET statut = 'annule', annule_le = datetime('now'),
+                 annule_par = ?, modifie_le = datetime('now'),
+                 version = version + 1
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND workflow = 'depense' AND statut = 'a_approuver'
+               AND version = ?"
+        );
+        $stmt->execute([
+            $actorId, $documentId, $organisationId, $dossierId, $expectedVersion,
+        ]);
+        if ($stmt->rowCount() !== 1) {
+            throw new ExpenseException('Dépense absente, déjà traitée ou modifiée.');
+        }
+        $this->audit->log(
+            'depenses.refusee',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'document_financier',
+            (string) $documentId
+        );
+    }
+
     public function post(
         int $organisationId,
         int $dossierId,
@@ -235,7 +316,7 @@ final class ExpenseService
         ?int $actorId = null,
     ): int {
         $document = $this->expense($organisationId, $dossierId, $documentId);
-        if ($document['statut'] !== 'approuve' && $document['ecriture_id'] === null) {
+        if ($document['statut'] !== 'approuve' || $document['ecriture_id'] !== null) {
             throw new ExpenseException('Seule une dépense approuvée peut être comptabilisée.');
         }
         try {
@@ -265,9 +346,19 @@ final class ExpenseService
         $document = $this->expense($organisationId, $dossierId, $documentId);
         if (
             (int) $document['version'] !== $expectedVersion
-            || $document['statut'] === 'annule'
+            || !in_array($document['statut'], ['brouillon', 'approuve'], true)
         ) {
-            throw new ExpenseException('Dépense déjà annulée ou modifiée.');
+            if (
+                $document['statut'] === 'comptabilise'
+                || $document['ecriture_id'] !== null
+            ) {
+                throw new ExpenseException(
+                    'Une dépense comptabilisée ne peut pas être annulée.'
+                );
+            }
+            throw new ExpenseException(
+                'Seule une dépense en brouillon ou approuvée peut être annulée.'
+            );
         }
         $allocated = $this->pdo->prepare(
             "SELECT COALESCE(SUM(montant_centimes), 0)
@@ -279,27 +370,15 @@ final class ExpenseService
                 'Annulez d’abord les allocations de paiement de cette dépense.'
             );
         }
-        $reversalId = null;
-        if ($document['ecriture_id'] !== null) {
-            $reversalId = $this->entries->reverse(
-                $organisationId,
-                $dossierId,
-                (int) $document['ecriture_id'],
-                $date,
-                'Annulation de la dépense ' . (string) $document['numero'],
-                $actorId
-            );
-        }
         $stmt = $this->pdo->prepare(
             "UPDATE documents_financiers
-             SET statut = 'annule', ecriture_annulation_id = ?,
-                 annule_le = datetime('now'), annule_par = ?,
+             SET statut = 'annule', annule_le = datetime('now'), annule_par = ?,
                  modifie_le = datetime('now'), version = version + 1
              WHERE id = ? AND organisation_id = ? AND dossier_id = ?
                AND workflow = 'depense' AND version = ?"
         );
         $stmt->execute([
-            $reversalId, $actorId, $documentId, $organisationId,
+            $actorId, $documentId, $organisationId,
             $dossierId, $expectedVersion,
         ]);
         if ($stmt->rowCount() !== 1) {
@@ -312,9 +391,9 @@ final class ExpenseService
             $dossierId,
             'document_financier',
             (string) $documentId,
-            ['contrepassation_id' => $reversalId]
+            ['date' => $date]
         );
-        return $reversalId;
+        return null;
     }
 
     /**
@@ -512,6 +591,9 @@ final class ExpenseService
                 'number' => (string) $row['numero'],
                 'external_number' => (string) $row['numero_externe'],
                 'status' => (string) $row['statut'],
+                'rejected' => (string) $row['statut'] === 'annule'
+                    && $row['soumis_le'] !== null
+                    && $row['approuve_le'] === null,
                 'version' => (int) $row['version'],
                 'contact_id' => (int) $row['contact_id'],
                 'supplier' => trim(

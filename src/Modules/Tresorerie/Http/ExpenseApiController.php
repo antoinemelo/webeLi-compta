@@ -84,6 +84,41 @@ final class ExpenseApiController
         }, 201);
     }
 
+    public function update(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('depenses.manage');
+        $data = $this->validator->expense($request, true);
+        return $this->execute($request, function () use (
+            $data, $userId, $organisationId, $dossierId
+        ): array {
+            $attachmentId = null;
+            if ($data['attachment'] !== null) {
+                $attachmentId = $this->attachments->store(
+                    $organisationId,
+                    $dossierId,
+                    $data['attachment']['name'],
+                    $data['attachment']['content'],
+                    $userId
+                );
+            }
+            $this->expenses->updateDraft(
+                $organisationId,
+                $dossierId,
+                $data['document_id'],
+                $data['version'],
+                $data['contact_id'],
+                $data['document_date'],
+                $data['due_date'],
+                $data['external_number'],
+                $data['collective_account_id'],
+                $data['lines'],
+                $attachmentId,
+                $userId
+            );
+            return ['updated' => true];
+        });
+    }
+
     public function submit(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('depenses.manage');
@@ -117,6 +152,24 @@ final class ExpenseApiController
         });
     }
 
+    public function reject(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('depenses.approve');
+        $data = $this->validator->transition($request);
+        return $this->execute($request, function () use (
+            $data, $userId, $organisationId, $dossierId
+        ): array {
+            $this->expenses->reject(
+                $organisationId,
+                $dossierId,
+                $data['document_id'],
+                $data['version'],
+                $userId
+            );
+            return ['rejected' => true];
+        });
+    }
+
     public function post(Request $request): Response
     {
         [$userId, $organisationId, $dossierId] = $this->scope('depenses.post');
@@ -135,7 +188,7 @@ final class ExpenseApiController
 
     public function cancel(Request $request): Response
     {
-        [$userId, $organisationId, $dossierId] = $this->scope('depenses.post');
+        [$userId, $organisationId, $dossierId] = $this->scope('depenses.manage');
         $data = $this->validator->cancellation($request);
         return $this->execute($request, fn (): array => [
             'reversal_entry_id' => $this->expenses->cancel(

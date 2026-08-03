@@ -9,7 +9,9 @@ exclusivement de la session autorisée.
 
 - Trésorerie comptable : somme débit moins crédit des écritures `validee` et
   `contre_passee` de l’exercice, jusqu’à la date incluse, multipliée par le
-  sens configuré du compte de trésorerie.
+  sens configuré du compte de trésorerie. La carte « Trésorerie par compte »
+  est ventilée par compte opérationnel (BCGe, UBS, etc.), même lorsque ces
+  comptes alimentent tous le même compte général 1020.
 - Solde bancaire : dernier solde importé à la date, avec priorité `CLBD`, puis
   `ITBD`. L’écart est affiché seulement si le solde bancaire et le compte sont
   dans la devise de base du dossier. L’écart total porte uniquement sur les
@@ -47,7 +49,7 @@ Les plans utilisent les index historiques :
 - `idx_lignes_bancaires_compte_date` ;
 - les index d’allocations par document, paiement et avoir.
 
-Aucun index ni migration 011 n’a été ajouté : la mesure ne le justifie pas.
+La mesure ne justifie aucun index supplémentaire propre au tableau de bord.
 
 ## Concordance et retour arrière
 
@@ -56,6 +58,6 @@ trésorerie à la balance, le solde bancaire à `TreasuryStateService` et les
 montants ouverts aux factures, paiements et avoirs. Ils couvrent également une
 période fermée et un exercice vide.
 
-Le retour arrière consiste à désactiver le shell Vue ou revenir au commit du
-lot 03. Comme ce lot ne modifie ni schéma ni donnée, aucune restauration SQLite
-n’est requise.
+Le retour arrière du code consiste à revenir à un commit qualifié. Si le schéma
+a évolué depuis ce commit, la base revient exclusivement par restauration
+d’une sauvegarde SQLite vérifiée ; aucune colonne n’est retirée manuellement.

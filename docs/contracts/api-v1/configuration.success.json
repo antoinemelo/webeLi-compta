@@ -50,6 +50,10 @@
     ],
     "payment_terms": [],
     "payment_defaults": [],
+    "payment_accounting": {
+      "trigger": "premier_lettrage",
+      "version": 0
+    },
     "audit": [],
     "definitions": {
       "contacts": "Le registre unique reste celui de Facturation.",

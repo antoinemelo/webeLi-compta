@@ -42,6 +42,7 @@
     "definitions": {
       "banking": "Une ligne bancaire importée reste distincte du grand livre.",
       "matching": "Le lettrage répartit un paiement sur des documents ouverts.",
+      "payment_accounting": "Le journal crée un paiement déjà comptabilisé uniquement entre un compte de trésorerie et un actif ou passif. Un paiement Liquidités est comptabilisé une seule fois au déclencheur configuré.",
       "pain001": "Un fichier exporté est préparé pour téléchargement, jamais déclaré transmis."
     },
     "capabilities": {

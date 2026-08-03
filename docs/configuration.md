@@ -32,10 +32,13 @@ Lorsqu’un gestionnaire sélectionne un dossier réel dont la configuration
 initiale n’est pas terminée, un guide compact apparaît en bas à gauche. Les
 notifications restent ainsi disponibles en bas à droite. **Précédent** et
 **Suivant** suivent l’ordre métier, le bouton principal ouvre directement le
-bon panneau. **Annuler** abandonne réellement le parcours pour le dossier
-courant sans défaire les réglages déjà enregistrés. Il peut ensuite être
-relancé explicitement depuis **Contexte de travail > Reprendre la
-configuration initiale**.
+bon panneau. Le compteur et la barre suivent la position réelle dans le
+parcours, même si une étape facultative est laissée vide. L’icône « — » réduit
+temporairement le guide en un bouton compact. **Annuler** abandonne réellement
+le parcours pour le dossier courant sans défaire les réglages déjà enregistrés.
+L’entrée **Contexte de travail > Reprendre la configuration initiale**
+n’apparaît que pour un parcours ainsi annulé et disparaît après sa reprise ou
+sa conclusion.
 
 La progression repose sur les sources métier, pas sur la simple visite d’un
 écran :
@@ -59,6 +62,11 @@ fin du parcours. Les confirmations sont conservées dans
 `parametres_dossier`, les mutations sont auditées et le serveur recontrôle les
 prérequis avant toute validation. La suppression ultérieure d’un prérequis
 obligatoire fait réapparaître le guide, même après sa conclusion.
+
+À la dernière étape, une seule action **Terminer et ouvrir la comptabilité**
+valide la conclusion et ferme le guide. Si un prérequis obligatoire manque, le
+bouton renvoie directement vers cette étape au lieu de laisser le parcours
+dans un état ambigu.
 
 ## Sources de vérité
 
@@ -92,11 +100,17 @@ Sous `/app/configuration/referentiels`, les référentiels sont gérés dans Vue
   (`non_assujetti`, `assujetti` ou `volontaire`) avec sa date d’effet. Pour un
   dossier assujetti, il recueille le numéro TVA, la méthode, le mode de
   décompte, la périodicité et les comptes TVA. Le même écran gère les taux
-  légaux et les codes datés via `VatConfigurationService` ;
+  légaux et les codes datés via `VatConfigurationService` ; les codes peuvent
+  être importés/exportés en CSV et toutes les références TVA peuvent être
+  effacées après contrôle des dépendances ;
 - charges sociales : millésimes en ppm via
-  `PayrollConfigurationService`, avec import OCAS prévisualisé et contrôlé ;
+  `PayrollConfigurationService`, avec import OCAS prévisualisé et contrôlé,
+  ainsi qu’import/export CSV des taux annuels ;
 - comptes bancaires, postaux, caisse et cartes : création, édition et
   activation via `TreasuryAccountService`, toujours liés au grand livre ;
+  plusieurs comptes opérationnels (par exemple BCGe et UBS) peuvent partager
+  un même compte général (par exemple 1020 Banque), à condition de conserver
+  la même devise et le même sens comptable ;
   suppression si inutilisés ou archivage sinon. L’IBAN des factures est choisi
   uniquement parmi leurs IBAN CH/LI actifs ;
 - journaux : création et édition optimiste via `AccountingSetupService` ;
@@ -109,6 +123,14 @@ Sous `/app/configuration/referentiels`, les référentiels sont gérés dans Vue
 Le plan comptable est le premier référentiel de Configuration, sous
 `/app/configuration/referentiels/plan`. Les instantanés des factures et fiches
 validées restent inchangés.
+
+Les onglets principaux sont ordonnés
+**Modules / Entité / Paiements / Référentiels / Salaires / Audit**. Les
+formulaires de création volumineux s’ouvrent dans des fenêtres modales :
+condition de paiement, compte de trésorerie, taux de change, contact, code TVA,
+taux sociaux, exercice et période. L’onglet Audit permet l’effacement explicite
+de tout l’audit du dossier. Tous les retours passent par la région de
+notifications temporaire.
 
 ## Modules
 
@@ -152,7 +174,19 @@ APP_MFA_KEY=<secret aléatoire propre à cette instance>
 APP_PUBLIC_URL=https://compta.example/instance
 APP_MAIL_TRANSPORT=php
 APP_MAIL_FROM=no-reply@compta.example
+APP_MAIL_FROM_NAME=Compta
 ```
+
+Une clé hexadécimale de 64 caractères peut être générée localement avec :
+
+```bash
+php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'
+```
+
+La valeur doit rester stable pendant toute la vie de l’instance : la remplacer
+rend les secrets TOTP déjà enregistrés indéchiffrables. Elle se place dans
+l’environnement (`APP_MFA_KEY`) ou dans `config/local.php` sous
+`mfa_encryption_key`, jamais dans Git ni sous le webroot.
 
 Pour un relais SMTP :
 
@@ -164,6 +198,11 @@ APP_SMTP_ENCRYPTION=tls
 APP_SMTP_USERNAME=<utilisateur>
 APP_SMTP_PASSWORD=<secret>
 ```
+
+Le transport `php` délègue à la fonction `mail()` et donc au MTA configuré sur
+le serveur. Le transport `smtp` exige un hôte et utilise TLS avec validation du
+certificat. `app:doctor` signale l’absence d’URL publique et les capacités
+nécessaires ; l’écran Sécurité désactive les méthodes indisponibles.
 
 L’instance de production doit être publiée exclusivement en HTTPS. La session
 utilise uniquement un cookie `HttpOnly`, `SameSite=Lax`, un identifiant strict
@@ -214,6 +253,13 @@ effet qu’après le dernier déjà enregistré. Lors de la création d’un doc
 la condition résolue et ses paramètres sont copiés dans un snapshot. Une
 facture émise conserve ainsi son échéance et son historique lorsque les
 réglages futurs changent.
+
+Le même écran contient la règle de comptabilisation des paiements du dossier.
+Le mode recommandé comptabilise un paiement Liquidités au premier lettrage ;
+le mode prudent attend son lettrage complet. Une ligne bancaire associée
+déclenche toujours la comptabilisation et un paiement en devise étrangère
+attend toujours le lettrage complet. Les paiements détectés dans le journal
+sont déjà comptabilisés et ne génèrent jamais une seconde écriture.
 
 Le régime se modifie exclusivement dans
 **Configuration > Référentiels > TVA > Avec ou sans TVA**. Le retour à un

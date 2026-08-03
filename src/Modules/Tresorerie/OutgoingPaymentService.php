@@ -355,7 +355,9 @@ final class OutgoingPaymentService
                     (int) $batch['compte_comptable_id'],
                     $actorId,
                     $bankLineId,
-                    (string) $batch['monnaie']
+                    (string) $batch['monnaie'],
+                    treasuryOperationalAccountId:
+                        (int) $batch['compte_tresorerie_id']
                 );
                 $this->payments->allocatePayment(
                     $organisationId,
@@ -376,7 +378,8 @@ final class OutgoingPaymentService
                 );
                 $accountingLines[] = $this->bankAccountingLine(
                     $entryId,
-                    (int) $batch['compte_comptable_id']
+                    (int) $batch['compte_comptable_id'],
+                    (int) $batch['compte_tresorerie_id']
                 );
                 $this->pdo->prepare(
                     "UPDATE ordres_paiement_sortants
@@ -402,13 +405,16 @@ final class OutgoingPaymentService
                         ],
                         [
                             'compte_id' => (int) $batch['compte_comptable_id'],
+                            'compte_tresorerie_operationnel_id' =>
+                                (int) $batch['compte_tresorerie_id'],
                             'credit_centimes' => $difference,
                         ],
                     ],
                 ], 'lot-paiement:' . $batchId . ':frais', $actorId);
                 $accountingLines[] = $this->bankAccountingLine(
                     $feeEntry,
-                    (int) $batch['compte_comptable_id']
+                    (int) $batch['compte_comptable_id'],
+                    (int) $batch['compte_tresorerie_id']
                 );
             }
             $reconciliationId = $this->reconciliations->reconcile(
@@ -587,13 +593,18 @@ final class OutgoingPaymentService
         }
     }
 
-    private function bankAccountingLine(int $entryId, int $accountId): int
+    private function bankAccountingLine(
+        int $entryId,
+        int $accountId,
+        int $treasuryAccountId,
+    ): int
     {
         $stmt = $this->pdo->prepare(
             'SELECT id FROM lignes_ecriture
-             WHERE ecriture_id = ? AND compte_id = ?'
+             WHERE ecriture_id = ? AND compte_id = ?
+               AND compte_tresorerie_operationnel_id = ?'
         );
-        $stmt->execute([$entryId, $accountId]);
+        $stmt->execute([$entryId, $accountId, $treasuryAccountId]);
         $id = $stmt->fetchColumn();
         if ($id === false) {
             throw new TreasuryException('Ligne comptable bancaire introuvable.');

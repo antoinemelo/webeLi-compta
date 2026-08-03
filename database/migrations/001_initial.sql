@@ -481,7 +481,7 @@ CREATE TABLE documents_commerciaux (
     ),
     statut TEXT NOT NULL DEFAULT 'brouillon' CHECK (
         statut IN (
-            'brouillon', 'envoye', 'recu', 'accepte', 'refuse',
+            'brouillon', 'envoye', 'livre', 'recu', 'accepte', 'refuse',
             'remplace', 'commande', 'facture', 'annule', 'archive'
         )
     ),
@@ -503,6 +503,7 @@ CREATE TABLE documents_commerciaux (
     document_source_id INTEGER REFERENCES documents_commerciaux(id) ON DELETE RESTRICT,
     remplace_par_id INTEGER REFERENCES documents_commerciaux(id) ON DELETE RESTRICT,
     emis_le TEXT,
+    livre_le TEXT,
     accepte_le TEXT,
     refuse_le TEXT,
     archive_le TEXT,
@@ -1353,7 +1354,7 @@ CREATE TABLE paiements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
     dossier_id INTEGER NOT NULL REFERENCES dossiers(id) ON DELETE RESTRICT,
-    contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE RESTRICT,
     sens TEXT NOT NULL CHECK (sens IN ('encaissement', 'decaissement')),
     date_paiement TEXT NOT NULL,
     montant_centimes INTEGER NOT NULL CHECK (montant_centimes > 0),
@@ -1368,13 +1369,28 @@ CREATE TABLE paiements (
     montant_base_centimes INTEGER NOT NULL DEFAULT 0,
     reference TEXT NOT NULL DEFAULT '',
     compte_tresorerie_id INTEGER REFERENCES comptes(id) ON DELETE RESTRICT,
+    compte_collectif_id INTEGER REFERENCES comptes(id) ON DELETE RESTRICT,
     ecriture_id INTEGER REFERENCES ecritures(id) ON DELETE RESTRICT,
     ligne_bancaire_id INTEGER REFERENCES lignes_bancaires(id) ON DELETE RESTRICT,
+    origine TEXT NOT NULL DEFAULT 'liquidites'
+        CHECK (origine IN ('liquidites', 'journal', 'lot')),
     statut TEXT NOT NULL DEFAULT 'valide' CHECK (statut IN ('valide', 'annule')),
     cree_le TEXT NOT NULL DEFAULT (datetime('now')),
     cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
     annule_le TEXT,
     annule_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL
+);
+
+CREATE TABLE politiques_comptabilisation_paiements (
+    dossier_id INTEGER PRIMARY KEY REFERENCES dossiers(id) ON DELETE RESTRICT,
+    organisation_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE RESTRICT,
+    declencheur TEXT NOT NULL DEFAULT 'premier_lettrage'
+        CHECK (declencheur IN ('premier_lettrage', 'lettrage_complet')),
+    cree_le TEXT NOT NULL DEFAULT (datetime('now')),
+    cree_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    modifie_le TEXT,
+    modifie_par INTEGER REFERENCES utilisateurs(id) ON DELETE SET NULL,
+    version INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE lots_paiements_sortants (
@@ -2270,6 +2286,10 @@ CREATE INDEX idx_modules_dossier_scope
     ON modules_dossier(organisation_id, dossier_id, actif, module_code);
 
 CREATE INDEX idx_paiements_scope ON paiements(dossier_id, contact_id, date_paiement);
+
+CREATE UNIQUE INDEX uq_paiements_ecriture
+    ON paiements(ecriture_id)
+    WHERE ecriture_id IS NOT NULL;
 
 CREATE INDEX idx_periodes_scope ON periodes(dossier_id, exercice_id, date_debut, date_fin);
 
@@ -3178,7 +3198,7 @@ END;
 
 CREATE TRIGGER trg_paiements_scope_insert BEFORE INSERT ON paiements
 BEGIN
-    SELECT CASE WHEN NOT EXISTS (
+    SELECT CASE WHEN NEW.contact_id IS NOT NULL AND NOT EXISTS (
         SELECT 1 FROM contacts c WHERE c.id = NEW.contact_id
           AND c.organisation_id = NEW.organisation_id AND c.dossier_id = NEW.dossier_id
     ) THEN RAISE(ABORT, 'contact du paiement hors scope') END;
@@ -3186,13 +3206,20 @@ BEGIN
         SELECT 1 FROM comptes c WHERE c.id = NEW.compte_tresorerie_id
           AND c.organisation_id = NEW.organisation_id AND c.dossier_id = NEW.dossier_id
     ) THEN RAISE(ABORT, 'compte de trésorerie hors scope') END;
+    SELECT CASE WHEN NEW.compte_collectif_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM comptes c WHERE c.id = NEW.compte_collectif_id
+          AND c.organisation_id = NEW.organisation_id
+          AND c.dossier_id = NEW.dossier_id
+          AND c.type IN ('actif', 'passif')
+          AND c.actif = 1 AND c.imputable = 1
+    ) THEN RAISE(ABORT, 'compte de paiement hors scope') END;
 END;
 
 CREATE TRIGGER trg_paiements_snapshot_immutable
 BEFORE UPDATE ON paiements
 WHEN NEW.organisation_id <> OLD.organisation_id
   OR NEW.dossier_id <> OLD.dossier_id
-  OR NEW.contact_id <> OLD.contact_id
+  OR COALESCE(NEW.contact_id, 0) <> COALESCE(OLD.contact_id, 0)
   OR NEW.sens <> OLD.sens
   OR NEW.date_paiement <> OLD.date_paiement
   OR NEW.montant_centimes <> OLD.montant_centimes
@@ -3202,6 +3229,15 @@ WHEN NEW.organisation_id <> OLD.organisation_id
   OR NEW.taux_change_denominateur <> OLD.taux_change_denominateur
   OR NEW.taux_change_date <> OLD.taux_change_date
   OR NEW.taux_change_source <> OLD.taux_change_source
+  OR (
+    COALESCE(NEW.compte_collectif_id, 0)
+      <> COALESCE(OLD.compte_collectif_id, 0)
+    AND NOT (
+      OLD.compte_collectif_id IS NULL
+      AND NEW.compte_collectif_id IS NOT NULL
+    )
+  )
+  OR NEW.origine <> OLD.origine
   OR (
     NEW.montant_base_centimes <> OLD.montant_base_centimes
     AND NOT (

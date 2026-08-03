@@ -64,7 +64,23 @@ final class TreasuryWorkspaceService
                     r.rapprochement_id AS reconciliation_id
              FROM lignes_ecriture l
              JOIN ecritures e ON e.id = l.ecriture_id
-             JOIN comptes_tresorerie t ON t.compte_comptable_id = l.compte_id
+             JOIN comptes_tresorerie t
+               ON t.organisation_id = e.organisation_id
+              AND t.dossier_id = e.dossier_id
+              AND (
+                t.id = l.compte_tresorerie_operationnel_id
+                OR (
+                  l.compte_tresorerie_operationnel_id IS NULL
+                  AND t.compte_comptable_id = l.compte_id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM comptes_tresorerie t2
+                    WHERE t2.organisation_id = t.organisation_id
+                      AND t2.dossier_id = t.dossier_id
+                      AND t2.compte_comptable_id = t.compte_comptable_id
+                      AND t2.id <> t.id
+                  )
+                )
+              )
              LEFT JOIN rapprochement_lignes_comptables r
                ON r.ligne_ecriture_id = l.id AND r.actif = 1
              WHERE e.organisation_id = ? AND e.dossier_id = ?
@@ -101,8 +117,9 @@ final class TreasuryWorkspaceService
             [$organisationId, $dossierId]
         );
         $documents = $this->query(
-            "SELECT d.id, d.numero AS number, d.type, d.workflow,
-                    d.contact_id, d.date_echeance AS due_date,
+            "SELECT d.id, d.numero AS number, d.type, d.workflow, d.statut AS status,
+                    d.contact_id, d.compte_collectif_id AS collective_account_id,
+                    d.date_echeance AS due_date,
                     d.monnaie AS currency, abs(d.total_brut_centimes) AS gross_cents,
                     COALESCE((
                         SELECT SUM(a.montant_centimes) FROM allocations a
@@ -115,7 +132,7 @@ final class TreasuryWorkspaceService
              JOIN comptes collectif ON collectif.id = d.compte_collectif_id
              WHERE d.organisation_id = ? AND d.dossier_id = ?
                AND d.type IN ('facture_client', 'facture_fournisseur')
-               AND d.statut IN ('emis', 'comptabilise')
+               AND d.statut = 'comptabilise'
                AND (
                  (d.type = 'facture_client' AND collectif.type = 'actif')
                  OR
@@ -222,6 +239,7 @@ final class TreasuryWorkspaceService
             'definitions' => [
                 'banking' => 'Une ligne bancaire importée reste distincte du grand livre.',
                 'matching' => 'Le lettrage répartit un paiement sur des documents ouverts.',
+                'payment_accounting' => 'Le journal crée un paiement déjà comptabilisé uniquement entre un compte de trésorerie et un collectif clients ou fournisseurs. Les comptes banque, poste, caisse et carte sont exclus des comptes à lettrer.',
                 'pain001' => 'Un fichier exporté est préparé pour téléchargement, jamais déclaré transmis.',
             ],
         ];

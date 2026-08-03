@@ -174,6 +174,28 @@ final class ConfigurationApiController
         });
     }
 
+    public function updatePaymentAccounting(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope();
+        return $this->mutation($request, function () use (
+            $request,
+            $userId,
+            $organisationId,
+            $dossierId
+        ): array {
+            $data = $this->validator->paymentAccounting($request);
+            return [
+                'payment_accounting' => $this->configuration->setPaymentAccounting(
+                    $organisationId,
+                    $dossierId,
+                    $data['trigger'],
+                    $data['version'],
+                    $userId
+                ),
+            ];
+        });
+    }
+
     public function clearAudit(Request $request): Response
     {
         [, $organisationId, $dossierId] = $this->scope('dossier.manage');

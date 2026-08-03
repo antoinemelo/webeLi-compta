@@ -50,9 +50,28 @@ final class ReconciliationService
                 'SELECT l.id, (l.debit_centimes - l.credit_centimes) AS montant_centimes
                  FROM lignes_ecriture l
                  JOIN ecritures e ON e.id = l.ecriture_id
-                 JOIN comptes_tresorerie t ON t.compte_comptable_id = l.compte_id
                  WHERE e.organisation_id = ? AND e.dossier_id = ?
-                   AND t.id = ? AND e.statut IN (\'validee\', \'contre_passee\')
+                   AND (
+                     l.compte_tresorerie_operationnel_id = ?
+                     OR (
+                       l.compte_tresorerie_operationnel_id IS NULL
+                       AND EXISTS (
+                         SELECT 1 FROM comptes_tresorerie t
+                         WHERE t.id = ?
+                           AND t.organisation_id = e.organisation_id
+                           AND t.dossier_id = e.dossier_id
+                           AND t.compte_comptable_id = l.compte_id
+                           AND NOT EXISTS (
+                             SELECT 1 FROM comptes_tresorerie t2
+                             WHERE t2.organisation_id = t.organisation_id
+                               AND t2.dossier_id = t.dossier_id
+                               AND t2.compte_comptable_id = t.compte_comptable_id
+                               AND t2.id <> t.id
+                           )
+                       )
+                     )
+                   )
+                   AND e.statut IN (\'validee\', \'contre_passee\')
                    AND EXISTS (
                        SELECT 1 FROM periodes p
                        WHERE p.exercice_id = e.exercice_id
@@ -60,7 +79,12 @@ final class ReconciliationService
                          AND p.statut = \'ouverte\'
                    )
                    AND l.id IN (%s)',
-                [$organisationId, $dossierId, $treasuryAccountId],
+                [
+                    $organisationId,
+                    $dossierId,
+                    $treasuryAccountId,
+                    $treasuryAccountId,
+                ],
                 $accountingLineIds
             );
             if (count($bank) !== count($bankLineIds) || count($accounting) !== count($accountingLineIds)) {

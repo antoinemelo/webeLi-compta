@@ -117,6 +117,13 @@ final class BillingService
                 $collectiveAccountId,
                 $lines
             );
+            $this->assertSupplierExternalNumberAvailable(
+                $organisationId,
+                $dossierId,
+                $contactId,
+                $type,
+                $externalNumber
+            );
             $contact = $this->contacts->snapshot($organisationId, $dossierId, $contactId);
             if (trim($currency) === '') {
                 $baseCurrency = $this->pdo->prepare(
@@ -212,6 +219,7 @@ final class BillingService
         ?int $actorId = null,
         string $currency = '',
         ?int $exchangeRateId = null,
+        string $workflow = 'facturation',
     ): void {
         $this->transaction(function () use (
             $organisationId,
@@ -228,12 +236,13 @@ final class BillingService
             $attachmentId,
             $actorId,
             $currency,
-            $exchangeRateId
+            $exchangeRateId,
+            $workflow
         ): void {
             $document = $this->document($organisationId, $dossierId, $documentId);
             if (
                 $document['statut'] !== 'brouillon'
-                || $document['workflow'] !== 'facturation'
+                || $document['workflow'] !== $workflow
                 || (int) $document['version'] !== $expectedVersion
                 || (string) $document['type'] !== $type
             ) {
@@ -261,6 +270,14 @@ final class BillingService
                 $contactId,
                 $collectiveAccountId,
                 $lines
+            );
+            $this->assertSupplierExternalNumberAvailable(
+                $organisationId,
+                $dossierId,
+                $contactId,
+                $type,
+                $externalNumber,
+                $documentId
             );
             $contact = $this->contacts->snapshot(
                 $organisationId,
@@ -300,7 +317,7 @@ final class BillingService
                      taux_change_source = ?, modifie_le = datetime('now'),
                      version = version + 1
                  WHERE id = ? AND organisation_id = ? AND dossier_id = ?
-                   AND statut = 'brouillon' AND workflow = 'facturation'
+                   AND statut = 'brouillon' AND workflow = ?
                    AND version = ?"
             );
             $update->execute([
@@ -322,10 +339,30 @@ final class BillingService
                 $documentId,
                 $organisationId,
                 $dossierId,
+                $workflow,
                 $expectedVersion,
             ]);
             if ($update->rowCount() !== 1) {
                 throw new BillingException('Conflit de version du brouillon.');
+            }
+            $incoming = $this->pdo->prepare(
+                'SELECT id, document_source_id
+                 FROM conversions_documents
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND document_cible_financier_id = ?'
+            );
+            $incoming->execute([
+                $organisationId,
+                $dossierId,
+                $documentId,
+            ]);
+            $incomingConversions = $incoming->fetchAll();
+            $unlink = $this->pdo->prepare(
+                'DELETE FROM conversions_lignes_documents
+                 WHERE conversion_id = ?'
+            );
+            foreach ($incomingConversions as $conversion) {
+                $unlink->execute([(int) $conversion['id']]);
             }
             $this->replaceLines(
                 $organisationId,
@@ -333,8 +370,16 @@ final class BillingService
                 $documentId,
                 $lines,
                 $expectedVersion + 1,
-                $actorId
+                $actorId,
+                $workflow
             );
+            foreach ($incomingConversions as $conversion) {
+                $this->linkConvertedInvoiceLines(
+                    (int) $conversion['id'],
+                    (int) $conversion['document_source_id'],
+                    $documentId
+                );
+            }
             $this->audit->log(
                 'facturation.document_brouillon_modifie',
                 $actorId,
@@ -342,7 +387,11 @@ final class BillingService
                 $dossierId,
                 'document_financier',
                 (string) $documentId,
-                ['type' => $type, 'lignes' => count($lines)]
+                [
+                    'type' => $type,
+                    'workflow' => $workflow,
+                    'lignes' => count($lines),
+                ]
             );
         }, true);
     }
@@ -442,7 +491,11 @@ final class BillingService
                             ? (int) $line['deduction_bp']
                             : null,
                         (string) ($line['motif_correction'] ?? ''),
-                        isset($line['tdfn_id']) ? (int) $line['tdfn_id'] : null
+                        isset($line['tdfn_id']) ? (int) $line['tdfn_id'] : null,
+                        purchaseDocument: str_contains(
+                            (string) $document['type'],
+                            'fournisseur'
+                        )
                     );
                 $insert->execute([
                     $documentId, $index + 1, $label, $quantity, $unitPrice,
@@ -727,7 +780,8 @@ final class BillingService
                         'id' => (string) $documentId,
                         'line_id' => (string) $line['id'],
                     ],
-                    actorId: $actorId
+                    actorId: $actorId,
+                    purchaseDocument: !$client
                 );
             }
             $this->pdo->prepare(
@@ -805,6 +859,171 @@ final class BillingService
             actorId: $actorId,
             currency: (string) $source['monnaie']
         );
+    }
+
+    public function reverseInvoice(
+        int $organisationId,
+        int $dossierId,
+        int $documentId,
+        int $expectedVersion,
+        string $date,
+        ?int $actorId = null,
+    ): int {
+        $this->assertDate($date);
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $documentId,
+            $expectedVersion,
+            $date,
+            $actorId
+        ): int {
+            $document = $this->document($organisationId, $dossierId, $documentId);
+            if ($document['ecriture_annulation_id'] !== null) {
+                return (int) $document['ecriture_annulation_id'];
+            }
+            if (
+                $document['workflow'] !== 'facturation'
+                || !in_array(
+                    $document['type'],
+                    ['facture_client', 'facture_fournisseur'],
+                    true
+                )
+                || $document['statut'] !== 'comptabilise'
+                || $document['ecriture_id'] === null
+                || (int) $document['version'] !== $expectedVersion
+            ) {
+                throw new BillingException(
+                    'Seule une facture comptabilisée et non modifiée peut être extournée.'
+                );
+            }
+            if ($date < (string) $document['date_document']) {
+                throw new BillingException(
+                    'La date d’extourne ne peut pas précéder la facture.'
+                );
+            }
+            $allocationTotals = $this->activeAllocationTotals($documentId);
+            if ($allocationTotals['unposted_payment_count'] > 0) {
+                throw new BillingException(
+                    'Comptabilisez les paiements déjà lettrés avant d’extourner le solde.'
+                );
+            }
+            $grossCents = abs((int) $document['total_brut_centimes']);
+            $grossBaseCents = abs((int) $document['total_brut_base_centimes']);
+            $allocatedCents = min($grossCents, $allocationTotals['document_cents']);
+            $allocatedBaseCents = $allocationTotals['document_base_cents'];
+            if ($allocatedCents > 0 && $allocatedBaseCents <= 0) {
+                $allocatedBaseCents = ExchangeRateService::convert(
+                    $allocatedCents,
+                    (int) $document['taux_change_numerateur'],
+                    (int) $document['taux_change_denominateur']
+                );
+            }
+            $allocatedBaseCents = min($grossBaseCents, $allocatedBaseCents);
+            $openCents = max(0, $grossCents - $allocatedCents);
+            $openBaseCents = max(0, $grossBaseCents - $allocatedBaseCents);
+            if ($openCents === 0 || $openBaseCents === 0) {
+                throw new BillingException(
+                    'La facture est déjà entièrement réglée et ne possède aucun solde à extourner.'
+                );
+            }
+            $activeCredits = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM documents_financiers
+                 WHERE document_origine_id = ?
+                   AND type IN ('avoir_client', 'avoir_fournisseur')
+                   AND statut IN ('emis', 'comptabilise')"
+            );
+            $activeCredits->execute([$documentId]);
+            if ((int) $activeCredits->fetchColumn() > 0) {
+                throw new BillingException(
+                    'Un avoir émis existe déjà pour cette facture et doit rester le mode de correction.'
+                );
+            }
+
+            if ($allocatedCents === 0) {
+                $entryId = $this->entries->reverse(
+                    $organisationId,
+                    $dossierId,
+                    (int) $document['ecriture_id'],
+                    $date,
+                    'Extourne de ' . $document['numero'],
+                    $actorId
+                );
+                $this->reverseVatSnapshots(
+                    $organisationId,
+                    $dossierId,
+                    (int) $document['ecriture_id'],
+                    $entryId,
+                    $actorId
+                );
+            } else {
+                [$entryId, $reversedLineOrders] = $this->reverseOpenBalance(
+                    $organisationId,
+                    $dossierId,
+                    $document,
+                    $openCents,
+                    $openBaseCents,
+                    $grossCents,
+                    $grossBaseCents,
+                    $date,
+                    $actorId
+                );
+                $this->reverseVatSnapshotsProportionally(
+                    $organisationId,
+                    $dossierId,
+                    (int) $document['ecriture_id'],
+                    $entryId,
+                    $reversedLineOrders,
+                    $openCents,
+                    $grossCents,
+                    $actorId
+                );
+            }
+            $update = $this->pdo->prepare(
+                "UPDATE documents_financiers
+                 SET statut = 'annule', ecriture_annulation_id = ?,
+                     annule_le = datetime('now'), annule_par = ?,
+                     modifie_le = datetime('now'), version = version + 1
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND statut = 'comptabilise' AND version = ?
+                   AND ecriture_annulation_id IS NULL"
+            );
+            $update->execute([
+                $entryId,
+                $actorId,
+                $documentId,
+                $organisationId,
+                $dossierId,
+                $expectedVersion,
+            ]);
+            if ($update->rowCount() !== 1) {
+                throw new BillingException('Conflit pendant l’extourne de la facture.');
+            }
+            $this->pdo->prepare(
+                "UPDATE documents_financiers
+                 SET statut = 'annule', annule_le = datetime('now'), annule_par = ?,
+                     modifie_le = datetime('now'), version = version + 1
+                 WHERE document_origine_id = ?
+                   AND type IN ('avoir_client', 'avoir_fournisseur')
+                   AND statut = 'brouillon'"
+            )->execute([$actorId, $documentId]);
+            $this->audit->log(
+                'facturation.facture_extournee',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'document_financier',
+                (string) $documentId,
+                [
+                    'ecriture_origine_id' => (int) $document['ecriture_id'],
+                    'ecriture_extourne_id' => $entryId,
+                    'montant_extourne_centimes' => $openCents,
+                    'montant_deja_lettre_centimes' => $allocatedCents,
+                    'date' => $date,
+                ]
+            );
+            return $entryId;
+        });
     }
 
     public function markCancelledByCredit(
@@ -941,6 +1160,16 @@ final class BillingService
              ORDER BY length(numero), numero, ordre, id'
         );
         $accounts->execute([$organisationId, $dossierId]);
+        $treasuryAccounts = $this->pdo->prepare(
+            'SELECT t.id, t.compte_comptable_id, t.libelle, t.type, t.monnaie,
+                    c.numero AS compte_numero
+             FROM comptes_tresorerie t
+             JOIN comptes c ON c.id = t.compte_comptable_id
+             WHERE t.organisation_id = ? AND t.dossier_id = ?
+               AND t.actif = 1 AND c.actif = 1 AND c.imputable = 1
+             ORDER BY t.libelle COLLATE NOCASE, t.id'
+        );
+        $treasuryAccounts->execute([$organisationId, $dossierId]);
         $vatCodes = $this->pdo->prepare(
             'SELECT id, code, libelle, nature, date_debut, date_fin FROM tva_codes
              WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
@@ -982,6 +1211,7 @@ final class BillingService
         );
         return [
             'accounts' => $accounts->fetchAll(),
+            'treasury_accounts' => $treasuryAccounts->fetchAll(),
             'vat_codes' => $vatCodes->fetchAll(),
             'exercises' => $exercises->fetchAll(),
             'journals' => $journals->fetchAll(),
@@ -1185,6 +1415,328 @@ final class BillingService
             (int) $lines[$index]['ecart_arrondi_centimes'] - $balance;
     }
 
+    /**
+     * @return array{
+     *   document_cents:int,document_base_cents:int,unposted_payment_count:int
+     * }
+     */
+    private function activeAllocationTotals(int $documentId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT COALESCE(SUM(a.montant_centimes), 0) AS document_cents,
+                    COALESCE(SUM(a.montant_document_base_centimes), 0)
+                        AS document_base_cents,
+                    COALESCE(SUM(CASE
+                      WHEN p.id IS NOT NULL AND p.ecriture_id IS NULL THEN 1
+                      ELSE 0 END), 0) AS unposted_payment_count
+             FROM allocations a
+             LEFT JOIN paiements p ON p.id = a.paiement_id
+             LEFT JOIN documents_financiers av ON av.id = a.avoir_id
+             WHERE a.document_id = ? AND a.statut = 'valide'
+               AND (
+                 (p.id IS NOT NULL AND p.statut = 'valide')
+                 OR
+                 (av.id IS NOT NULL AND av.statut IN ('emis', 'comptabilise'))
+               )"
+        );
+        $stmt->execute([$documentId]);
+        $row = $stmt->fetch() ?: [];
+        return [
+            'document_cents' => (int) ($row['document_cents'] ?? 0),
+            'document_base_cents' => (int) ($row['document_base_cents'] ?? 0),
+            'unposted_payment_count' => (int) ($row['unposted_payment_count'] ?? 0),
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $document
+     * @return array{0:int,1:array<int,int>}
+     */
+    private function reverseOpenBalance(
+        int $organisationId,
+        int $dossierId,
+        array $document,
+        int $openCents,
+        int $openBaseCents,
+        int $grossCents,
+        int $grossBaseCents,
+        string $date,
+        ?int $actorId,
+    ): array {
+        $originalEntryId = (int) $document['ecriture_id'];
+        $entryStmt = $this->pdo->prepare(
+            "SELECT * FROM ecritures
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND statut = 'validee'"
+        );
+        $entryStmt->execute([$originalEntryId, $organisationId, $dossierId]);
+        $originalEntry = $entryStmt->fetch();
+        if ($originalEntry === false) {
+            throw new BillingException(
+                'L’écriture comptable de la facture ne peut pas être extournée partiellement.'
+            );
+        }
+
+        $lineStmt = $this->pdo->prepare(
+            'SELECT id, compte_id, libelle, debit_centimes, credit_centimes,
+                    devise_origine, montant_origine_centimes, devise_base,
+                    taux_change_numerateur, taux_change_denominateur,
+                    taux_change_date, taux_change_source,
+                    montant_base_centimes, ecart_arrondi_centimes
+             FROM lignes_ecriture WHERE ecriture_id = ? ORDER BY ordre'
+        );
+        $lineStmt->execute([$originalEntryId]);
+        $postingLines = [];
+        $reversedLineOrders = [];
+        $collectiveFound = false;
+        foreach ($lineStmt->fetchAll() as $sourceLine) {
+            $sourceBaseSigned = (int) $sourceLine['debit_centimes']
+                - (int) $sourceLine['credit_centimes'];
+            if ($sourceBaseSigned === 0) {
+                continue;
+            }
+            $isCollective = !$collectiveFound
+                && (int) $sourceLine['compte_id'] === (int) $document['compte_collectif_id'];
+            if ($isCollective) {
+                $collectiveFound = true;
+            }
+            $scaledBase = $isCollective
+                ? $openBaseCents
+                : $this->proportionalAmount(
+                    abs($sourceBaseSigned),
+                    $openBaseCents,
+                    $grossBaseCents
+                );
+            if ($scaledBase === 0) {
+                continue;
+            }
+            $sourceOriginalSigned = $sourceLine['montant_origine_centimes'] === null
+                ? $sourceBaseSigned
+                : (int) $sourceLine['montant_origine_centimes'];
+            $scaledOriginal = $isCollective
+                ? $openCents
+                : $this->proportionalAmount(
+                    abs($sourceOriginalSigned),
+                    $openCents,
+                    $grossCents
+                );
+            $inverseDebit = $sourceBaseSigned < 0;
+            $inverseBaseSigned = $inverseDebit ? $scaledBase : -$scaledBase;
+            $inverseOriginalSigned = $sourceOriginalSigned < 0
+                ? $scaledOriginal : -$scaledOriginal;
+            $line = [
+                'compte_id' => (int) $sourceLine['compte_id'],
+                'libelle' => (string) $sourceLine['libelle'],
+                'devise_origine' => (string) $sourceLine['devise_origine'],
+                'montant_origine_centimes' => $inverseOriginalSigned,
+                'devise_base' => (string) $sourceLine['devise_base'],
+                'taux_change_numerateur' => $sourceLine['taux_change_numerateur'],
+                'taux_change_denominateur' => $sourceLine['taux_change_denominateur'],
+                'taux_change_date' => (string) $sourceLine['taux_change_date'],
+                'taux_change_source' => (string) $sourceLine['taux_change_source'],
+                'montant_base_centimes' => $inverseBaseSigned,
+                'ecart_arrondi_centimes' => -$this->proportionalAmount(
+                    abs((int) $sourceLine['ecart_arrondi_centimes']),
+                    $openBaseCents,
+                    $grossBaseCents
+                ) * ((int) $sourceLine['ecart_arrondi_centimes'] <=> 0),
+            ];
+            $line[$inverseDebit ? 'debit_centimes' : 'credit_centimes'] = $scaledBase;
+            $reversedLineOrders[(int) $sourceLine['id']] = count($postingLines);
+            $postingLines[] = $line;
+        }
+        if (!$collectiveFound || count($postingLines) < 2) {
+            throw new BillingException(
+                'Le solde ouvert ne peut pas produire une écriture comptable équilibrée.'
+            );
+        }
+        $this->balanceConvertedLines($postingLines);
+        $entryId = $this->entries->postGenerated([
+            'organisation_id' => $organisationId,
+            'dossier_id' => $dossierId,
+            'exercice_id' => (int) $originalEntry['exercice_id'],
+            'journal_id' => (int) $originalEntry['journal_id'],
+            'date_comptable' => $date,
+            'libelle' => 'Extourne du solde de ' . $document['numero'],
+            'reference' => (string) $document['numero'],
+            'piece' => (string) $originalEntry['piece'],
+            'source_type' => 'contrepassation',
+            'source_id' => (string) $originalEntryId,
+            'source_action' => 'inverse_solde',
+            'contrepassation_de_id' => $originalEntryId,
+            'lignes' => $postingLines,
+        ], 'document:' . $document['id'] . ':extourner-solde', $actorId);
+        return [$entryId, $reversedLineOrders];
+    }
+
+    private function proportionalAmount(int $amount, int $numerator, int $denominator): int
+    {
+        if ($amount === 0 || $numerator === 0) {
+            return 0;
+        }
+        if ($denominator <= 0) {
+            throw new BillingException('Base de calcul proportionnel invalide.');
+        }
+        return VatCalculator::divideRounded($amount * $numerator, $denominator);
+    }
+
+    /**
+     * @param array<int,int> $reversedLineOrders
+     */
+    private function reverseVatSnapshotsProportionally(
+        int $organisationId,
+        int $dossierId,
+        int $originalEntryId,
+        int $reversalEntryId,
+        array $reversedLineOrders,
+        int $openCents,
+        int $grossCents,
+        ?int $actorId,
+    ): void {
+        $sourceStmt = $this->pdo->prepare(
+            'SELECT t.*, l.id AS source_line_id
+             FROM tva_lignes t
+             JOIN lignes_ecriture l ON l.id = t.ligne_ecriture_id
+             WHERE l.ecriture_id = ? ORDER BY l.ordre'
+        );
+        $sourceStmt->execute([$originalEntryId]);
+        $sources = array_values(array_filter(
+            $sourceStmt->fetchAll(),
+            static fn (array $row): bool =>
+                array_key_exists((int) $row['source_line_id'], $reversedLineOrders)
+        ));
+        if ($sources === []) {
+            return;
+        }
+        $reversalLines = $this->pdo->prepare(
+            'SELECT id, ordre FROM lignes_ecriture WHERE ecriture_id = ?'
+        );
+        $reversalLines->execute([$reversalEntryId]);
+        $lineIdsByOrder = [];
+        foreach ($reversalLines->fetchAll() as $line) {
+            $lineIdsByOrder[(int) $line['ordre']] = (int) $line['id'];
+        }
+        $insert = $this->pdo->prepare(
+            "INSERT INTO tva_lignes
+             (organisation_id, dossier_id, ligne_ecriture_id, code_tva_id,
+              date_prestation, mode_saisie, base_nette_centimes, tva_centimes,
+              total_brut_centimes, taux_legal_snapshot_bp, code_snapshot,
+              traitement_snapshot, nature_snapshot, chiffre_afc_snapshot,
+              deduction_bp, tva_deductible_centimes, correction_centimes,
+              motif_correction, tdfn_id, activite_id_snapshot,
+              taux_tdfn_snapshot_bp, document_type, document_id,
+              document_ligne_id, cree_par)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        );
+        $distributedGross = 0;
+        $lastIndex = count($sources) - 1;
+        foreach ($sources as $index => $source) {
+            $reversalOrder = $reversedLineOrders[(int) $source['source_line_id']];
+            $reversalLineId = $lineIdsByOrder[$reversalOrder] ?? 0;
+            if ($reversalLineId < 1) {
+                throw new BillingException('Ligne TVA d’extourne introuvable.');
+            }
+            $gross = $index === $lastIndex
+                ? max(0, $openCents - $distributedGross)
+                : $this->proportionalAmount(
+                    abs((int) $source['total_brut_centimes']),
+                    $openCents,
+                    $grossCents
+                );
+            $distributedGross += $gross;
+            $vat = min($gross, $this->proportionalAmount(
+                abs((int) $source['tva_centimes']),
+                $openCents,
+                $grossCents
+            ));
+            $base = $gross - $vat;
+            $deductible = $this->proportionalAmount(
+                abs((int) $source['tva_deductible_centimes']),
+                $openCents,
+                $grossCents
+            );
+            $sourceCorrection = (int) $source['correction_centimes'];
+            $correction = $this->proportionalAmount(
+                abs($sourceCorrection),
+                $openCents,
+                $grossCents
+            ) * ($sourceCorrection <=> 0);
+            $insert->execute([
+                $organisationId,
+                $dossierId,
+                $reversalLineId,
+                (int) $source['code_tva_id'],
+                (string) $source['date_prestation'],
+                (string) $source['mode_saisie'],
+                -$base,
+                -$vat,
+                -$gross,
+                (int) $source['taux_legal_snapshot_bp'],
+                (string) $source['code_snapshot'],
+                (string) $source['traitement_snapshot'],
+                (string) $source['nature_snapshot'],
+                (string) $source['chiffre_afc_snapshot'],
+                (int) $source['deduction_bp'],
+                -$deductible,
+                -$correction,
+                $correction === 0 ? '' : (string) $source['motif_correction'],
+                $source['tdfn_id'],
+                (string) $source['activite_id_snapshot'],
+                $source['taux_tdfn_snapshot_bp'],
+                'extourne_' . $source['document_type'],
+                (string) $source['document_id'],
+                (string) $source['document_ligne_id'],
+                $actorId,
+            ]);
+        }
+    }
+
+    private function reverseVatSnapshots(
+        int $organisationId,
+        int $dossierId,
+        int $originalEntryId,
+        int $reversalEntryId,
+        ?int $actorId,
+    ): void {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO tva_lignes
+             (organisation_id, dossier_id, ligne_ecriture_id, code_tva_id,
+              date_prestation, mode_saisie, base_nette_centimes, tva_centimes,
+              total_brut_centimes, taux_legal_snapshot_bp, code_snapshot,
+              traitement_snapshot, nature_snapshot, chiffre_afc_snapshot,
+              deduction_bp, tva_deductible_centimes, correction_centimes,
+              motif_correction, tdfn_id, activite_id_snapshot,
+              taux_tdfn_snapshot_bp, document_type, document_id,
+              document_ligne_id, cree_par)
+             SELECT ?, ?, inverse.id, t.code_tva_id,
+                    t.date_prestation, t.mode_saisie,
+                    -t.base_nette_centimes, -t.tva_centimes,
+                    -t.total_brut_centimes, t.taux_legal_snapshot_bp,
+                    t.code_snapshot, t.traitement_snapshot, t.nature_snapshot,
+                    t.chiffre_afc_snapshot, t.deduction_bp,
+                    -t.tva_deductible_centimes, -t.correction_centimes,
+                    t.motif_correction, t.tdfn_id, t.activite_id_snapshot,
+                    t.taux_tdfn_snapshot_bp, 'extourne_' || t.document_type,
+                    t.document_id, t.document_ligne_id, ?
+             FROM tva_lignes t
+             JOIN lignes_ecriture origine ON origine.id = t.ligne_ecriture_id
+             JOIN lignes_ecriture inverse
+               ON inverse.ecriture_id = ? AND inverse.ordre = origine.ordre
+             WHERE origine.ecriture_id = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM tva_lignes existante
+                 WHERE existante.ligne_ecriture_id = inverse.id
+               )"
+        );
+        $stmt->execute([
+            $organisationId,
+            $dossierId,
+            $actorId,
+            $reversalEntryId,
+            $originalEntryId,
+        ]);
+    }
+
     /** @param array<string,mixed> $document */
     private function derivedState(array $document): string
     {
@@ -1192,7 +1744,8 @@ final class BillingService
             return 'brouillon';
         }
         if ($document['statut'] === 'annule') {
-            return 'annule';
+            return $document['ecriture_annulation_id'] === null
+                ? 'annule' : 'paye';
         }
         if ((int) $document['solde_centimes'] === 0) {
             return 'paye';
@@ -1291,6 +1844,38 @@ final class BillingService
         }
     }
 
+    private function linkConvertedInvoiceLines(
+        int $conversionId,
+        int $sourceDocumentId,
+        int $invoiceId,
+    ): void {
+        $source = $this->pdo->prepare(
+            'SELECT id, quantite_milli
+             FROM lignes_document_commercial
+             WHERE document_id = ? ORDER BY ordre, id'
+        );
+        $source->execute([$sourceDocumentId]);
+        $sourceLines = $source->fetchAll();
+        $targetLines = $this->lines($invoiceId);
+        $insert = $this->pdo->prepare(
+            'INSERT INTO conversions_lignes_documents
+             (conversion_id, ligne_source_id, ligne_cible_financiere_id,
+              quantite_milli)
+             VALUES (?, ?, ?, ?)'
+        );
+        foreach ($sourceLines as $index => $line) {
+            if (!isset($targetLines[$index])) {
+                continue;
+            }
+            $insert->execute([
+                $conversionId,
+                (int) $line['id'],
+                (int) $targetLines[$index]['id'],
+                (int) $line['quantite_milli'],
+            ]);
+        }
+    }
+
     private function vatStatusAt(
         int $organisationId,
         int $dossierId,
@@ -1320,6 +1905,65 @@ final class BillingService
         if ($parsed === false || $parsed->format('Y-m-d') !== $date) {
             throw new BillingException('Date de document invalide.');
         }
+    }
+
+    private function assertSupplierExternalNumberAvailable(
+        int $organisationId,
+        int $dossierId,
+        int $contactId,
+        string $type,
+        string $externalNumber,
+        ?int $excludedDocumentId = null,
+    ): void {
+        $reference = trim($externalNumber);
+        if (!str_contains($type, 'fournisseur') || $reference === '') {
+            return;
+        }
+        $stmt = $this->pdo->prepare(
+            "SELECT id, type, workflow, statut, numero
+             FROM documents_financiers
+             WHERE organisation_id = ? AND dossier_id = ? AND contact_id = ?
+               AND numero_externe = ?
+               AND type IN ('facture_fournisseur', 'avoir_fournisseur')
+               AND id <> ?
+             ORDER BY id LIMIT 1"
+        );
+        $stmt->execute([
+            $organisationId,
+            $dossierId,
+            $contactId,
+            $reference,
+            $excludedDocumentId ?? 0,
+        ]);
+        $existing = $stmt->fetch();
+        if ($existing === false) {
+            return;
+        }
+        $kind = (string) $existing['workflow'] === 'depense'
+            ? 'la dépense'
+            : ((string) $existing['type'] === 'avoir_fournisseur'
+                ? 'l’avoir fournisseur'
+                : 'la facture d’achat');
+        $identifier = trim((string) $existing['numero']) !== ''
+            ? (string) $existing['numero']
+            : 'brouillon #' . (int) $existing['id'];
+        $status = match ((string) $existing['statut']) {
+            'brouillon' => 'brouillon',
+            'a_approuver' => 'à approuver',
+            'approuve' => 'approuvée',
+            'emis' => 'émise',
+            'comptabilise' => 'comptabilisée',
+            'annule' => 'annulée',
+            default => (string) $existing['statut'],
+        };
+        throw new BillingException(sprintf(
+            'La référence fournisseur « %s » est déjà utilisée par %s %s (%s). '
+            . 'Chaque document fournisseur doit conserver une référence distincte.',
+            $reference,
+            $kind,
+            $identifier,
+            $status
+        ));
     }
 
     private function transaction(callable $callback, bool $immediate = false): mixed

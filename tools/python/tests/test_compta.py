@@ -52,8 +52,17 @@ class ComptaAdminTests(unittest.TestCase):
 
     def test_no_argument_opens_interactive_menu(self) -> None:
         self.assertIsNone(ADMIN.parser().parse_args([]).command)
-        with patch("builtins.input", return_value="0"):
+        with (
+            patch("builtins.input", return_value="0"),
+            patch("builtins.print") as output,
+        ):
             self.assertEqual(0, ADMIN.main([]))
+        rendered = "\n".join(
+            " ".join(str(value) for value in call.args)
+            for call in output.call_args_list
+        )
+        self.assertIn("4. Créer une photographie SQLite autonome", rendered)
+        self.assertIn("7. Installer un nouveau site", rendered)
 
     def test_runtime_filter_excludes_sources_and_private_data(self) -> None:
         self.assertTrue(ADMIN.is_runtime_path("src/Core/App.php"))
@@ -353,6 +362,9 @@ class ComptaAdminTests(unittest.TestCase):
         restoration = ADMIN.parser().parse_args([
             "db-restore", "--source", "backup.sqlite",
         ])
+        backup = ADMIN.parser().parse_args([
+            "db-backup", "--source", "active.sqlite", "--output", "clean.sqlite",
+        ])
         inspection = ADMIN.parser().parse_args([
             "db-inspect", "--path", "version-zero.sqlite",
         ])
@@ -362,6 +374,9 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertFalse(ADMIN.pedagogy_enabled(without_pedagogy, True))
         self.assertFalse(ADMIN.pedagogy_enabled(technical, False))
         self.assertEqual(Path("backup.sqlite"), restoration.source)
+        self.assertEqual(Path("active.sqlite"), backup.source)
+        self.assertEqual(Path("clean.sqlite"), backup.output)
+        self.assertFalse(backup.apply)
         self.assertEqual(Path("version-zero.sqlite"), inspection.path)
 
     def test_admin_password_uses_the_canonical_policy_before_creation(self) -> None:
@@ -394,6 +409,13 @@ class ComptaAdminTests(unittest.TestCase):
                 connection.execute("INSERT INTO sample VALUES ('conservé')")
             ADMIN.backup_database(source, destination)
             self.assertTrue(source.exists())
+            self.assertFalse(Path(str(destination) + "-wal").exists())
+            self.assertFalse(Path(str(destination) + "-shm").exists())
+            with sqlite3.connect(destination) as portable:
+                self.assertEqual(
+                    "delete",
+                    portable.execute("PRAGMA journal_mode").fetchone()[0],
+                )
             summary = ADMIN.database_summary(destination)
             self.assertEqual(1, summary["migrations"])
             self.assertEqual(0, summary["modeles_pedagogiques"])
@@ -425,6 +447,63 @@ class ComptaAdminTests(unittest.TestCase):
                 self.assertEqual(
                     "conservé",
                     connection.execute("SELECT value FROM sample").fetchone()[0],
+                )
+
+    def test_db_backup_creates_one_portable_file_including_wal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "active.sqlite"
+            destination = root / "configured.sqlite"
+            active = sqlite3.connect(source)
+            try:
+                self.assertEqual(
+                    "wal",
+                    active.execute("PRAGMA journal_mode = WAL").fetchone()[0],
+                )
+                active.execute(
+                    "CREATE TABLE schema_migrations "
+                    "(version TEXT PRIMARY KEY, checksum TEXT NOT NULL)"
+                )
+                active.execute(
+                    "INSERT INTO schema_migrations VALUES ('001', 'test')"
+                )
+                active.execute("CREATE TABLE sample (value TEXT NOT NULL)")
+                active.execute("INSERT INTO sample VALUES ('présent dans le WAL')")
+                active.commit()
+                self.assertTrue(Path(str(source) + "-wal").exists())
+
+                simulated = ADMIN.parser().parse_args([
+                    "db-backup",
+                    "--source", str(source),
+                    "--output", str(destination),
+                    "--allow-outside-project",
+                ])
+                with self.assertRaises(SystemExit) as simulation:
+                    ADMIN.database_backup(simulated)
+                self.assertEqual(0, simulation.exception.code)
+                self.assertFalse(destination.exists())
+
+                applied = ADMIN.parser().parse_args([
+                    "db-backup",
+                    "--source", str(source),
+                    "--output", str(destination),
+                    "--allow-outside-project",
+                    "--apply",
+                ])
+                self.assertEqual(0, ADMIN.database_backup(applied))
+            finally:
+                active.close()
+
+            self.assertTrue(destination.is_file())
+            self.assertFalse(Path(str(destination) + "-wal").exists())
+            self.assertFalse(Path(str(destination) + "-shm").exists())
+            with sqlite3.connect(f"file:{destination}?mode=ro", uri=True) as copy:
+                self.assertEqual("delete", copy.execute(
+                    "PRAGMA journal_mode"
+                ).fetchone()[0])
+                self.assertEqual(
+                    "présent dans le WAL",
+                    copy.execute("SELECT value FROM sample").fetchone()[0],
                 )
 
     def test_local_delivery_reads_the_committed_blob(self) -> None:

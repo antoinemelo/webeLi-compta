@@ -1,6 +1,11 @@
 # Inventaire de référence — lot 01
 
 État observé le 26 juillet 2026, avant toute évolution fonctionnelle.
+Ce document est une photographie historique servant aux comparaisons et aux
+empreintes ; il ne décrit pas l’application courante. Pour l’état actuel,
+consulter le [README](../../README.md), la
+[qualification](../qualification.md) et
+[l’audit de l’interface](../vue-retirement-audit.md).
 
 ## Socle
 

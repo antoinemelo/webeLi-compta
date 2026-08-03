@@ -64,6 +64,20 @@ final class FinancialReportingService
             $exercise,
             $income
         );
+        $balanceSheet['presentation_items'] = $this->statementPresentationItems(
+            $organisationId,
+            $dossierId,
+            $balanceSheet['items'],
+            'numero',
+            'libelle'
+        );
+        $comparison['presentation_items'] = $this->statementPresentationItems(
+            $organisationId,
+            $dossierId,
+            $comparison['items'],
+            'number',
+            'label'
+        );
         $trialResult = 0;
         foreach ($trial['items'] as $item) {
             if ($item['type'] === 'produit') {
@@ -138,7 +152,21 @@ final class FinancialReportingService
                         AS closing_cents
              FROM comptes_tresorerie t
              JOIN comptes c ON c.id = t.compte_comptable_id
-             LEFT JOIN lignes_ecriture l ON l.compte_id = c.id
+             LEFT JOIN lignes_ecriture l
+               ON l.compte_id = c.id
+              AND (
+                l.compte_tresorerie_operationnel_id = t.id
+                OR (
+                  l.compte_tresorerie_operationnel_id IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM comptes_tresorerie t2
+                    WHERE t2.organisation_id = t.organisation_id
+                      AND t2.dossier_id = t.dossier_id
+                      AND t2.compte_comptable_id = t.compte_comptable_id
+                      AND t2.id <> t.id
+                  )
+                )
+              )
              LEFT JOIN ecritures e ON e.id = l.ecriture_id
                AND e.exercice_id = :exercise
                AND e.statut IN ('validee', 'contre_passee')
@@ -235,10 +263,23 @@ final class FinancialReportingService
              FROM ecritures e
              JOIN lignes_ecriture l ON l.ecriture_id = e.id
              JOIN comptes_tresorerie t
-               ON t.compte_comptable_id = l.compte_id
-              AND t.organisation_id = e.organisation_id
+               ON t.organisation_id = e.organisation_id
               AND t.dossier_id = e.dossier_id
               AND t.actif = 1
+              AND (
+                t.id = l.compte_tresorerie_operationnel_id
+                OR (
+                  l.compte_tresorerie_operationnel_id IS NULL
+                  AND t.compte_comptable_id = l.compte_id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM comptes_tresorerie t2
+                    WHERE t2.organisation_id = t.organisation_id
+                      AND t2.dossier_id = t.dossier_id
+                      AND t2.compte_comptable_id = t.compte_comptable_id
+                      AND t2.id <> t.id
+                  )
+                )
+              )
              WHERE e.organisation_id = ? AND e.dossier_id = ?
                AND e.exercice_id = ?
                AND e.statut IN ('validee', 'contre_passee')
@@ -412,6 +453,9 @@ final class FinancialReportingService
                     'number' => $number,
                     'label' => (string) $item['libelle'],
                     'type' => (string) $item['type'],
+                    'rubric_id' => $item['rubrique_id'] === null
+                        ? null
+                        : (int) $item['rubrique_id'],
                     'rubric_path' => (string) $item['rubrique_chemin'],
                     'current_cents' => 0,
                     'previous_cents' => 0,
@@ -515,6 +559,124 @@ final class FinancialReportingService
             'previous_total_passif_centimes' =>
                 (int) $previous['total_passif_centimes'],
         ];
+    }
+
+    /**
+     * Inserts configured rubric subtotals after the last account belonging to
+     * each rubric branch. Subtotals are presentation-only and are never reused
+     * to calculate statutory totals.
+     *
+     * @param list<array<string,mixed>> $items
+     * @return list<array<string,mixed>>
+     */
+    private function statementPresentationItems(
+        int $organisationId,
+        int $dossierId,
+        array $items,
+        string $numberKey,
+        string $labelKey,
+    ): array {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, code, libelle, niveau_structure, type, parent_id,
+                    afficher_sous_total
+             FROM rubriques_comptables
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        $rubrics = [];
+        $selected = [];
+        foreach ($stmt->fetchAll() as $rubric) {
+            $id = (int) $rubric['id'];
+            $rubrics[$id] = $rubric;
+            if (
+                (int) $rubric['afficher_sous_total'] === 1
+                && (string) $rubric['type'] !== 'hors_bilan'
+            ) {
+                $selected[$id] = $rubric;
+            }
+        }
+        $presentation = array_map(
+            static fn (array $item): array => ['row_kind' => 'account', ...$item],
+            $items
+        );
+        if ($selected === [] || $presentation === []) {
+            return $presentation;
+        }
+        $subtotalsAfter = [];
+        foreach ($selected as $rubricId => $rubric) {
+            $matchingIndexes = [];
+            $current = 0;
+            $previous = 0;
+            foreach ($items as $index => $item) {
+                if (!$this->rubricContains(
+                    (int) ($item['rubric_id'] ?? $item['rubrique_id'] ?? 0),
+                    $rubricId,
+                    $rubrics
+                )) {
+                    continue;
+                }
+                $matchingIndexes[] = $index;
+                $current += (int) ($item['current_cents'] ?? 0);
+                $previous += (int) ($item['previous_cents'] ?? 0);
+            }
+            if ($matchingIndexes === []) {
+                continue;
+            }
+            $lastIndex = max($matchingIndexes);
+            $subtotalsAfter[$lastIndex][] = [
+                'row_kind' => 'subtotal',
+                $numberKey => (string) $rubric['code'],
+                $labelKey => (string) $rubric['libelle'],
+                'type' => (string) $rubric['type'],
+                'rubric_id' => $rubricId,
+                'rubric_level' => (string) $rubric['niveau_structure'],
+                'current_cents' => $current,
+                'previous_cents' => $previous,
+            ];
+        }
+        $result = [];
+        foreach ($presentation as $index => $item) {
+            $result[] = $item;
+            $subtotals = $subtotalsAfter[$index] ?? [];
+            usort($subtotals, static fn (array $left, array $right): int =>
+                self::rubricLevelRank((string) $right['rubric_level'])
+                    <=> self::rubricLevelRank((string) $left['rubric_level'])
+            );
+            array_push($result, ...$subtotals);
+        }
+        return $result;
+    }
+
+    /** @param array<int,array<string,mixed>> $rubrics */
+    private function rubricContains(
+        int $accountRubricId,
+        int $selectedRubricId,
+        array $rubrics,
+    ): bool {
+        $visited = [];
+        while (
+            $accountRubricId > 0
+            && isset($rubrics[$accountRubricId])
+            && !isset($visited[$accountRubricId])
+        ) {
+            if ($accountRubricId === $selectedRubricId) {
+                return true;
+            }
+            $visited[$accountRubricId] = true;
+            $accountRubricId = (int) ($rubrics[$accountRubricId]['parent_id'] ?? 0);
+        }
+        return false;
+    }
+
+    private static function rubricLevelRank(string $level): int
+    {
+        return match ($level) {
+            'classe' => 1,
+            'groupe_principal' => 2,
+            'groupe' => 3,
+            'sous_groupe' => 4,
+            default => 0,
+        };
     }
 
     /** @return array<string,mixed> */

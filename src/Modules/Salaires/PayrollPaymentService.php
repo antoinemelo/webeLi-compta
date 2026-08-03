@@ -29,6 +29,7 @@ final class PayrollPaymentService
         int $treasuryAccountId,
         string $reference = '',
         ?int $actorId = null,
+        ?int $treasuryOperationalAccountId = null,
     ): int {
         if (
             !in_array($beneficiaryType, ['employe', 'organisme'], true)
@@ -40,6 +41,22 @@ final class PayrollPaymentService
             throw new PayrollException('Paiement salarial invalide.');
         }
         $this->assertAccount($organisationId, $dossierId, $treasuryAccountId);
+        if ($treasuryOperationalAccountId !== null) {
+            $operational = $this->pdo->prepare(
+                'SELECT 1 FROM comptes_tresorerie
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND compte_comptable_id = ? AND actif = 1'
+            );
+            $operational->execute([
+                $treasuryOperationalAccountId,
+                $organisationId,
+                $dossierId,
+                $treasuryAccountId,
+            ]);
+            if ($operational->fetchColumn() === false) {
+                throw new PayrollException('Compte de trésorerie opérationnel invalide.');
+            }
+        }
         if ($employeeId !== null) {
             $stmt = $this->pdo->prepare(
                 'SELECT 1 FROM employes
@@ -54,12 +71,13 @@ final class PayrollPaymentService
             'INSERT INTO paiements_salaires
              (organisation_id, dossier_id, beneficiaire_type, employe_id,
               date_paiement, montant_centimes, reference,
-              compte_tresorerie_id, cree_par)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+              compte_tresorerie_id, compte_tresorerie_operationnel_id, cree_par)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
             $organisationId, $dossierId, $beneficiaryType, $employeeId,
-            $date, $amountCents, trim($reference), $treasuryAccountId, $actorId,
+            $date, $amountCents, trim($reference), $treasuryAccountId,
+            $treasuryOperationalAccountId, $actorId,
         ]);
         $id = (int) $this->pdo->lastInsertId();
         $this->audit->log(
@@ -188,6 +206,9 @@ final class PayrollPaymentService
             }
             $lines[] = [
                 'compte_id' => (int) $payment['compte_tresorerie_id'],
+                'compte_tresorerie_operationnel_id' =>
+                    $payment['compte_tresorerie_operationnel_id'] === null
+                        ? null : (int) $payment['compte_tresorerie_operationnel_id'],
                 'libelle' => 'Décaissement salaires',
                 'credit_centimes' => (int) $payment['montant_centimes'],
             ];

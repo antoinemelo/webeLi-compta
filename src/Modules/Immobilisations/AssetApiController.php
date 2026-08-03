@@ -116,16 +116,22 @@ final class AssetApiController
         [$userId, $organisationId, $dossierId] =
             $this->scope('compta.validate');
         $data = $this->validator->posting($request);
-        return $this->execute($request, fn (): array => [
-            'entry_id' => $this->assets->postDepreciation(
+        return $this->execute($request, function () use (
+            $organisationId,
+            $dossierId,
+            $data,
+            $userId
+        ): array {
+            $entryIds = $this->assets->postDepreciations(
                 $organisationId,
                 $dossierId,
-                $data['schedule_id'],
+                $data['schedule_ids'],
                 $data['exercise_id'],
                 $data['journal_id'],
                 $userId
-            ),
-        ]);
+            );
+            return ['entry_id' => $entryIds[0], 'entry_ids' => $entryIds];
+        });
     }
 
     public function reverseDepreciation(Request $request): Response
@@ -133,15 +139,21 @@ final class AssetApiController
         [$userId, $organisationId, $dossierId] =
             $this->scope('compta.validate');
         $data = $this->validator->reversal($request);
-        return $this->execute($request, fn (): array => [
-            'entry_id' => $this->assets->reverseDepreciation(
+        return $this->execute($request, function () use (
+            $organisationId,
+            $dossierId,
+            $data,
+            $userId
+        ): array {
+            $entryIds = $this->assets->reverseDepreciations(
                 $organisationId,
                 $dossierId,
-                $data['schedule_id'],
+                $data['schedule_ids'],
                 $data['date'],
                 $userId
-            ),
-        ]);
+            );
+            return ['entry_id' => $entryIds[0], 'entry_ids' => $entryIds];
+        });
     }
 
     public function dispose(Request $request): Response

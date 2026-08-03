@@ -45,12 +45,14 @@
       },
       "balance_sheet": {
         "items": [],
+        "presentation_items": [],
         "total_actif_centimes": 0,
         "total_passif_centimes": 0,
         "equilibre": true
       },
       "income_statement": {
         "items": [],
+        "presentation_items": [],
         "current": {
           "label": "2026",
           "products_cents": 0,

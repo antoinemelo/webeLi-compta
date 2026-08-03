@@ -18,9 +18,14 @@ La commande vérifie successivement :
 6. les préconditions de l'archive de production.
 
 La suite d’intégration vérifie qu’une base vide atteint le schéma courant par
-les versions immuables `001` puis `002`, que leur rejeu est idempotent et que
-toute altération d’un checksum est refusée. `002` ajoute la gouvernance des
-groupes sans reconstruire ni gonfler artificiellement la base existante.
+les versions immuables `001` à `005`, que leur rejeu est idempotent et que
+toute altération d’un checksum est refusée :
+
+- `001_initial.sql` : base canonique et référentiels ;
+- `002_consolidation_governance.sql` : gouvernance des groupes ;
+- `003_contact_employee_link.sql` : rattachement contrôlé contact/employé ;
+- `004_deletable_financial_archives.sql` : suppression protégée des archives ;
+- `005_password_recovery.sql` : jetons de récupération à usage unique.
 
 Les tests ne sont pas dupliqués. `quick` contient les contrôles purs de
 configuration et la parité de calcul OCAS ; `integration` contient SQLite,
@@ -71,6 +76,11 @@ déterministes : aucune qualification ne dépend du réseau. Le test vérifie le
 cache global entre deux organisations, les deux conventions mensuelles, le
 taux quotidien, les taux d’intérêt négatifs et le stockage entier à échelle
 fixe.
+
+La recette navigateur couvre également la connexion en deux étapes, la
+récupération du mot de passe sans divulgation, le parcours de configuration
+initiale annulable/reprenable, les menus d’en-tête, la recherche globale, les
+actions « ⋮ », la largeur mobile et les principaux parcours métier.
 
 ## Construire l'archive
 

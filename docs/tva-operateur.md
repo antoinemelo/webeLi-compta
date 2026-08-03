@@ -27,6 +27,12 @@ ne contient de taux implicite.
 4. En TDFN, enregistrer chaque activité et taux exactement selon l'autorisation
    AFC, avec son identifiant technique de cinq caractères.
 
+Les boutons du référentiel permettent d’exporter ou d’importer l’ensemble des
+codes TVA en CSV. **Tout effacer** retire codes et régime uniquement après
+contrôle des dépendances ; une référence encore utilisée par un document ou une
+écriture reste protégée. Après un effacement complet, le plan comptable peut
+être supprimé sans dépendance TVA fantôme.
+
 Un changement crée une nouvelle ligne d'historique. Il ne modifie aucun snapshot
 ou décompte antérieur.
 

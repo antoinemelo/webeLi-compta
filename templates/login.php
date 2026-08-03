@@ -16,7 +16,7 @@ $hasIdentification = !$hasChallenge
         <div class="login-presentation">
           <p class="login-eyebrow mb-3">Comptabilité suisse</p>
           <h1 class="login-display" id="login-presentation-title">
-            Espace unique pour piloter ses finances.
+            Espace pour gérer ses finances.
           </h1>
           <p class="login-lead">
             Comptabilité, facturation, liquidités et salaires partagent le même

@@ -22,6 +22,7 @@ import { exerciseStatusLabel, periodStatusLabel } from '@/utils/statusLabels';
 
 type EntryLine = {
   account_id: number;
+  treasury_account_id: number;
   label: string;
   debit: string;
   credit: string;
@@ -38,6 +39,7 @@ type EntryDraft = {
   attachment_reference: string;
   lines: Array<{
     account_id: number;
+    treasury_account_id: number;
     label: string;
     debit_cents: number;
     credit_cents: number;
@@ -114,8 +116,11 @@ type JournalDetails = {
     financial_document_id: number | null;
     financial_document_number: string | null;
     financial_document_type: string | null;
+    financial_document_workflow: string | null;
     line_order: number;
     account_id: number;
+    treasury_account_id: number | null;
+    treasury_account_label: string | null;
     account_number: string;
     account_label: string;
     line_label: string;
@@ -158,7 +163,7 @@ type JournalDetailSortKey =
   | 'date_comptable'
   | 'numero'
   | 'account_number'
-  | 'line_label'
+  | 'entry_label'
   | 'debit_centimes'
   | 'credit_centimes'
   | 'statut';
@@ -201,6 +206,7 @@ const rubricDrafts = reactive<Record<number, {
   label: string;
   type: string;
   parent_id: number | null;
+  show_subtotal: boolean;
 }>>({});
 const accountDrafts = reactive<Record<number, {
   number: string;
@@ -210,6 +216,7 @@ const accountDrafts = reactive<Record<number, {
   rubric_id: number | null;
 }>>({});
 const openingDrafts = reactive<Record<number, string>>({});
+const openingTreasuryDrafts = reactive<Record<number, string>>({});
 const chartFileInput = ref<HTMLInputElement | null>(null);
 const chartImportDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const chartImportName = ref('');
@@ -238,6 +245,7 @@ const journalImportError = ref('');
 const journalImportBusy = ref(false);
 const journalDetailsDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const journalDetails = ref<JournalDetails | null>(null);
+const journalDetailsEntryId = ref(0);
 const journalDetailsError = ref('');
 const journalDetailsBusy = ref(false);
 const entryPanel = ref<HTMLElement | null>(null);
@@ -262,7 +270,8 @@ const newRubric = reactive({
   code: '',
   label: '',
   type: 'actif',
-  parent_id: null as number | null
+  parent_id: null as number | null,
+  show_subtotal: false
 });
 const newAccount = reactive({
   number: '',
@@ -280,8 +289,8 @@ const entry = reactive({
   reference: '',
   attachment_reference: '',
   lines: [
-    { account_id: 0, label: '', debit: '', credit: '' },
-    { account_id: 0, label: '', debit: '', credit: '' }
+    { account_id: 0, treasury_account_id: 0, label: '', debit: '', credit: '' },
+    { account_id: 0, treasury_account_id: 0, label: '', debit: '', credit: '' }
   ] as EntryLine[]
 });
 let initializedDossierId = 0;
@@ -304,6 +313,18 @@ const selectedExercise = computed(() =>
 );
 const archivedReports = computed(() =>
   archiveViewerSnapshot.value?.payload.reports ?? null
+);
+const archivedBalancePresentationItems = computed(() =>
+  archivedReports.value?.balance_sheet.presentation_items
+    ?? (archivedReports.value?.balance_sheet.items ?? []).map(
+      (row) => ({ row_kind: 'account' as const, rubric_id: row.rubrique_id, ...row })
+    )
+);
+const archivedIncomePresentationItems = computed(() =>
+  archivedReports.value?.income_statement.presentation_items
+    ?? (archivedReports.value?.income_statement.items ?? []).map(
+      (row) => ({ row_kind: 'account' as const, ...row })
+    )
 );
 const archivedJournal = computed(() =>
   archiveViewerSnapshot.value?.payload.journal ?? null
@@ -348,6 +369,18 @@ const hasPreviousBalance = computed(() =>
 );
 const hasPreviousIncome = computed(() =>
   Boolean(workspace.value?.reports.income_statement.previous.exercise_id)
+);
+const balancePresentationItems = computed(() =>
+  workspace.value?.reports.balance_sheet.presentation_items
+    ?? (workspace.value?.reports.balance_sheet.items ?? []).map(
+      (row) => ({ row_kind: 'account' as const, rubric_id: row.rubrique_id, ...row })
+    )
+);
+const incomePresentationItems = computed(() =>
+  workspace.value?.reports.income_statement.presentation_items
+    ?? (workspace.value?.reports.income_statement.items ?? []).map(
+      (row) => ({ row_kind: 'account' as const, ...row })
+    )
 );
 const ledgerDebitSign = computed(() =>
   workspace.value?.ledger?.account.sens_normal === 'credit' ? '-' : '+'
@@ -424,9 +457,9 @@ function sortJournalDetailRows(items: JournalDetails['items']): JournalDetails['
     if (key === 'numero') {
       leftValue = left.numero || left.entry_id;
       rightValue = right.numero || right.entry_id;
-    } else if (key === 'line_label') {
-      leftValue = left.line_label || left.entry_label;
-      rightValue = right.line_label || right.entry_label;
+    } else if (key === 'entry_label') {
+      leftValue = left.entry_label;
+      rightValue = right.entry_label;
     }
     const comparison = typeof leftValue === 'number' && typeof rightValue === 'number'
       ? leftValue - rightValue
@@ -498,6 +531,7 @@ const dirtyRubrics = computed(() =>
       || draft.label !== rubric.label
       || draft.type !== rubric.type
       || draft.parent_id !== rubric.parent_id
+      || draft.show_subtotal !== rubric.show_subtotal
     );
   })
 );
@@ -516,6 +550,10 @@ const openingDirty = computed(() =>
   openingAccounts.value.some((account) =>
     safeCents(openingDrafts[account.id] || '0')
       !== (workspace.value?.opening.soldes[String(account.id)] ?? 0)
+  )
+  || openingTreasuryAccounts.value.some((account) =>
+    safeCents(openingTreasuryDrafts[account.id] || '0')
+      !== (workspace.value?.opening.soldes_tresorerie[String(account.id)] ?? 0)
   )
 );
 const rubricLevelLabel = computed(() => ({
@@ -550,11 +588,48 @@ const planSaveDisabled = computed(() => {
   return planSection.value === 'opening'
     && workspace.value?.opening.status === 'validee';
 });
-const openingAccounts = computed(() =>
-  (workspace.value?.chart.accounts ?? []).filter(
-    (account) => account.active && ['actif', 'passif'].includes(account.type)
-  )
-);
+const openingTreasuryAccounts = computed(() => {
+  const chartAccounts = new Map(
+    (workspace.value?.chart.accounts ?? []).map((account) => [account.id, account])
+  );
+  return (workspace.value?.catalog.treasury_accounts ?? []).flatMap((account) => {
+    const ledger = chartAccounts.get(account.ledger_account_id);
+    return ledger && ledger.active && ['actif', 'passif'].includes(ledger.type)
+      ? [{ ...account, ledger }]
+      : [];
+  });
+});
+const openingAccounts = computed(() => {
+  const treasuryLedgerIds = new Set(
+    openingTreasuryAccounts.value.map((account) => account.ledger_account_id)
+  );
+  return (workspace.value?.chart.accounts ?? []).filter(
+    (account) => account.active
+      && ['actif', 'passif'].includes(account.type)
+      && !treasuryLedgerIds.has(account.id)
+  );
+});
+const openingRows = computed(() => [
+  ...openingTreasuryAccounts.value.map((account) => ({
+    kind: 'treasury' as const,
+    id: account.id,
+    number: account.ledger.number,
+    label: account.label,
+    type: account.ledger.type,
+    normalSide: account.ledger.normal_side
+  })),
+  ...openingAccounts.value.map((account) => ({
+    kind: 'ledger' as const,
+    id: account.id,
+    number: account.number,
+    label: account.label,
+    type: account.type,
+    normalSide: account.normal_side
+  }))
+].sort((left, right) =>
+  left.number.localeCompare(right.number, 'fr-CH', { numeric: true, sensitivity: 'base' })
+    || left.label.localeCompare(right.label, 'fr-CH', { sensitivity: 'base' })
+));
 
 watch(
   () => [context.selection?.dossier.id ?? 0, context.exercises] as const,
@@ -597,7 +672,8 @@ watch(
         code: rubric.code,
         label: rubric.label,
         type: rubric.type,
-        parent_id: rubric.parent_id
+        parent_id: rubric.parent_id,
+        show_subtotal: rubric.show_subtotal
       };
     });
     ['classe', 'groupe_principal', 'groupe', 'sous_groupe'].forEach((level) => {
@@ -619,6 +695,12 @@ watch(
     Object.keys(openingDrafts).forEach((key) => delete openingDrafts[Number(key)]);
     Object.entries(value.opening.soldes).forEach(([id, cents]) => {
       openingDrafts[Number(id)] = centsToInput(cents);
+    });
+    Object.keys(openingTreasuryDrafts).forEach(
+      (key) => delete openingTreasuryDrafts[Number(key)]
+    );
+    Object.entries(value.opening.soldes_tresorerie).forEach(([id, cents]) => {
+      openingTreasuryDrafts[Number(id)] = centsToInput(cents);
     });
     if (!entry.date) entry.date = value.exercise.start_date;
     if (
@@ -680,11 +762,39 @@ async function openAccountExtract(accountId: number): Promise<void> {
 }
 
 function financialDocumentPath(line: JournalDetails['items'][number]): string {
+  if (line.financial_document_workflow === 'depense') {
+    return `/liquidites?expense=${line.financial_document_id}`;
+  }
   const tab = String(line.financial_document_type || '').includes('fournisseur')
     ? 'achats'
     : 'sales';
   const path = tab === 'sales' ? '/facturation/ventes' : `/facturation/${tab}`;
   return `${path}?document=${line.financial_document_id}&as_of_date=${line.date_comptable}`;
+}
+
+function recentFinancialDocumentPath(
+  entry: AccountingWorkspace['journal']['items'][number]
+): string {
+  if (entry.financial_document_workflow === 'depense') {
+    return `/liquidites?expense=${entry.financial_document_id}`;
+  }
+  const tab = String(entry.financial_document_type || '').includes('fournisseur')
+    ? 'achats'
+    : 'ventes';
+  return `/facturation/${tab}?document=${entry.financial_document_id}`
+    + `&as_of_date=${entry.date_comptable}`;
+}
+
+function financialLabelSuffix(label: string, number: string | null): string {
+  const reference = String(number || '').trim();
+  const value = String(label || '').trim();
+  if (!reference || !value.startsWith(reference)) {
+    return value && value !== reference ? ` — ${value}` : '';
+  }
+  const suffix = value.slice(reference.length).trim();
+  return suffix
+    ? ` ${suffix.startsWith('—') || suffix.startsWith('-') ? suffix : `— ${suffix}`}`
+    : '';
 }
 
 function safeCents(value: string): number {
@@ -732,10 +842,9 @@ function formatStatementValue(
   if (statementDisplayMode.value === 'currency') return formatStatementAmount(cents);
   if (percentageBase === 0) return '—';
   return new Intl.NumberFormat('fr-CH', {
-    style: 'percent',
     minimumFractionDigits: 1,
     maximumFractionDigits: 1
-  }).format(cents / percentageBase);
+  }).format((cents / percentageBase) * 100);
 }
 
 function cashFlowItems(category: string) {
@@ -752,7 +861,26 @@ function cashFlowCategoryTotal(category: string): number {
 }
 
 function addLine(): void {
-  entry.lines.push({ account_id: 0, label: '', debit: '', credit: '' });
+  entry.lines.push({
+    account_id: 0,
+    treasury_account_id: 0,
+    label: '',
+    debit: '',
+    credit: ''
+  });
+}
+
+function treasuryOptionsFor(accountId: number) {
+  return workspace.value?.catalog.treasury_accounts.filter(
+    (account) => account.ledger_account_id === Number(accountId)
+  ) ?? [];
+}
+
+function syncLineTreasury(line: EntryLine): void {
+  const options = treasuryOptionsFor(line.account_id);
+  if (!options.some((account) => account.id === line.treasury_account_id)) {
+    line.treasury_account_id = options.length === 1 ? options[0].id : 0;
+  }
 }
 
 function removeLine(index: number): void {
@@ -766,8 +894,8 @@ function resetEntry(): void {
   entry.reference = '';
   entry.attachment_reference = '';
   entry.lines = [
-    { account_id: 0, label: '', debit: '', credit: '' },
-    { account_id: 0, label: '', debit: '', credit: '' }
+    { account_id: 0, treasury_account_id: 0, label: '', debit: '', credit: '' },
+    { account_id: 0, treasury_account_id: 0, label: '', debit: '', credit: '' }
   ];
 }
 
@@ -806,6 +934,7 @@ async function editDraft(entryId: number): Promise<void> {
     entry.attachment_reference = draft.attachment_reference;
     entry.lines = draft.lines.map((line) => ({
       account_id: line.account_id,
+      treasury_account_id: line.treasury_account_id,
       label: line.label,
       debit: centsToInput(line.debit_cents),
       credit: centsToInput(line.credit_cents)
@@ -821,6 +950,7 @@ async function submitEntry(validate: boolean): Promise<void> {
   try {
     const lines = entry.lines.map((line) => ({
       account_id: line.account_id,
+      treasury_account_id: line.treasury_account_id,
       label: line.label,
       debit_cents: parseCents(line.debit || '0'),
       credit_cents: parseCents(line.credit || '0')
@@ -920,6 +1050,7 @@ async function saveRubrics(): Promise<void> {
     label: rubricDrafts[rubric.id].label,
     type: rubricDrafts[rubric.id].type,
     parent_id: rubricDrafts[rubric.id].parent_id,
+    show_subtotal: rubricDrafts[rubric.id].show_subtotal,
     position: rubric.order,
     version: rubric.version
   }));
@@ -931,6 +1062,7 @@ async function saveRubrics(): Promise<void> {
     label: '',
     type: 'actif',
     parent_id: null,
+    show_subtotal: false,
     position: 0,
     version: 0,
     rubrics,
@@ -947,12 +1079,14 @@ async function createRubric(): Promise<void> {
     label: newRubric.label,
     type: newRubric.type,
     parent_id: newRubric.parent_id,
+    show_subtotal: newRubric.show_subtotal,
     position: visibleRubrics.value.length * 10 + 10,
     version: 0,
     ordered_ids: []
   }, 'Rubrique créée.');
   newRubric.code = '';
   newRubric.label = '';
+  newRubric.show_subtotal = false;
 }
 
 async function deleteRubric(id: number): Promise<void> {
@@ -1015,11 +1149,14 @@ async function createAccount(): Promise<void> {
   newAccount.label = '';
 }
 
-async function deleteAccount(id: number): Promise<void> {
-  if (!window.confirm('Supprimer ce compte inutilisé ou désactiver le compte utilisé ?')) return;
+async function deleteAccount(account: { id: number; number: string; label: string }): Promise<void> {
+  if (!window.confirm(
+    `Retirer le compte ${account.number} — ${account.label} ?\n\n`
+    + 'S’il n’a jamais été utilisé, il sera supprimé. Sinon, il sera désactivé afin de conserver son historique.'
+  )) return;
   await mutateAndReload('/accounting/chart/accounts', {
     action: 'delete',
-    id,
+    id: account.id,
     number: '',
     label: '',
     sense_mode: 'automatique',
@@ -1027,6 +1164,21 @@ async function deleteAccount(id: number): Promise<void> {
     version: 0,
     ordered_ids: []
   }, 'Compte retiré ou désactivé selon son historique.');
+}
+
+async function reactivateAccount(account: { id: number; number: string; version: number }): Promise<void> {
+  if (!window.confirm(`Réactiver le compte ${account.number} ?`)) return;
+  await mutateAndReload('/accounting/chart/accounts', {
+    action: 'reactivate',
+    id: account.id,
+    number: '',
+    label: '',
+    type: '',
+    sense_mode: 'automatique',
+    rubric_id: null,
+    version: account.version,
+    ordered_ids: []
+  }, 'Compte réactivé.');
 }
 
 async function moveAccount(id: number, direction: -1 | 1): Promise<void> {
@@ -1040,14 +1192,20 @@ async function moveAccount(id: number, direction: -1 | 1): Promise<void> {
 
 async function saveOpening(validate: boolean): Promise<void> {
   const balances: Record<string, number> = {};
+  const treasuryBalances: Record<string, number> = {};
   openingAccounts.value.forEach((account) => {
     const value = openingDrafts[account.id] || '';
     if (value.trim()) balances[String(account.id)] = parseCents(value);
   });
+  openingTreasuryAccounts.value.forEach((account) => {
+    const value = openingTreasuryDrafts[account.id] || '';
+    if (value.trim()) treasuryBalances[String(account.id)] = parseCents(value);
+  });
   await mutateAndReload('/accounting/opening', {
     exercise_id: exerciseId.value,
     validate,
-    balances
+    balances,
+    treasury_balances: treasuryBalances
   }, validate ? 'Soldes d’ouverture validés.' : 'Brouillon d’ouverture enregistré.');
 }
 
@@ -1057,6 +1215,9 @@ async function clearOpening(): Promise<void> {
   )) return;
   openingAccounts.value.forEach((account) => {
     openingDrafts[account.id] = '';
+  });
+  openingTreasuryAccounts.value.forEach((account) => {
+    openingTreasuryDrafts[account.id] = '';
   });
   await saveOpening(false);
 }
@@ -1150,17 +1311,36 @@ async function applyOpeningImport(): Promise<void> {
   }
 }
 
-async function showJournalDetails(): Promise<void> {
+async function showJournalDetails(entryId = 0): Promise<void> {
   journalDetails.value = null;
+  journalDetailsEntryId.value = entryId;
   journalDetailsError.value = '';
   journalDetailsBusy.value = true;
   journalDetailsDialog.value?.open();
   try {
-    journalDetails.value = (
+    const details = (
       await api.get<JournalDetails>('/accounting/journal/details', {
         exercise_id: exerciseId.value
       })
     ).data;
+    if (entryId < 1) {
+      journalDetails.value = details;
+    } else {
+      const items = details.items.filter((item) => item.entry_id === entryId);
+      journalDetails.value = {
+        items,
+        total_lines: items.length,
+        total_entries: items.length ? 1 : 0,
+        total_debit_cents: items.reduce(
+          (total, item) => total + item.debit_centimes,
+          0
+        ),
+        total_credit_cents: items.reduce(
+          (total, item) => total + item.credit_centimes,
+          0
+        )
+      };
+    }
   } catch (error) {
     journalDetailsError.value = errorMessage(error);
   } finally {
@@ -1332,10 +1512,11 @@ function download(path: string, query: Record<string, string | number>): void {
   window.location.assign(`${url.pathname}${url.search}`);
 }
 
-function exportReport(type: string): void {
+function exportReport(type: string, format: 'csv' | 'pdf' = 'csv'): void {
   download('/accounting/reports/export', {
     exercise_id: exerciseId.value,
     type,
+    format,
     date_start: reportStart.value,
     date_end: reportEnd.value
   });
@@ -1641,7 +1822,21 @@ async function deleteFinancialArchive(): Promise<void> {
                       :aria-label="`Compte ligne ${index + 1}`"
                       placeholder="Choisir…"
                       required
+                      @update:model-value="syncLineTreasury(line)"
                     />
+                    <select
+                      v-if="treasuryOptionsFor(line.account_id).length"
+                      v-model.number="line.treasury_account_id"
+                      :aria-label="`Compte de trésorerie ligne ${index + 1}`"
+                      required
+                    >
+                      <option :value="0" disabled>Compte de trésorerie…</option>
+                      <option
+                        v-for="account in treasuryOptionsFor(line.account_id)"
+                        :key="account.id"
+                        :value="account.id"
+                      >{{ account.label }}</option>
+                    </select>
                   </td>
                   <td><input v-model="line.label" maxlength="255"></td>
                   <td><input v-model="line.debit" inputmode="decimal" placeholder="0.00"></td>
@@ -1679,7 +1874,7 @@ async function deleteFinancialArchive(): Promise<void> {
             <div class="button-row">
               <span>{{ workspace.journal.total }} {{ workspace.journal.total === 1 ? 'écriture' : 'écritures' }}</span>
               <ActionMenu label="Actions du journal">
-                <button type="button" @click="showJournalDetails">Voir tout le journal</button>
+                <button type="button" @click="showJournalDetails()">Voir tout le journal</button>
                 <button v-if="workspace.capabilities.export" type="button" @click="exportJournal">Exporter CSV</button>
                 <button v-if="canEdit" type="button" @click="chooseJournalImport">Importer CSV</button>
               </ActionMenu>
@@ -1707,7 +1902,15 @@ async function deleteFinancialArchive(): Promise<void> {
               </thead>
               <tbody>
                 <tr v-for="row in sortedJournalItems" :key="row.id">
-                  <td>{{ row.date_comptable }}</td><td>{{ row.numero || `#${row.id}` }}</td>
+                  <td>{{ row.date_comptable }}</td>
+                  <td>
+                    <button
+                      class="table-primary-link"
+                      type="button"
+                      title="Afficher uniquement cette opération comptable"
+                      @click="showJournalDetails(row.id)"
+                    >{{ row.numero || `#${row.id}` }}</button>
+                  </td>
                   <td>
                     <template v-for="(account, index) in row.debit_accounts" :key="account.id">
                       <span v-if="index">, </span>
@@ -1722,7 +1925,18 @@ async function deleteFinancialArchive(): Promise<void> {
                     </template>
                     <span v-if="!row.credit_accounts.length">{{ row.comptes_credit }}</span>
                   </td>
-                  <td>{{ row.libelle || row.reference || '—' }}</td>
+                  <td>
+                    <template v-if="row.financial_document_id">
+                      <RouterLink :to="recentFinancialDocumentPath(row)">
+                        {{ row.financial_document_number || `#${row.financial_document_id}` }}
+                      </RouterLink>
+                      {{ financialLabelSuffix(
+                        row.libelle,
+                        row.financial_document_number
+                      ) || ' — document financier' }}
+                    </template>
+                    <template v-else>{{ row.libelle || row.reference || '—' }}</template>
+                  </td>
                   <td class="amount">
                     {{ row.debit_centimes === row.credit_centimes
                       ? formatStatementAmount(row.debit_centimes)
@@ -1747,8 +1961,12 @@ async function deleteFinancialArchive(): Promise<void> {
 
         <ModalDialog
           ref="journalDetailsDialog"
-          title="Journal détaillé de l’exercice"
-          description="Toutes les écritures et toutes leurs lignes, dans l’ordre comptable."
+          :title="journalDetailsEntryId
+            ? 'Détail de l’opération comptable'
+            : 'Journal détaillé de l’exercice'"
+          :description="journalDetailsEntryId
+            ? 'Toutes les lignes de cette seule opération comptable.'
+            : 'Toutes les écritures et toutes leurs lignes, dans l’ordre comptable.'"
           extra-wide
         >
           <p v-if="journalDetailsBusy">Chargement du journal…</p>
@@ -1767,7 +1985,7 @@ async function deleteFinancialArchive(): Promise<void> {
                     <th :aria-sort="sortAria(journalDetailSort.key === 'date_comptable', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('date_comptable')">Date <span>{{ sortIndicator(journalDetailSort.key === 'date_comptable', journalDetailSort.direction) }}</span></button></th>
                     <th :aria-sort="sortAria(journalDetailSort.key === 'numero', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('numero')">N° <span>{{ sortIndicator(journalDetailSort.key === 'numero', journalDetailSort.direction) }}</span></button></th>
                     <th :aria-sort="sortAria(journalDetailSort.key === 'account_number', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('account_number')">Compte <span>{{ sortIndicator(journalDetailSort.key === 'account_number', journalDetailSort.direction) }}</span></button></th>
-                    <th :aria-sort="sortAria(journalDetailSort.key === 'line_label', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('line_label')">Libellé <span>{{ sortIndicator(journalDetailSort.key === 'line_label', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'entry_label', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('entry_label')">Libellé <span>{{ sortIndicator(journalDetailSort.key === 'entry_label', journalDetailSort.direction) }}</span></button></th>
                     <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('debit_centimes')">Débit <span>{{ sortIndicator(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction) }}</span></button></th>
                     <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('credit_centimes')">Crédit <span>{{ sortIndicator(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction) }}</span></button></th>
                     <th :aria-sort="sortAria(journalDetailSort.key === 'statut', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('statut')">Statut <span>{{ sortIndicator(journalDetailSort.key === 'statut', journalDetailSort.direction) }}</span></button></th>
@@ -1778,25 +1996,27 @@ async function deleteFinancialArchive(): Promise<void> {
                     <td>{{ line.date_comptable }}</td>
                     <td>{{ line.numero || `#${line.entry_id}` }}</td>
                     <td>
-                      <button class="account-number-link" type="button" :title="`Ouvrir l’extrait ${line.account_label}`" @click="openAccountExtract(line.account_id)">{{ line.account_number }}</button>
+                      <button
+                        v-if="!journalDetailsEntryId"
+                        class="account-number-link"
+                        type="button"
+                        :title="`Ouvrir l’extrait ${line.account_label}`"
+                        @click="openAccountExtract(line.account_id)"
+                      >{{ line.account_number }}</button>
+                      <span v-else>{{ line.account_number }}</span>
                       — {{ line.account_label }}
                     </td>
                     <td>
-                      <strong>{{ line.entry_label || '—' }}</strong>
-                      <small v-if="line.line_label && line.line_label !== line.entry_label" class="table-cell-detail">
-                        {{ line.line_label }}
-                      </small>
-                      <small v-if="line.reference || line.piece" class="table-cell-detail">
-                        <template v-if="line.reference">Réf. {{ line.reference }}</template>
-                        <template v-if="line.reference && line.piece"> · </template>
-                        <template v-if="line.piece">Pièce {{ line.piece }}</template>
-                      </small>
-                      <small v-if="line.financial_document_id" class="table-cell-detail">
-                        Pièce financière
+                      <strong v-if="line.financial_document_id">
                         <RouterLink :to="financialDocumentPath(line)">
                           {{ line.financial_document_number || `#${line.financial_document_id}` }}
                         </RouterLink>
-                      </small>
+                        {{ financialLabelSuffix(
+                          line.entry_label,
+                          line.financial_document_number
+                        ) || ' — document financier' }}
+                      </strong>
+                      <strong v-else>{{ line.entry_label || '—' }}</strong>
                     </td>
                     <td class="amount">{{ line.debit_centimes ? formatStatementAmount(line.debit_centimes) : '—' }}</td>
                     <td class="amount">{{ line.credit_centimes ? formatStatementAmount(line.credit_centimes) : '—' }}</td>
@@ -1973,13 +2193,15 @@ async function deleteFinancialArchive(): Promise<void> {
               <option value="groupe">Groupes</option><option value="sous_groupe">Sous-groupes</option>
             </select>
           </label>
-          <div class="table-scroll"><table class="editable-table"><thead><tr><th>Code</th><th>Libellé</th><th>Parent</th><th>Type</th><th>Ordre</th><th>Actions</th></tr></thead>
+          <p class="muted">Cochez « Sous-total » pour faire apparaître le total de toute la branche dans le bilan ou le compte de résultat.</p>
+          <div class="table-scroll"><table class="editable-table"><thead><tr><th>Code</th><th>Libellé</th><th>Parent</th><th>Type</th><th>Sous-total</th><th>Ordre</th><th>Actions</th></tr></thead>
             <tbody>
               <tr v-for="rubric in visibleRubrics" :key="rubric.id">
                 <td><input v-model="rubricDrafts[rubric.id].code" :disabled="!canSetup"></td>
                 <td><input v-model="rubricDrafts[rubric.id].label" :disabled="!canSetup"></td>
                 <td><select v-model="rubricDrafts[rubric.id].parent_id" :disabled="!canSetup || rubricLevel === 'classe'"><option :value="null">—</option><option v-for="parent in parentOptions(rubricLevel)" :key="parent.id" :value="parent.id">{{ parent.code }} {{ parent.label }}</option></select></td>
                 <td><select v-model="rubricDrafts[rubric.id].type" :disabled="!canSetup || rubricLevel !== 'classe'"><option v-for="type in workspace.chart.types" :key="type.code" :value="type.code">{{ type.label }}</option></select></td>
+                <td class="rubric-subtotal-cell"><input v-model="rubricDrafts[rubric.id].show_subtotal" type="checkbox" :disabled="!canSetup || rubricDrafts[rubric.id].type === 'hors_bilan'" :aria-label="`Afficher le sous-total ${rubric.label} dans les états`"></td>
                 <td><button class="icon-button" type="button" :disabled="!canSetup" @click="moveRubric(rubric.id, -1)">↑</button><button class="icon-button" type="button" :disabled="!canSetup" @click="moveRubric(rubric.id, 1)">↓</button></td>
                 <td><button class="button danger small" type="button" :disabled="!canSetup" @click="deleteRubric(rubric.id)">Retirer</button></td>
               </tr>
@@ -1989,6 +2211,7 @@ async function deleteFinancialArchive(): Promise<void> {
             <input v-model="newRubric.code" placeholder="Code"><input v-model="newRubric.label" placeholder="Nouvelle rubrique" required>
             <select v-model="newRubric.parent_id" :disabled="rubricLevel === 'classe'"><option :value="null">Parent…</option><option v-for="parent in parentOptions(rubricLevel)" :key="parent.id" :value="parent.id">{{ parent.code }} {{ parent.label }}</option></select>
             <select v-model="newRubric.type" :disabled="rubricLevel !== 'classe'"><option v-for="type in workspace.chart.types" :key="type.code" :value="type.code">{{ type.label }}</option></select>
+            <label class="checkbox-field"><input v-model="newRubric.show_subtotal" type="checkbox" :disabled="newRubric.type === 'hors_bilan'"> Sous-total</label>
             <button class="button primary" :disabled="!canSetup">Ajouter</button>
           </form>
         </template>
@@ -2000,13 +2223,16 @@ async function deleteFinancialArchive(): Promise<void> {
           <div class="table-scroll"><table class="editable-table"><thead><tr><th>N°</th><th>Libellé</th><th>Rubrique</th><th>Type</th><th>Sens</th><th>Ordre</th><th>Actions</th></tr></thead>
             <tbody>
               <tr v-for="account in visibleAccounts" :key="account.id" :class="{ inactive: !account.active }">
-                <td><input v-model="accountDrafts[account.id].number" :disabled="!canSetup"></td>
-                <td><input v-model="accountDrafts[account.id].label" :disabled="!canSetup"></td>
-                <td><select v-model="accountDrafts[account.id].rubric_id" :disabled="!canSetup"><option :value="null">Sans rubrique</option><option v-for="rubric in accountRubrics" :key="rubric.id" :value="rubric.id">{{ rubric.code }} — {{ rubric.label }}</option></select></td>
-                <td><select v-model="accountDrafts[account.id].type" :disabled="!canSetup || accountDrafts[account.id].rubric_id !== null"><option v-for="type in workspace.chart.types" :key="type.code" :value="type.code">{{ type.label }}</option></select></td>
-                <td><select v-model="accountDrafts[account.id].sense_mode" :disabled="!canSetup"><option value="automatique">Automatique</option><option value="debit">+/-</option><option value="credit">-/+</option></select></td>
-                <td><button class="icon-button" type="button" :disabled="!canSetup || !!accountSearch" @click="moveAccount(account.id, -1)">↑</button><button class="icon-button" type="button" :disabled="!canSetup || !!accountSearch" @click="moveAccount(account.id, 1)">↓</button></td>
-                <td><button class="button danger small" type="button" :disabled="!canSetup" @click="deleteAccount(account.id)">Retirer</button></td>
+                <td><input v-model="accountDrafts[account.id].number" :disabled="!canSetup || !account.active"></td>
+                <td><input v-model="accountDrafts[account.id].label" :disabled="!canSetup || !account.active"></td>
+                <td><select v-model="accountDrafts[account.id].rubric_id" :disabled="!canSetup || !account.active"><option :value="null">Sans rubrique</option><option v-for="rubric in accountRubrics" :key="rubric.id" :value="rubric.id">{{ rubric.code }} — {{ rubric.label }}</option></select></td>
+                <td><select v-model="accountDrafts[account.id].type" :disabled="!canSetup || !account.active || accountDrafts[account.id].rubric_id !== null"><option v-for="type in workspace.chart.types" :key="type.code" :value="type.code">{{ type.label }}</option></select></td>
+                <td><select v-model="accountDrafts[account.id].sense_mode" :disabled="!canSetup || !account.active"><option value="automatique">Automatique</option><option value="debit">+/-</option><option value="credit">-/+</option></select></td>
+                <td><button class="icon-button" type="button" :disabled="!canSetup || !account.active || !!accountSearch" @click="moveAccount(account.id, -1)">↑</button><button class="icon-button" type="button" :disabled="!canSetup || !account.active || !!accountSearch" @click="moveAccount(account.id, 1)">↓</button></td>
+                <td>
+                  <button v-if="account.active" class="button danger small" type="button" :disabled="!canSetup" @click="deleteAccount(account)">Retirer</button>
+                  <button v-else class="button secondary small" type="button" :disabled="!canSetup" @click="reactivateAccount(account)">Réactiver</button>
+                </td>
               </tr>
             </tbody>
           </table></div>
@@ -2024,8 +2250,18 @@ async function deleteFinancialArchive(): Promise<void> {
             <div><h3>Soldes d’ouverture</h3><p>{{ workspace.opening.status === 'absent' ? 'Aucun brouillon' : `État : ${workspace.opening.status}` }}</p></div>
             <span v-if="workspace.opening.number">{{ workspace.opening.number }}</span>
           </div>
-          <div class="table-scroll"><table class="editable-table"><thead><tr><th>Compte</th><th>Type</th><th>Sens</th><th>Solde initial</th></tr></thead>
-            <tbody><tr v-for="account in openingAccounts" :key="account.id"><td>{{ account.number }} — {{ account.label }}</td><td>{{ account.type }}</td><td>{{ senseLabel(account.normal_side) }}</td><td><input v-model="openingDrafts[account.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00"></td></tr></tbody>
+          <div class="table-scroll"><table class="editable-table opening-balances-table"><thead><tr><th>Compte</th><th>Type</th><th>Sens</th><th>Solde initial</th></tr></thead>
+            <tbody>
+              <tr v-for="row in openingRows" :key="`${row.kind}-${row.id}`">
+                <td>{{ row.number }} — {{ row.label }}</td>
+                <td>{{ row.type }}</td>
+                <td>{{ senseLabel(row.normalSide) }}</td>
+                <td>
+                  <input v-if="row.kind === 'treasury'" v-model="openingTreasuryDrafts[row.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00">
+                  <input v-else v-model="openingDrafts[row.id]" :disabled="!canSetup || workspace.opening.status === 'validee'" inputmode="decimal" placeholder="0.00">
+                </td>
+              </tr>
+            </tbody>
           </table></div>
         </template>
 
@@ -2164,24 +2400,24 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
 
         <section v-if="reportSection === 'bilan'" class="panel financial-report-panel">
-          <div class="section-heading"><h3>Bilan</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du bilan"><button :class="{ active: statementDisplayMode === 'currency' }" :aria-pressed="statementDisplayMode === 'currency'" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" :aria-pressed="statementDisplayMode === 'percentage'" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('bilan')">Exporter CSV</button></div></div>
+          <div class="button-row financial-report-actions"><div class="statement-display-toggle" role="group" aria-label="Unité du bilan"><button :class="{ active: statementDisplayMode === 'currency' }" :aria-pressed="statementDisplayMode === 'currency'" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" :aria-pressed="statementDisplayMode === 'percentage'" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('bilan')">CSV</button><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('bilan', 'pdf')">PDF</button></div>
           <div class="financial-statement-heading">
             <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BILAN AU {{ reportDateLabel }} — {{ statementUnitLabel }}</strong>
           </div>
-          <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th>Compte et libellé</th><th class="amount">{{ workspace.reports.balance_sheet.current_label }}</th><th v-if="hasPreviousBalance" class="amount">{{ workspace.reports.balance_sheet.previous_label }}</th></tr></thead>
+          <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th aria-label="Compte et libellé"></th><th class="amount">{{ workspace.reports.balance_sheet.current_label }}</th><th v-if="hasPreviousBalance" class="amount">{{ workspace.reports.balance_sheet.previous_label }}</th></tr></thead>
             <tbody>
               <tr class="statement-section"><th :colspan="hasPreviousBalance ? 3 : 2">ACTIF</th></tr>
-              <tr v-for="row in workspace.reports.balance_sheet.items.filter((item) => item.type === 'actif')" :key="`actif-${row.numero}`">
-                <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
-                <td class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</td>
-                <td v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</td>
+              <tr v-for="row in balancePresentationItems.filter((item) => item.type === 'actif')" :key="`actif-${row.row_kind}-${row.numero}-${row.rubric_id ?? row.id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }">
+                <th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.numero }}</span>{{ row.libelle.toLocaleUpperCase('fr-CH') }}</th><td v-else><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                <th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</th><td v-else class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</td>
+                <th v-if="hasPreviousBalance && row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</th><td v-else-if="hasPreviousBalance" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</td>
               </tr>
               <tr class="statement-total"><th>TOTAL DE L’ACTIF</th><th class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.total_actif_centimes, workspace.reports.balance_sheet.total_actif_centimes) }}</th><th v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.previous_total_actif_centimes, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</th></tr>
               <tr class="statement-section"><th :colspan="hasPreviousBalance ? 3 : 2">PASSIF ET CAPITAUX PROPRES</th></tr>
-              <tr v-for="row in workspace.reports.balance_sheet.items.filter((item) => item.type !== 'actif')" :key="`passif-${row.numero}`">
-                <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
-                <td class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</td>
-                <td v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</td>
+              <tr v-for="row in balancePresentationItems.filter((item) => item.type !== 'actif')" :key="`passif-${row.row_kind}-${row.numero}-${row.rubric_id ?? row.id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }">
+                <th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.numero }}</span>{{ row.libelle.toLocaleUpperCase('fr-CH') }}</th><td v-else><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                <th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</th><td v-else class="amount">{{ formatStatementValue(row.current_cents, workspace.reports.balance_sheet.total_actif_centimes) }}</td>
+                <th v-if="hasPreviousBalance && row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</th><td v-else-if="hasPreviousBalance" class="amount">{{ formatStatementValue(row.previous_cents, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</td>
               </tr>
               <tr class="statement-total"><th>TOTAL DU PASSIF ET DES CAPITAUX PROPRES</th><th class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.total_passif_centimes, workspace.reports.balance_sheet.total_actif_centimes) }}</th><th v-if="hasPreviousBalance" class="amount">{{ formatStatementValue(workspace.reports.balance_sheet.previous_total_passif_centimes, workspace.reports.balance_sheet.previous_total_actif_centimes) }}</th></tr>
             </tbody>
@@ -2189,15 +2425,15 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
 
         <section v-else-if="reportSection === 'resultat'" class="panel financial-report-panel">
-          <div class="section-heading"><h3>Compte de résultat</h3><div class="button-row"><div class="statement-display-toggle" role="group" aria-label="Unité du compte de résultat"><button :class="{ active: statementDisplayMode === 'currency' }" :aria-pressed="statementDisplayMode === 'currency'" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" :aria-pressed="statementDisplayMode === 'percentage'" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('resultat')">Exporter CSV</button></div></div>
+          <div class="button-row financial-report-actions"><div class="statement-display-toggle" role="group" aria-label="Unité du compte de résultat"><button :class="{ active: statementDisplayMode === 'currency' }" :aria-pressed="statementDisplayMode === 'currency'" type="button" @click="statementDisplayMode = 'currency'">{{ currency }}</button><button :class="{ active: statementDisplayMode === 'percentage' }" :aria-pressed="statementDisplayMode === 'percentage'" type="button" @click="statementDisplayMode = 'percentage'">%</button></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('resultat')">CSV</button><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('resultat', 'pdf')">PDF</button></div>
           <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — RÉSULTAT DU {{ reportStartLabel }} AU {{ reportDateLabel }} — {{ statementUnitLabel }}</strong></div>
-          <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th>Compte et libellé</th><th class="amount">{{ workspace.reports.income_statement.current.label }}</th><th v-if="hasPreviousIncome" class="amount">{{ workspace.reports.income_statement.previous.label }}</th></tr></thead>
+          <div class="table-scroll"><table class="financial-statement-table"><thead><tr><th aria-label="Compte et libellé"></th><th class="amount">{{ workspace.reports.income_statement.current.label }}</th><th v-if="hasPreviousIncome" class="amount">{{ workspace.reports.income_statement.previous.label }}</th></tr></thead>
             <tbody>
               <tr class="statement-section"><th :colspan="hasPreviousIncome ? 3 : 2">PRODUITS</th></tr>
-              <tr v-for="row in workspace.reports.income_statement.items.filter((item) => item.type === 'produit')" :key="`produit-${row.number}`"><td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td><td class="amount">{{ formatStatementValue(row.current_cents, incomeRevenueCurrent) }}</td><td v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(row.previous_cents, incomeRevenuePrevious) }}</td></tr>
+              <tr v-for="row in incomePresentationItems.filter((item) => item.type === 'produit')" :key="`produit-${row.row_kind}-${row.number}-${row.rubric_id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }"><th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.number }}</span>{{ row.label.toLocaleUpperCase('fr-CH') }}</th><td v-else><span class="account-code">{{ row.number }}</span>{{ row.label }}</td><th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.current_cents, incomeRevenueCurrent) }}</th><td v-else class="amount">{{ formatStatementValue(row.current_cents, incomeRevenueCurrent) }}</td><th v-if="hasPreviousIncome && row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.previous_cents, incomeRevenuePrevious) }}</th><td v-else-if="hasPreviousIncome" class="amount">{{ formatStatementValue(row.previous_cents, incomeRevenuePrevious) }}</td></tr>
               <tr class="statement-subtotal"><th>TOTAL DES PRODUITS</th><th class="amount">{{ formatStatementValue(workspace.reports.income_statement.current.products_cents, incomeRevenueCurrent) }}</th><th v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(workspace.reports.income_statement.previous.products_cents, incomeRevenuePrevious) }}</th></tr>
               <tr class="statement-section"><th :colspan="hasPreviousIncome ? 3 : 2">CHARGES</th></tr>
-              <tr v-for="row in workspace.reports.income_statement.items.filter((item) => item.type === 'charge')" :key="`charge-${row.number}`"><td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td><td class="amount">{{ formatStatementValue(-row.current_cents, incomeRevenueCurrent) }}</td><td v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(-row.previous_cents, incomeRevenuePrevious) }}</td></tr>
+              <tr v-for="row in incomePresentationItems.filter((item) => item.type === 'charge')" :key="`charge-${row.row_kind}-${row.number}-${row.rubric_id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }"><th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.number }}</span>{{ row.label.toLocaleUpperCase('fr-CH') }}</th><td v-else><span class="account-code">{{ row.number }}</span>{{ row.label }}</td><th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(-row.current_cents, incomeRevenueCurrent) }}</th><td v-else class="amount">{{ formatStatementValue(-row.current_cents, incomeRevenueCurrent) }}</td><th v-if="hasPreviousIncome && row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(-row.previous_cents, incomeRevenuePrevious) }}</th><td v-else-if="hasPreviousIncome" class="amount">{{ formatStatementValue(-row.previous_cents, incomeRevenuePrevious) }}</td></tr>
               <tr class="statement-subtotal"><th>TOTAL DES CHARGES</th><th class="amount">{{ formatStatementValue(-workspace.reports.income_statement.current.expenses_cents, incomeRevenueCurrent) }}</th><th v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(-workspace.reports.income_statement.previous.expenses_cents, incomeRevenuePrevious) }}</th></tr>
               <tr class="statement-total"><th>RÉSULTAT NET DE L’EXERCICE</th><th class="amount">{{ formatStatementValue(workspace.reports.income_statement.current.result_cents, incomeRevenueCurrent) }}</th><th v-if="hasPreviousIncome" class="amount">{{ formatStatementValue(workspace.reports.income_statement.previous.result_cents, incomeRevenuePrevious) }}</th></tr>
             </tbody>
@@ -2205,9 +2441,9 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
 
         <section v-else-if="reportSection === 'flux'" class="panel financial-report-panel">
-          <div class="section-heading"><div><h3>Flux de trésorerie</h3><p>{{ workspace.reports.cash_flow.method_label }} · classement {{ workspace.reports.cash_flow.classification_status.replace('_', ' ') }}</p></div><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('flux_tresorerie')">Exporter CSV</button></div>
+          <div class="button-row financial-report-actions"><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('flux_tresorerie')">CSV</button><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('flux_tresorerie', 'pdf')">PDF</button></div>
           <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — FLUX DE TRÉSORERIE ENTRE LE {{ reportStartLabel }} ET LE {{ reportDateLabel }} — {{ currency }}</strong></div>
-          <div class="table-scroll"><table class="financial-statement-table financial-cash-flow"><thead><tr><th>Libellé</th><th class="amount">{{ workspace.reports.balance_sheet.current_label }}</th></tr></thead>
+          <div class="table-scroll"><table class="financial-statement-table financial-cash-flow"><thead><tr><th aria-label="Libellé"></th><th class="amount">{{ workspace.reports.balance_sheet.current_label }}</th></tr></thead>
             <tbody>
               <template v-for="category in cashFlowCategories" :key="category.key">
                 <tr v-if="cashFlowItems(category.key).length" class="statement-section"><th colspan="2">{{ category.label.toLocaleUpperCase('fr-CH') }}</th></tr>
@@ -2224,9 +2460,9 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
 
         <section v-else-if="reportSection === 'grand_livre'" class="panel financial-report-panel">
-          <div class="section-heading"><h3>Balances de vérification</h3><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('grand_livre')">Exporter CSV</button></div>
+          <div class="button-row financial-report-actions"><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('grand_livre')">CSV</button><button class="button secondary small" :disabled="!workspace.capabilities.export" @click="exportReport('grand_livre', 'pdf')">PDF</button></div>
           <div class="financial-statement-heading"><strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCES DE VÉRIFICATION AU {{ reportDateLabel }} — {{ currency }}</strong></div>
-          <div class="table-scroll"><table class="financial-statement-table financial-ledger-table"><thead><tr><th>Compte</th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
+          <div class="table-scroll"><table class="financial-statement-table financial-ledger-table"><thead><tr><th aria-label="Compte"></th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
             <tbody><tr v-for="row in workspace.reports.general_ledger.items" :key="row.id"><td><button class="account-code account-link" type="button" :title="`Ouvrir l’extrait du compte ${row.numero}`" @click="openAccountExtract(row.id)">{{ row.numero }}</button>{{ row.libelle }}</td><td class="amount">{{ formatStatementAmount(row.initial_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.debit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.credit_centimes) }}</td><td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td></tr>
               <tr v-if="!workspace.reports.general_ledger.items.length"><td colspan="5">Aucun compte mouvementé.</td></tr></tbody>
           </table></div>
@@ -2293,7 +2529,7 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
         <section v-if="workspace.vat.regime" class="panel">
           <div class="section-heading"><h3>Périodes et décomptes</h3><label class="compact-control">Décompte<select v-model.number="selectedVatStatementId" @change="selectVatStatement"><option :value="0">Aucun</option><option v-for="statement in workspace.vat.statements" :key="statement.id" :value="statement.id">{{ statement.start_date }} – {{ statement.end_date }} · {{ statement.status }}</option></select></label></div>
-          <div class="table-scroll"><table><thead><tr><th>Période</th><th>Statut</th><th>Action</th></tr></thead><tbody>
+          <div class="table-scroll"><table class="closure-table"><thead><tr><th>Période</th><th>Statut</th><th>Action</th></tr></thead><tbody>
             <tr v-for="period in workspace.vat.periods" :key="period.id"><td>{{ period.start_date }} – {{ period.end_date }}</td><td><span class="status-chip">{{ period.status }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.vat_prepare || !['ouverte', 'preparee'].includes(period.status)" @click="prepareVatStatement(period.id)">Préparer</button></td></tr>
             <tr v-if="!workspace.vat.periods.length"><td colspan="3">Aucune période TVA.</td></tr>
           </tbody></table></div>
@@ -2353,7 +2589,7 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
         <section class="panel">
           <div class="section-heading"><h3>Périodes</h3><button class="button secondary" :disabled="!workspace.capabilities.export" @click="createArchive('cloture')">Archiver la clôture</button></div>
-          <div class="table-scroll"><table><thead><tr><th>Période</th><th>Dates</th><th>Statut</th><th>Action</th></tr></thead><tbody><tr v-for="period in workspace.closing.periods" :key="period.id"><td>{{ period.label }}</td><td>{{ period.start_date }} – {{ period.end_date }}</td><td><span class="status-chip">{{ periodStatusLabel(period.status) }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.setup || (period.status === 'ouverte' && !workspace.closing.can_close)" @click="togglePeriod(period)">{{ period.status === 'ouverte' ? 'Fermer' : 'Rouvrir' }}</button></td></tr></tbody></table></div>
+          <div class="table-scroll"><table class="closure-table"><thead><tr><th>Période</th><th>Dates</th><th>Statut</th><th>Action</th></tr></thead><tbody><tr v-for="period in workspace.closing.periods" :key="period.id"><td><strong>{{ period.label }}</strong></td><td>{{ period.start_date }} – {{ period.end_date }}</td><td><span :class="['status-chip', period.status === 'ouverte' ? 'ok' : 'warning']">{{ periodStatusLabel(period.status) }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.setup || (period.status === 'ouverte' && !workspace.closing.can_close)" @click="togglePeriod(period)">{{ period.status === 'ouverte' ? 'Fermer' : 'Rouvrir' }}</button></td></tr></tbody></table></div>
         </section>
       </section>
 
@@ -2367,7 +2603,7 @@ async function deleteFinancialArchive(): Promise<void> {
         <section class="panel">
           <h3>Ajustements de travail</h3>
           <form class="form-grid three" @submit.prevent="createTaxAdjustment"><label>Libellé<input v-model="taxAdjustment.label" required></label><label>Nature<select v-model="taxAdjustment.nature"><option value="augmentation">Augmentation</option><option value="deduction">Déduction</option><option value="information">Information</option></select></label><label>Montant<input v-model="taxAdjustment.amount" inputmode="decimal" placeholder="0.00" required></label><label class="span-all">Note<input v-model="taxAdjustment.note"></label><button class="button primary" :disabled="!workspace.capabilities.setup">Ajouter</button></form>
-          <div class="table-scroll"><table><thead><tr><th>Libellé</th><th>Nature</th><th>Montant</th><th>Note</th><th>Statut</th><th>Actions</th></tr></thead><tbody><tr v-for="adjustment in workspace.tax_file.adjustments" :key="adjustment.id"><td>{{ adjustment.label }}</td><td>{{ adjustment.nature }}</td><td>{{ formatMoney(adjustment.amount_cents) }}</td><td>{{ adjustment.note || '—' }}</td><td><span class="status-chip">{{ adjustment.status }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.setup || adjustment.status === 'valide'" @click="setTaxAdjustmentStatus(adjustment, 'valide')">Valider</button><button class="button small danger" :disabled="!workspace.capabilities.setup || adjustment.status === 'ecarte'" @click="setTaxAdjustmentStatus(adjustment, 'ecarte')">Écarter</button></td></tr><tr v-if="!workspace.tax_file.adjustments.length"><td colspan="6">Aucun ajustement préparatoire.</td></tr></tbody></table></div>
+          <div class="table-scroll"><table class="closure-table"><thead><tr><th>Libellé</th><th>Nature</th><th class="amount">Montant</th><th>Note</th><th>Statut</th><th>Actions</th></tr></thead><tbody><tr v-for="adjustment in workspace.tax_file.adjustments" :key="adjustment.id"><td><strong>{{ adjustment.label }}</strong></td><td>{{ adjustment.nature }}</td><td class="amount">{{ formatMoney(adjustment.amount_cents) }}</td><td>{{ adjustment.note || '—' }}</td><td><span :class="['status-chip', adjustment.status === 'valide' ? 'ok' : 'warning']">{{ adjustment.status }}</span></td><td><div class="button-row"><button class="button small" :disabled="!workspace.capabilities.setup || adjustment.status === 'valide'" @click="setTaxAdjustmentStatus(adjustment, 'valide')">Valider</button><button class="button small danger" :disabled="!workspace.capabilities.setup || adjustment.status === 'ecarte'" @click="setTaxAdjustmentStatus(adjustment, 'ecarte')">Écarter</button></div></td></tr><tr v-if="!workspace.tax_file.adjustments.length"><td colspan="6">Aucun ajustement préparatoire.</td></tr></tbody></table></div>
         </section>
         <section v-if="workspace.closing.archives.length" class="panel">
           <h3>Archives financières vérifiables</h3>
@@ -2436,18 +2672,18 @@ async function deleteFinancialArchive(): Promise<void> {
           </div>
           <div class="table-scroll">
             <table class="financial-statement-table">
-              <thead><tr><th>Compte et libellé</th><th class="amount">{{ archivedReports.balance_sheet.current_label }}</th></tr></thead>
+              <thead><tr><th aria-label="Compte et libellé"></th><th class="amount">{{ archivedReports.balance_sheet.current_label }}</th></tr></thead>
               <tbody>
                 <tr class="statement-section"><th colspan="2">ACTIF</th></tr>
-                <tr v-for="row in archivedReports.balance_sheet.items.filter((item) => item.type === 'actif')" :key="`archive-actif-${row.numero}`">
-                  <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
-                  <td class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</td>
+                <tr v-for="row in archivedBalancePresentationItems.filter((item) => item.type === 'actif')" :key="`archive-actif-${row.row_kind}-${row.numero}-${row.rubric_id ?? row.id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }">
+                  <th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.numero }}</span>{{ row.libelle.toLocaleUpperCase('fr-CH') }}</th><td v-else><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                  <th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</th><td v-else class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</td>
                 </tr>
                 <tr class="statement-total"><th>TOTAL DE L’ACTIF</th><th class="amount">{{ formatStatementValue(archivedReports.balance_sheet.total_actif_centimes, archivedReports.balance_sheet.total_actif_centimes) }}</th></tr>
                 <tr class="statement-section"><th colspan="2">PASSIF ET CAPITAUX PROPRES</th></tr>
-                <tr v-for="row in archivedReports.balance_sheet.items.filter((item) => item.type !== 'actif')" :key="`archive-passif-${row.numero}`">
-                  <td><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
-                  <td class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</td>
+                <tr v-for="row in archivedBalancePresentationItems.filter((item) => item.type !== 'actif')" :key="`archive-passif-${row.row_kind}-${row.numero}-${row.rubric_id ?? row.id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }">
+                  <th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.numero }}</span>{{ row.libelle.toLocaleUpperCase('fr-CH') }}</th><td v-else><span v-if="row.numero !== 'RÉSULTAT'" class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
+                  <th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</th><td v-else class="amount">{{ formatStatementValue(row.current_cents, archivedReports.balance_sheet.total_actif_centimes) }}</td>
                 </tr>
                 <tr class="statement-total"><th>TOTAL DU PASSIF ET DES CAPITAUX PROPRES</th><th class="amount">{{ formatStatementValue(archivedReports.balance_sheet.total_passif_centimes, archivedReports.balance_sheet.total_actif_centimes) }}</th></tr>
               </tbody>
@@ -2461,18 +2697,18 @@ async function deleteFinancialArchive(): Promise<void> {
           </div>
           <div class="table-scroll">
             <table class="financial-statement-table">
-              <thead><tr><th>Compte et libellé</th><th class="amount">{{ archivedReports.income_statement.current.label }}</th></tr></thead>
+              <thead><tr><th aria-label="Compte et libellé"></th><th class="amount">{{ archivedReports.income_statement.current.label }}</th></tr></thead>
               <tbody>
                 <tr class="statement-section"><th colspan="2">PRODUITS</th></tr>
-                <tr v-for="row in archivedReports.income_statement.items.filter((item) => item.type === 'produit')" :key="`archive-produit-${row.number}`">
-                  <td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td>
-                  <td class="amount">{{ formatStatementValue(row.current_cents, archivedReports.income_statement.current.products_cents) }}</td>
+                <tr v-for="row in archivedIncomePresentationItems.filter((item) => item.type === 'produit')" :key="`archive-produit-${row.row_kind}-${row.number}-${row.rubric_id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }">
+                  <th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.number }}</span>{{ row.label.toLocaleUpperCase('fr-CH') }}</th><td v-else><span class="account-code">{{ row.number }}</span>{{ row.label }}</td>
+                  <th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(row.current_cents, archivedReports.income_statement.current.products_cents) }}</th><td v-else class="amount">{{ formatStatementValue(row.current_cents, archivedReports.income_statement.current.products_cents) }}</td>
                 </tr>
                 <tr class="statement-subtotal"><th>TOTAL DES PRODUITS</th><th class="amount">{{ formatStatementValue(archivedReports.income_statement.current.products_cents, archivedReports.income_statement.current.products_cents) }}</th></tr>
                 <tr class="statement-section"><th colspan="2">CHARGES</th></tr>
-                <tr v-for="row in archivedReports.income_statement.items.filter((item) => item.type === 'charge')" :key="`archive-charge-${row.number}`">
-                  <td><span class="account-code">{{ row.number }}</span>{{ row.label }}</td>
-                  <td class="amount">{{ formatStatementValue(-row.current_cents, archivedReports.income_statement.current.products_cents) }}</td>
+                <tr v-for="row in archivedIncomePresentationItems.filter((item) => item.type === 'charge')" :key="`archive-charge-${row.row_kind}-${row.number}-${row.rubric_id}`" :class="{ 'statement-subtotal': row.row_kind === 'subtotal' }">
+                  <th v-if="row.row_kind === 'subtotal'"><span class="account-code">{{ row.number }}</span>{{ row.label.toLocaleUpperCase('fr-CH') }}</th><td v-else><span class="account-code">{{ row.number }}</span>{{ row.label }}</td>
+                  <th v-if="row.row_kind === 'subtotal'" class="amount">{{ formatStatementValue(-row.current_cents, archivedReports.income_statement.current.products_cents) }}</th><td v-else class="amount">{{ formatStatementValue(-row.current_cents, archivedReports.income_statement.current.products_cents) }}</td>
                 </tr>
                 <tr class="statement-subtotal"><th>TOTAL DES CHARGES</th><th class="amount">{{ formatStatementValue(-archivedReports.income_statement.current.expenses_cents, archivedReports.income_statement.current.products_cents) }}</th></tr>
                 <tr class="statement-total"><th>RÉSULTAT NET DE L’EXERCICE</th><th class="amount">{{ formatStatementValue(archivedReports.income_statement.current.result_cents, archivedReports.income_statement.current.products_cents) }}</th></tr>
@@ -2487,7 +2723,7 @@ async function deleteFinancialArchive(): Promise<void> {
           </div>
           <div class="table-scroll">
             <table class="financial-statement-table financial-ledger-table">
-              <thead><tr><th>Compte</th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
+              <thead><tr><th aria-label="Compte"></th><th class="amount">Initial</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Final</th></tr></thead>
               <tbody>
                 <tr v-for="row in archivedReports.general_ledger.items" :key="`archive-ledger-${row.id}`">
                   <td><span class="account-code">{{ row.numero }}</span>{{ row.libelle }}</td>
@@ -2520,7 +2756,7 @@ async function deleteFinancialArchive(): Promise<void> {
                     <th :aria-sort="sortAria(journalDetailSort.key === 'date_comptable', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('date_comptable')">Date <span>{{ sortIndicator(journalDetailSort.key === 'date_comptable', journalDetailSort.direction) }}</span></button></th>
                     <th :aria-sort="sortAria(journalDetailSort.key === 'numero', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('numero')">N° <span>{{ sortIndicator(journalDetailSort.key === 'numero', journalDetailSort.direction) }}</span></button></th>
                     <th :aria-sort="sortAria(journalDetailSort.key === 'account_number', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('account_number')">Compte <span>{{ sortIndicator(journalDetailSort.key === 'account_number', journalDetailSort.direction) }}</span></button></th>
-                    <th :aria-sort="sortAria(journalDetailSort.key === 'line_label', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('line_label')">Libellé <span>{{ sortIndicator(journalDetailSort.key === 'line_label', journalDetailSort.direction) }}</span></button></th>
+                    <th :aria-sort="sortAria(journalDetailSort.key === 'entry_label', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('entry_label')">Libellé <span>{{ sortIndicator(journalDetailSort.key === 'entry_label', journalDetailSort.direction) }}</span></button></th>
                     <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('debit_centimes')">Débit <span>{{ sortIndicator(journalDetailSort.key === 'debit_centimes', journalDetailSort.direction) }}</span></button></th>
                     <th class="amount" :aria-sort="sortAria(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction)"><button class="table-sort-button amount" type="button" @click="toggleJournalDetailSort('credit_centimes')">Crédit <span>{{ sortIndicator(journalDetailSort.key === 'credit_centimes', journalDetailSort.direction) }}</span></button></th>
                     <th :aria-sort="sortAria(journalDetailSort.key === 'statut', journalDetailSort.direction)"><button class="table-sort-button" type="button" @click="toggleJournalDetailSort('statut')">Statut <span>{{ sortIndicator(journalDetailSort.key === 'statut', journalDetailSort.direction) }}</span></button></th>
@@ -2537,12 +2773,6 @@ async function deleteFinancialArchive(): Promise<void> {
                     </td>
                     <td>
                       <strong>{{ line.entry_label || '—' }}</strong>
-                      <small v-if="line.line_label && line.line_label !== line.entry_label" class="table-cell-detail">{{ line.line_label }}</small>
-                      <small v-if="line.reference || line.piece" class="table-cell-detail">
-                        <template v-if="line.reference">Réf. {{ line.reference }}</template>
-                        <template v-if="line.reference && line.piece"> · </template>
-                        <template v-if="line.piece">Pièce {{ line.piece }}</template>
-                      </small>
                     </td>
                     <td class="amount">{{ line.debit_centimes ? formatStatementAmount(line.debit_centimes) : '—' }}</td>
                     <td class="amount">{{ line.credit_centimes ? formatStatementAmount(line.credit_centimes) : '—' }}</td>

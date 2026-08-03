@@ -1,6 +1,6 @@
 # Audit de retrait de l’interface PHP
 
-Date de contrôle : 2026-07-26.
+Date de contrôle : 2026-07-29.
 
 ## Référentiels de Configuration
 
@@ -16,32 +16,36 @@ Le retrait est complet pour ce périmètre :
 - mutations scopées, contrôlées par permission, auditées et protégées par
   version lorsque l’objet est modifiable.
 
-## Éléments PHP encore fonctionnellement nécessaires
+## Couverture actuelle
 
-Le retrait global de l’interface PHP n’est pas encore sûr :
+Le retrait fonctionnel de l’ancienne interface PHP est terminé. L’interface
+authentifiée unique est Vue pour :
 
-| Domaine | Couverture Vue actuelle | Fonction encore exclusivement PHP |
-|---|---|---|
-| Facturation | navigation et contacts | documents, émission, avoirs, paiements, allocations, rappels, PDF |
-| Salaires | navigation et taux sociaux | employés, calculs, validation, comptabilisation, paiements, fiches, certificats |
-| Apprentissage | navigation | modèles, groupes, assignations, travail, correction et réinitialisation |
-| Liquidités | dépenses ponctuelles/récurrentes, approbation, pièces et comptabilisation | import bancaire, rapprochement, lettrage et émission de paiements (lot 07) |
-| Comptabilité | journalisation, extraits et plan | certaines vues imprimables et exports de rapports |
+| Domaine | Couverture Vue |
+|---|---|
+| Facturation | échéancier, offres, commandes, achats, ventes, récurrences, contacts, PDF, paiements et allocations |
+| Salaires | employés, contrats, calculs, fiches, annuels, paiements et certificats |
+| Apprentissage | catalogue, exercices, suivi, travail, correction et réinitialisation |
+| Liquidités | dépenses, rapprochement, lettrage, paiements sortants et données de marché |
+| Comptabilité | journalisation, extraits, états, archives, clôture, immobilisations, fiscal et consolidation |
+| Configuration | modules, entité, paiements, référentiels, salaires, audit et parcours initial |
 
-Les services PHP métier et SQLite ne sont pas concernés par ce retrait : ils
-restent les sources de vérité derrière les API.
+Les routes historiques encore publiques ne rendent aucun écran métier
+concurrent : elles redirigent vers `/app`. Les templates PHP conservés servent
+uniquement les frontières publiques ou techniques nécessaires, notamment la
+connexion, la récupération du mot de passe et le shell de chargement.
 
-## Règle de suppression
+## Ce qui reste volontairement en PHP
 
-Pour chaque domaine restant :
+Le retrait concernait le rendu métier, pas le serveur. Les services PHP,
+SQLite, contrôleurs API, permissions, validations, arrondis, exports et
+générateurs PDF/XML restent les sources de vérité. Vue ne reçoit jamais
+d’autorité comptable autonome.
 
-1. exposer les lectures et mutations par un contrat JSON strict ;
-2. construire le parcours Vue sans logique comptable côté navigateur ;
-3. démontrer la parité des permissions, contrôles, arrondis et écritures ;
-4. rediriger temporairement les URL publiques nécessaires ;
-5. supprimer le contrôleur HTML et son gabarit seulement après réussite des
-   tests d’intégration et navigateur.
+Toute nouvelle fonction doit donc :
 
-Supprimer aujourd’hui tous les gabarits et routes PHP ferait perdre des outils
-opérationnels. Leur retrait doit donc suivre les lots métier, et non précéder
-leur remplacement.
+1. exposer un contrat JSON strict et scopé ;
+2. conserver les règles métier et mutations côté PHP ;
+3. utiliser le shell Vue et ses composants partagés ;
+4. démontrer permissions, contrôles et écritures par les tests d’intégration ;
+5. compléter la recette navigateur avant livraison.

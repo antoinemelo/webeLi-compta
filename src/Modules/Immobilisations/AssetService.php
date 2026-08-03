@@ -298,6 +298,43 @@ final class AssetService
         ));
     }
 
+    /** @param list<int> $scheduleIds @return list<int> */
+    public function postDepreciations(
+        int $organisationId,
+        int $dossierId,
+        array $scheduleIds,
+        int $exerciseId,
+        int $journalId,
+        ?int $actorId = null,
+    ): array {
+        $scheduleIds = array_values(array_unique($scheduleIds));
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $scheduleIds,
+            $exerciseId,
+            $journalId,
+            $actorId
+        ): array {
+            $this->assertSingleScheduleGroup(
+                $organisationId,
+                $dossierId,
+                $scheduleIds
+            );
+            return array_map(
+                fn (int $scheduleId): int => $this->postScheduleInside(
+                    $organisationId,
+                    $dossierId,
+                    $scheduleId,
+                    $exerciseId,
+                    $journalId,
+                    $actorId
+                ),
+                $scheduleIds
+            );
+        });
+    }
+
     public function reverseDepreciation(
         int $organisationId,
         int $dossierId,
@@ -361,6 +398,41 @@ final class AssetService
                 ['ecriture_contrepassation_id' => $reversalId]
             );
             return $reversalId;
+        });
+    }
+
+    /** @param list<int> $scheduleIds @return list<int> */
+    public function reverseDepreciations(
+        int $organisationId,
+        int $dossierId,
+        array $scheduleIds,
+        string $date,
+        ?int $actorId = null,
+    ): array {
+        $this->assertDate($date);
+        $scheduleIds = array_values(array_unique($scheduleIds));
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $scheduleIds,
+            $date,
+            $actorId
+        ): array {
+            $this->assertSingleScheduleGroup(
+                $organisationId,
+                $dossierId,
+                $scheduleIds
+            );
+            return array_map(
+                fn (int $scheduleId): int => $this->reverseDepreciation(
+                    $organisationId,
+                    $dossierId,
+                    $scheduleId,
+                    $date,
+                    $actorId
+                ),
+                $scheduleIds
+            );
         });
     }
 
@@ -845,6 +917,10 @@ final class AssetService
             ],
             'categories' => $this->categories($organisationId, $dossierId),
             'assets' => $assetRows,
+            'schedule' => $this->scheduleOverview(
+                $organisationId,
+                $dossierId
+            ),
             'selected_asset' => $selected,
             'reconciliation' => $this->reconciliation(
                 $organisationId,
@@ -861,7 +937,8 @@ final class AssetService
             'definitions' => [
                 'method' =>
                     'Linéaire 30/360 : chaque mois compte 30 jours et chaque '
-                    . 'année 360 jours, sans flottants.',
+                    . 'année 360 jours, sans flottants. Les échéances sont '
+                    . 'regroupées trimestriellement.',
                 'correction' =>
                     'Une fiche sans écriture peut être corrigée. Toute dotation '
                     . 'ou sortie validée est corrigée par contre-passation.',
@@ -954,10 +1031,8 @@ final class AssetService
         $acquisitionDate = (string) ($data['acquisition_date'] ?? '');
         $serviceDate = (string) ($data['in_service_date'] ?? '');
         $value = (int) ($data['acquisition_value_cents'] ?? -1);
-        $residual = (int) ($data['residual_value_cents'] ?? -1);
-        $duration = (int) (
-            $data['duration_months'] ?? $category['duree_defaut_mois']
-        );
+        $residual = (int) ($data['residual_value_cents'] ?? 1);
+        $duration = (int) $category['duree_defaut_mois'];
         if (preg_match('/^[\p{L}\p{N}][\p{L}\p{N} ._\/-]{0,29}$/u', $code) !== 1) {
             throw new AssetException(
                 'Code d’immobilisation invalide : utilisez 1 à 30 lettres, chiffres, espaces, points, tirets, barres obliques ou tirets bas.'
@@ -1257,6 +1332,7 @@ final class AssetService
         $stmt = $this->pdo->prepare(
             'SELECT e.*, i.code, i.libelle AS asset_label,
                     i.reference_piece, i.statut AS asset_status,
+                    i.categorie_id, i.compte_actif_id,
                     i.compte_dotation_id, i.compte_amortissement_id
              FROM echeances_amortissement e
              JOIN immobilisations i ON i.id = e.immobilisation_id
@@ -1268,6 +1344,42 @@ final class AssetService
             throw new AssetException('Échéance absente ou hors du dossier.');
         }
         return $row;
+    }
+
+    /** @param list<int> $scheduleIds */
+    private function assertSingleScheduleGroup(
+        int $organisationId,
+        int $dossierId,
+        array $scheduleIds,
+    ): void {
+        if ($scheduleIds === []) {
+            throw new AssetException('Le groupe d’échéances est vide.');
+        }
+        $reference = null;
+        foreach (array_values(array_unique($scheduleIds)) as $scheduleId) {
+            if (!is_int($scheduleId) || $scheduleId < 1) {
+                throw new AssetException('Identifiant d’échéance invalide.');
+            }
+            $schedule = $this->schedule(
+                $organisationId,
+                $dossierId,
+                $scheduleId
+            );
+            $group = [
+                (int) $schedule['compte_actif_id'],
+                (int) $schedule['categorie_id'],
+                (string) $schedule['date_debut'],
+                (string) $schedule['date_fin'],
+                (string) $schedule['date_comptable'],
+            ];
+            $reference ??= $group;
+            if ($group !== $reference) {
+                throw new AssetException(
+                    'Les échéances doivent partager le compte d’actif, '
+                    . 'la catégorie et la période.'
+                );
+            }
+        }
     }
 
     /** @return array<string,mixed> */
@@ -1331,6 +1443,57 @@ final class AssetService
                 'loss' => (string) $row['compte_perte'],
             ],
             'active' => (int) $row['actif'] === 1,
+            'version' => (int) $row['version'],
+        ], $stmt->fetchAll());
+    }
+
+    /** @return list<array<string,mixed>> */
+    private function scheduleOverview(
+        int $organisationId,
+        int $dossierId,
+    ): array {
+        $stmt = $this->pdo->prepare(
+            'SELECT e.id, e.ordre, e.date_debut, e.date_fin,
+                    e.date_comptable, e.jours, e.montant_centimes,
+                    e.statut, e.ecriture_id, e.ecriture_contrepassation_id,
+                    e.version, i.id AS immobilisation_id,
+                    i.code AS immobilisation_code,
+                    i.libelle AS immobilisation_libelle,
+                    c.id AS categorie_id, c.code AS categorie_code,
+                    c.libelle AS categorie_libelle,
+                    i.compte_actif_id, a.numero AS compte_actif_numero,
+                    a.libelle AS compte_actif_libelle
+             FROM echeances_amortissement e
+             JOIN immobilisations i ON i.id = e.immobilisation_id
+             JOIN categories_immobilisations c ON c.id = i.categorie_id
+             JOIN comptes a ON a.id = i.compte_actif_id
+             WHERE i.organisation_id = ? AND i.dossier_id = ?
+             ORDER BY length(a.numero), a.numero, c.code,
+                      e.date_comptable, i.code, e.ordre'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'order' => (int) $row['ordre'],
+            'asset_id' => (int) $row['immobilisation_id'],
+            'asset_code' => (string) $row['immobilisation_code'],
+            'asset_label' => (string) $row['immobilisation_libelle'],
+            'category_id' => (int) $row['categorie_id'],
+            'category_code' => (string) $row['categorie_code'],
+            'category_label' => (string) $row['categorie_libelle'],
+            'asset_account_id' => (int) $row['compte_actif_id'],
+            'asset_account' => $row['compte_actif_numero'] . ' — '
+                . $row['compte_actif_libelle'],
+            'start_date' => (string) $row['date_debut'],
+            'end_date' => (string) $row['date_fin'],
+            'posting_date' => (string) $row['date_comptable'],
+            'days' => (int) $row['jours'],
+            'amount_cents' => (int) $row['montant_centimes'],
+            'status' => (string) $row['statut'],
+            'entry_id' => $row['ecriture_id'] === null
+                ? null : (int) $row['ecriture_id'],
+            'reversal_entry_id' => $row['ecriture_contrepassation_id'] === null
+                ? null : (int) $row['ecriture_contrepassation_id'],
             'version' => (int) $row['version'],
         ], $stmt->fetchAll());
     }
@@ -1449,6 +1612,35 @@ final class AssetService
                AND e.statut IN (\'validee\', \'contre_passee\')
                AND e.date_comptable <= ?'
         );
+        $accountAssets = $this->pdo->prepare(
+            'SELECT id, code, libelle, reference_piece,
+                    document_acquisition_id, date_acquisition,
+                    date_mise_service, valeur_acquisition_centimes
+             FROM immobilisations
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND compte_actif_id = ? AND compte_amortissement_id = ?
+               AND date_mise_service <= ?
+               AND (date_sortie IS NULL OR date_sortie > ?)
+             ORDER BY code'
+        );
+        $ledgerGrossMovements = $this->pdo->prepare(
+            'SELECT e.id, e.numero, e.date_comptable, e.reference,
+                    e.libelle, e.statut, e.source_type, e.source_id,
+                    j.code AS journal_code,
+                    SUM(l.debit_centimes) AS debit_centimes,
+                    SUM(l.credit_centimes) AS credit_centimes
+             FROM lignes_ecriture l
+             JOIN ecritures e ON e.id = l.ecriture_id
+             JOIN journaux j ON j.id = e.journal_id
+             WHERE e.organisation_id = ? AND e.dossier_id = ?
+               AND l.compte_id = ?
+               AND e.statut IN (\'validee\', \'contre_passee\')
+               AND e.date_comptable <= ?
+             GROUP BY e.id, e.numero, e.date_comptable, e.reference,
+                      e.libelle, e.statut, e.source_type, e.source_id,
+                      j.code
+             ORDER BY e.date_comptable, e.id'
+        );
         $rows = [];
         foreach ($stmt->fetchAll() as $row) {
             $ledger->execute([
@@ -1463,6 +1655,20 @@ final class AssetService
             $registerAccumulated = (int) $row['registre_amortissement'];
             $ledgerGross = (int) ($balances['actif'] ?? 0);
             $ledgerAccumulated = (int) ($balances['amortissement'] ?? 0);
+            $accountAssets->execute([
+                $organisationId,
+                $dossierId,
+                (int) $row['compte_actif_id'],
+                (int) $row['compte_amortissement_id'],
+                $asOfDate,
+                $asOfDate,
+            ]);
+            $ledgerGrossMovements->execute([
+                $organisationId,
+                $dossierId,
+                (int) $row['compte_actif_id'],
+                $asOfDate,
+            ]);
             $rows[] = [
                 'asset_account_id' => (int) $row['compte_actif_id'],
                 'asset_account' => $row['actif_numero'] . ' — '
@@ -1471,6 +1677,44 @@ final class AssetService
                     (int) $row['compte_amortissement_id'],
                 'accumulated_account' => $row['amort_numero'] . ' — '
                     . $row['amort_libelle'],
+                'assets' => array_map(
+                    static fn (array $asset): array => [
+                        'id' => (int) $asset['id'],
+                        'code' => (string) $asset['code'],
+                        'label' => (string) $asset['libelle'],
+                        'acquisition_reference' =>
+                            (string) $asset['reference_piece'],
+                        'acquisition_document_id' =>
+                            $asset['document_acquisition_id'] === null
+                                ? null
+                                : (int) $asset['document_acquisition_id'],
+                        'acquisition_date' =>
+                            (string) $asset['date_acquisition'],
+                        'in_service_date' =>
+                            (string) $asset['date_mise_service'],
+                        'acquisition_value_cents' =>
+                            (int) $asset['valeur_acquisition_centimes'],
+                    ],
+                    $accountAssets->fetchAll()
+                ),
+                'ledger_gross_movements' => array_map(
+                    static fn (array $movement): array => [
+                        'entry_id' => (int) $movement['id'],
+                        'entry_number' => (string) $movement['numero'],
+                        'date' => (string) $movement['date_comptable'],
+                        'journal' => (string) $movement['journal_code'],
+                        'reference' => (string) $movement['reference'],
+                        'label' => (string) $movement['libelle'],
+                        'status' => (string) $movement['statut'],
+                        'source_type' => (string) $movement['source_type'],
+                        'source_id' => (string) $movement['source_id'],
+                        'debit_cents' => (int) $movement['debit_centimes'],
+                        'credit_cents' => (int) $movement['credit_centimes'],
+                        'net_cents' => (int) $movement['debit_centimes']
+                            - (int) $movement['credit_centimes'],
+                    ],
+                    $ledgerGrossMovements->fetchAll()
+                ),
                 'register_gross_cents' => $registerGross,
                 'ledger_gross_cents' => $ledgerGross,
                 'gross_difference_cents' => $ledgerGross - $registerGross,
@@ -1694,8 +1938,18 @@ final class AssetService
         $allocated = 0;
         $order = $firstOrder;
         while ($current <= $end) {
-            $monthEnd = $current->modify('last day of this month');
-            $segmentEnd = $monthEnd < $end ? $monthEnd : $end;
+            $quarterEndMonth = intdiv(
+                (int) $current->format('n') - 1,
+                3
+            ) * 3 + 3;
+            $quarterEnd = $current
+                ->setDate(
+                    (int) $current->format('Y'),
+                    $quarterEndMonth,
+                    1
+                )
+                ->modify('last day of this month');
+            $segmentEnd = $quarterEnd < $end ? $quarterEnd : $end;
             $days = self::conventionDays(
                 $current,
                 $segmentEnd->modify('+1 day')

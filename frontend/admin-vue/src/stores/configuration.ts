@@ -123,6 +123,15 @@ export const useConfigurationStore = defineStore('configuration', {
         valid_from: validFrom
       });
     },
+    async savePaymentAccounting(
+      trigger: 'premier_lettrage' | 'lettrage_complet',
+      version: number
+    ): Promise<void> {
+      await this.mutate('/configuration/payment-accounting', {
+        trigger,
+        version
+      });
+    },
     async clearAudit(): Promise<void> {
       await this.mutate('/configuration/audit/clear', {});
     },

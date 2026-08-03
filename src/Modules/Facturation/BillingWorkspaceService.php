@@ -123,7 +123,7 @@ final class BillingWorkspaceService
                 'prepayments' =>
                     'Les paiements non alloués réduisent le solde net, mais restent séparés des tranches d’âge.',
                 'immutability' =>
-                    'Un document émis ou comptabilisé est immuable et se corrige par avoir.',
+                    'Un document émis ou comptabilisé est immuable ; il se corrige par avoir ou par extourne de son solde ouvert.',
             ],
         ];
     }
@@ -282,27 +282,28 @@ final class BillingWorkspaceService
                 'reminder_count' => (int) $row['reminder_count'],
                 'entry_id' => $row['ecriture_id'] === null
                     ? null : (int) $row['ecriture_id'],
+                'reversal_entry_id' => $row['ecriture_annulation_id'] === null
+                    ? null : (int) $row['ecriture_annulation_id'],
                 'origin_document_id' => $row['document_origine_id'] === null
                     ? null : (int) $row['document_origine_id'],
                 'scor_reference' => (string) $row['reference_scor'],
                 'has_archived_pdf' => (string) $row['pdf_empreinte_sha256'] !== '',
-                'lines' => $row['statut'] !== 'brouillon'
-                    ? []
-                    : array_map(
-                        static fn (array $line): array => [
-                            'id' => (int) $line['id'],
-                            'label' => (string) $line['libelle'],
-                            'quantity_milli' => (int) $line['quantite_milli'],
-                            'unit_price_cents' => (int) $line['prix_unitaire_centimes'],
-                            'input_mode' => (string) $line['mode_saisie'],
-                            'account_id' => (int) $line['compte_id'],
-                            'vat_code_id' => (int) $line['code_tva_id'],
-                            'net_cents' => (int) $line['base_nette_centimes'],
-                            'vat_cents' => (int) $line['tva_centimes'],
-                            'gross_cents' => (int) $line['total_brut_centimes'],
-                        ],
-                        $this->billing->lines((int) $row['id'])
-                    ),
+                'lines' => array_map(
+                    static fn (array $line): array => [
+                        'id' => (int) $line['id'],
+                        'label' => (string) $line['libelle'],
+                        'quantity_milli' => (int) $line['quantite_milli'],
+                        'unit_price_cents' => (int) $line['prix_unitaire_centimes'],
+                        'input_mode' => (string) $line['mode_saisie'],
+                        'account_id' => (int) $line['compte_id'],
+                        'vat_code_id' => (int) ($line['code_tva_id'] ?? 0),
+                        'net_cents' => (int) $line['base_nette_centimes'],
+                        'vat_cents' => (int) $line['tva_centimes'],
+                        'deductible_vat_cents' => (int) $line['tva_deductible_centimes'],
+                        'gross_cents' => (int) $line['total_brut_centimes'],
+                    ],
+                    $this->billing->lines((int) $row['id'])
+                ),
             ];
         }
         return $items;
@@ -350,7 +351,8 @@ final class BillingWorkspaceService
             return 'brouillon';
         }
         if ($row['statut'] === 'annule') {
-            return 'annule';
+            return $row['ecriture_annulation_id'] === null
+                ? 'annule' : 'solde';
         }
         if ($open === 0) {
             return 'solde';
@@ -397,6 +399,35 @@ final class BillingWorkspaceService
                     p.montant_base_centimes AS amount_base_cents,
                     p.devise_base AS base_currency,
                     p.reference, p.statut AS status,
+                    CASE WHEN p.compte_collectif_id IS NULL THEN 1
+                         WHEN NOT EXISTS (
+                           SELECT 1 FROM comptes_tresorerie t
+                           WHERE t.organisation_id = p.organisation_id
+                             AND t.dossier_id = p.dossier_id
+                             AND t.compte_comptable_id = p.compte_collectif_id
+                         ) AND EXISTS (
+                           SELECT 1 FROM comptes ca
+                           WHERE ca.id = p.compte_collectif_id
+                             AND ca.organisation_id = p.organisation_id
+                             AND ca.dossier_id = p.dossier_id
+                             AND ca.actif = 1 AND ca.imputable = 1
+                             AND ca.type = CASE p.sens
+                               WHEN 'encaissement' THEN 'actif' ELSE 'passif' END
+                             AND (
+                               ca.marque = CASE p.sens
+                                 WHEN 'encaissement' THEN 'client_collectif'
+                                 ELSE 'fournisseur_collectif' END
+                               OR EXISTS (
+                                 SELECT 1 FROM documents_financiers df
+                                 WHERE df.organisation_id = p.organisation_id
+                                   AND df.dossier_id = p.dossier_id
+                                   AND df.compte_collectif_id = ca.id
+                                   AND df.type = CASE p.sens
+                                     WHEN 'encaissement' THEN 'facture_client'
+                                     ELSE 'facture_fournisseur' END
+                               )
+                             )
+                         ) THEN 1 ELSE 0 END AS matching_eligible,
                     COALESCE(NULLIF(c.raison_sociale, ''),
                              trim(c.prenom || ' ' || c.nom)) AS contact,
                     COALESCE((
@@ -434,6 +465,7 @@ final class BillingWorkspaceService
                 'currency' => (string) $row['currency'],
                 'reference' => (string) $row['reference'],
                 'status' => (string) $row['status'],
+                'matching_eligible' => (int) $row['matching_eligible'] === 1,
             ];
         }, $stmt->fetchAll());
     }
@@ -676,6 +708,14 @@ final class BillingWorkspaceService
                 'number' => (string) $row['numero'],
                 'label' => (string) $row['libelle'],
             ], $catalog['accounts']),
+            'treasury_accounts' => array_map(static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'ledger_account_id' => (int) $row['compte_comptable_id'],
+                'ledger_number' => (string) $row['compte_numero'],
+                'label' => (string) $row['libelle'],
+                'type' => (string) $row['type'],
+                'currency' => (string) $row['monnaie'],
+            ], $catalog['treasury_accounts']),
             'vat_codes' => array_map(static fn (array $row): array => [
                 'id' => (int) $row['id'],
                 'code' => (string) $row['code'],

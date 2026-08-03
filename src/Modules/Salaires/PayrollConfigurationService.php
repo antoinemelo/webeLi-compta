@@ -155,6 +155,24 @@ final class PayrollConfigurationService
             $values[$field] = $value;
         }
         $existing = $this->exactRates($organisationId, $dossierId, $year);
+        if ($existing !== null) {
+            $sameRates = true;
+            foreach (self::RATE_FIELDS as $field) {
+                if ((int) $existing[$field] !== $values[$field]) {
+                    $sameRates = false;
+                    break;
+                }
+            }
+            if (
+                $sameRates
+                && (string) $existing['source']
+                    === trim((string) ($data['source'] ?? ''))
+                && (string) $existing['verifie_le']
+                    === trim((string) ($data['verifie_le'] ?? ''))
+            ) {
+                return (int) $existing['id'];
+            }
+        }
         if ($existing !== null && $this->yearHasFrozenPayroll($dossierId, $year)) {
             foreach (self::RATE_FIELDS as $field) {
                 if ((int) $existing[$field] !== $values[$field]) {
@@ -875,10 +893,13 @@ final class PayrollConfigurationService
         );
         $contracts->execute([$organisationId, $dossierId]);
         $treasury = $this->pdo->prepare(
-            "SELECT id, numero, libelle FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ?
-               AND actif = 1 AND imputable = 1 AND type = 'actif'
-             ORDER BY numero"
+            "SELECT t.id, t.compte_comptable_id AS ledger_account_id,
+                    c.numero, t.libelle, t.type, t.monnaie
+             FROM comptes_tresorerie t
+             JOIN comptes c ON c.id = t.compte_comptable_id
+             WHERE t.organisation_id = ? AND t.dossier_id = ?
+               AND t.actif = 1 AND c.actif = 1 AND c.imputable = 1
+             ORDER BY t.libelle COLLATE NOCASE, t.id"
         );
         $treasury->execute([$organisationId, $dossierId]);
         return [

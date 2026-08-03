@@ -2,7 +2,8 @@
 
 Le point d’entrée est `tools/python/compta.py`. Lancé sans argument, il affiche
 un menu qui donne accès au diagnostic des extensions PHP, à la qualification,
-à la création d’une base, à la publication Git et au déploiement :
+à la création ou restauration d’une base, à la création directe d’une
+photographie SQLite autonome, à la publication Git et au déploiement :
 
 ```bash
 python3 tools/python/compta.py
@@ -52,7 +53,30 @@ utilisateur, organisation ou dossier.
 Une base existante n’est jamais écrasée implicitement. Avec `--replace`, le
 script crée d’abord une copie SQLite cohérente dans `storage/backups/`, incluant
 les données encore présentes dans un éventuel WAL. La copie est contrôlée avant
-le remplacement et son chemin est affiché.
+le remplacement et son chemin est affiché. La sauvegarde est normalisée en mode
+`DELETE` : au repos, elle est autonome et peut être copiée comme un fichier
+`.sqlite` unique, sans fichier `-wal` ou `-shm` associé. Lors de sa prochaine
+ouverture par COMPTA, l’application réactive automatiquement le mode WAL.
+
+Pour figer à tout moment une base en cours d’utilisation dans un fichier
+portable, y compris lorsque ses dernières écritures se trouvent encore dans le
+WAL, utiliser `db-backup`. Le premier appel simule l’opération ; `--apply` crée
+et contrôle réellement le fichier :
+
+```bash
+python3 tools/python/compta.py db-backup \
+  --source storage/database/app.sqlite \
+  --output storage/backups/compta-configuree.sqlite
+python3 tools/python/compta.py db-backup \
+  --source storage/database/app.sqlite \
+  --output storage/backups/compta-configuree.sqlite \
+  --apply
+```
+
+Sans `--output`, un nom horodaté est généré dans `storage/backups/`. La commande
+refuse d’écraser un fichier existant, compare les empreintes du contenu métier
+et produit une destination en mode `DELETE`, sans dépendance `-wal` ou `-shm`.
+La base source n’est ni arrêtée ni modifiée.
 
 Pour restaurer une sauvegarde, appliquer ensuite automatiquement les migrations
 manquantes et contrôler l’intégrité :
@@ -98,6 +122,17 @@ python3 tools/python/compta.py git-publish \
 La prévisualisation énumère les fichiers. Les bases, journaux, secrets et
 configurations locales sont refusés. La commande indexe ensuite le périmètre,
 vérifie le diff, crée le commit et pousse `HEAD` vers `origin/main`.
+
+Pour que les commandes Git usuelles affichent ensuite l’écart avec le dépôt
+distant, configurer une fois la branche de suivi :
+
+```bash
+git branch --set-upstream-to=origin/main main
+```
+
+Après cette opération, `git status`, `git pull` et `git push` utilisent
+automatiquement `origin/main`. Cette configuration appartient au dépôt local ;
+elle ne crée aucun commit et ne se pousse pas.
 
 ## Déployer uniquement le delta applicatif
 

@@ -58,6 +58,13 @@ appliquées ensemble par le bouton **Enregistrer** de la barre d’onglets. Une
 rubrique encore liée à des enfants ou à des comptes doit d’abord être vidée
 avant son retrait.
 
+Chaque rubrique possède aussi l’option **Sous-total dans les états**. Quand
+elle est activée, le bilan ou le compte de résultat insère, après le dernier
+compte de la branche, une ligne totalisant tous les comptes descendants.
+Plusieurs niveaux peuvent être sélectionnés simultanément — par exemple
+`100 Trésorerie` et `10 Actifs circulants` — sans modifier ni doubler les
+totaux comptables.
+
 ## 3. Comptes
 
 Le numéro est unique dans un dossier et comporte exactement quatre chiffres.
@@ -109,8 +116,10 @@ le moteur.
 
 **Exporter CSV** produit un fichier UTF-8 séparé par des points-virgules. Il
 contient les types, les règles de sens, les quatre niveaux de rubriques et les
-comptes actifs. Les cellules susceptibles d’être interprétées comme des
-formules par un tableur sont neutralisées.
+comptes actifs. La colonne `sous_total` (`0` ou `1`) conserve le choix de rendu
+des rubriques. Les anciens exports sans cette colonne restent acceptés et ne
+remplacent pas les choix déjà enregistrés. Les cellules susceptibles d’être
+interprétées comme des formules par un tableur sont neutralisées.
 
 Pour réimporter un fichier :
 

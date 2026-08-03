@@ -74,7 +74,8 @@ final class VatPostingService
             $amountCents,
             $inputMode,
             $deductionBp,
-            $reason
+            $reason,
+            purchaseDocument: true
         );
         $deductible = (int) $quote['deductible_vat_cents'];
         $expense = (int) $quote['gross_cents'] - $deductible;

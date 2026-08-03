@@ -73,12 +73,22 @@ final class SuggestionService
         $amount = (int) $row['montant_centimes'];
         $lines = $amount > 0
             ? [
-                ['compte_id' => (int) $row['compte_comptable_id'], 'debit_centimes' => $amount],
+                [
+                    'compte_id' => (int) $row['compte_comptable_id'],
+                    'compte_tresorerie_operationnel_id' =>
+                        (int) $row['compte_tresorerie_id'],
+                    'debit_centimes' => $amount,
+                ],
                 ['compte_id' => (int) $row['compte_contrepartie_id'], 'credit_centimes' => $amount],
             ]
             : [
                 ['compte_id' => (int) $row['compte_contrepartie_id'], 'debit_centimes' => abs($amount)],
-                ['compte_id' => (int) $row['compte_comptable_id'], 'credit_centimes' => abs($amount)],
+                [
+                    'compte_id' => (int) $row['compte_comptable_id'],
+                    'compte_tresorerie_operationnel_id' =>
+                        (int) $row['compte_tresorerie_id'],
+                    'credit_centimes' => abs($amount),
+                ],
             ];
         $this->pdo->beginTransaction();
         try {

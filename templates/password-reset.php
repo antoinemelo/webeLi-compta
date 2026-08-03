@@ -24,7 +24,8 @@ $hasError = isset($error) && trim((string) $error) !== '';
         </div>
       </div>
       <div class="col-lg-5 col-xl-4">
-        <section class="card login-card shadow-lg" aria-labelledby="new-password-title">
+        <section class="card login-card shadow-lg" id="password-reset-form"
+          aria-labelledby="new-password-title">
           <div class="card-body p-4 p-sm-5">
             <p class="text-uppercase small fw-bold text-secondary mb-2">
               Lien à usage unique

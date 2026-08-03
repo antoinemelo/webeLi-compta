@@ -1,0 +1,151 @@
+{
+  "data": {
+    "visible": true,
+    "cancelled": false,
+    "required_complete": false,
+    "finished": false,
+    "progress": {
+      "completed": 2,
+      "total": 11
+    },
+    "steps": [
+      {
+        "code": "identity",
+        "title": "Informations de l’organisation",
+        "description": "Ajoutez une identité juridique datée et sa source.",
+        "path": "/organisations-dossiers",
+        "required": true,
+        "applicable": true,
+        "completed": true,
+        "ready": true,
+        "confirmable": false,
+        "action_label": "Ouvrir les informations"
+      },
+      {
+        "code": "exercises",
+        "title": "Exercices et périodes",
+        "description": "Contrôlez que chaque exercice est entièrement couvert par ses périodes, puis validez.",
+        "path": "/configuration/referentiels/exercises",
+        "required": true,
+        "applicable": true,
+        "completed": false,
+        "ready": true,
+        "confirmable": true,
+        "action_label": "Valider les exercices et périodes"
+      },
+      {
+        "code": "opening",
+        "title": "Plan comptable et ouverture",
+        "description": "Aucun mouvement n’existe encore : vous pouvez confirmer une ouverture à zéro.",
+        "path": "/configuration/referentiels/plan?section=opening",
+        "required": true,
+        "applicable": true,
+        "completed": false,
+        "ready": true,
+        "confirmable": true,
+        "action_label": "Vérifier l’ouverture à zéro"
+      },
+      {
+        "code": "treasury",
+        "title": "Comptes de trésorerie",
+        "description": "Ajoutez vos caisses et comptes bancaires si vous les utilisez.",
+        "path": "/configuration/referentiels/treasury",
+        "required": false,
+        "applicable": true,
+        "completed": false,
+        "ready": true,
+        "confirmable": false,
+        "action_label": "Configurer la trésorerie"
+      },
+      {
+        "code": "billing_account",
+        "title": "Compte de facturation",
+        "description": "Choisissez, si nécessaire, le compte bancaire dont l’IBAN figurera sur les factures.",
+        "path": "/configuration",
+        "required": false,
+        "applicable": true,
+        "completed": false,
+        "ready": true,
+        "confirmable": false,
+        "action_label": "Configurer l’entité"
+      },
+      {
+        "code": "vat",
+        "title": "Régime TVA",
+        "description": "Vérifiez le statut, la méthode, la périodicité et la date d’effet du régime TVA.",
+        "path": "/configuration/referentiels/vat",
+        "required": true,
+        "applicable": true,
+        "completed": false,
+        "ready": true,
+        "confirmable": true,
+        "action_label": "Configurer le régime TVA"
+      },
+      {
+        "code": "payroll_rates",
+        "title": "Taux annuels des charges sociales",
+        "description": "Importez ou saisissez les taux utiles aux salaires.",
+        "path": "/configuration/referentiels/payroll",
+        "required": false,
+        "applicable": true,
+        "completed": false,
+        "ready": true,
+        "confirmable": false,
+        "action_label": "Configurer les taux"
+      },
+      {
+        "code": "payroll_settings",
+        "title": "Paramètres salariaux",
+        "description": "Validez les heures hebdomadaires et l’affectation des comptes.",
+        "path": "/configuration/salaires",
+        "required": false,
+        "applicable": true,
+        "completed": false,
+        "ready": true,
+        "confirmable": false,
+        "action_label": "Configurer les salaires"
+      },
+      {
+        "code": "payment_defaults",
+        "title": "Conditions de paiement",
+        "description": "Définissez une condition active par défaut pour les clients et pour les fournisseurs.",
+        "path": "/configuration/paiements",
+        "required": true,
+        "applicable": true,
+        "completed": false,
+        "ready": false,
+        "confirmable": false,
+        "action_label": "Définir les conditions"
+      },
+      {
+        "code": "currencies",
+        "title": "Devises autorisées",
+        "description": "Ajoutez les devises utilisées par le dossier ; la devise de base est déjà disponible.",
+        "path": "/configuration/referentiels/currencies",
+        "required": false,
+        "applicable": true,
+        "completed": true,
+        "ready": true,
+        "confirmable": false,
+        "action_label": "Configurer les devises"
+      },
+      {
+        "code": "accounting",
+        "title": "Commencer à comptabiliser",
+        "description": "La configuration obligatoire est terminée. Vous pouvez ouvrir le journal comptable.",
+        "path": "/compta",
+        "required": true,
+        "applicable": true,
+        "completed": false,
+        "ready": false,
+        "confirmable": false,
+        "action_label": "Terminer et ouvrir la comptabilité"
+      }
+    ]
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-setup-guide-0001"
+  },
+  "errors": []
+}

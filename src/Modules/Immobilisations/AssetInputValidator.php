@@ -141,7 +141,7 @@ final class AssetInputValidator
             1_000_000_000_000
         );
         $residual = $this->boundedInteger(
-            $data['residual_value_cents'] ?? 0,
+            $data['residual_value_cents'] ?? 1,
             'residual_value_cents',
             0,
             999_999_999_999
@@ -177,27 +177,26 @@ final class AssetInputValidator
             'in_service_date' => $service,
             'acquisition_value_cents' => $value,
             'residual_value_cents' => $residual,
-            'duration_months' => $this->boundedInteger(
-                $data['duration_months'] ?? null,
-                'duration_months',
-                1,
-                1200
-            ),
+            'duration_months' => array_key_exists('duration_months', $data)
+                ? $this->boundedInteger(
+                    $data['duration_months'],
+                    'duration_months',
+                    1,
+                    1200
+                )
+                : null,
             'note' => trim((string) ($data['note'] ?? '')),
         ];
     }
 
-    /** @return array{schedule_id:int,exercise_id:int,journal_id:int} */
+    /** @return array{schedule_ids:list<int>,exercise_id:int,journal_id:int} */
     public function posting(Request $request): array
     {
         $data = $this->only($request, [
-            'schedule_id', 'exercise_id', 'journal_id',
+            'schedule_id', 'schedule_ids', 'exercise_id', 'journal_id',
         ]);
         return [
-            'schedule_id' => $this->positiveInteger(
-                $data['schedule_id'] ?? null,
-                'schedule_id'
-            ),
+            'schedule_ids' => $this->scheduleIdentifiers($data),
             'exercise_id' => $this->positiveInteger(
                 $data['exercise_id'] ?? null,
                 'exercise_id'
@@ -209,15 +208,12 @@ final class AssetInputValidator
         ];
     }
 
-    /** @return array{schedule_id:int,date:string} */
+    /** @return array{schedule_ids:list<int>,date:string} */
     public function reversal(Request $request): array
     {
-        $data = $this->only($request, ['schedule_id', 'date']);
+        $data = $this->only($request, ['schedule_id', 'schedule_ids', 'date']);
         return [
-            'schedule_id' => $this->positiveInteger(
-                $data['schedule_id'] ?? null,
-                'schedule_id'
-            ),
+            'schedule_ids' => $this->scheduleIdentifiers($data),
             'date' => $this->date($data['date'] ?? null, 'date'),
         ];
     }
@@ -295,6 +291,34 @@ final class AssetInputValidator
             return null;
         }
         return $this->positiveInteger($value, $field);
+    }
+
+    /** @param array<string,mixed> $data @return list<int> */
+    private function scheduleIdentifiers(array $data): array
+    {
+        if (array_key_exists('schedule_ids', $data)) {
+            if (
+                !is_array($data['schedule_ids'])
+                || $data['schedule_ids'] === []
+                || array_is_list($data['schedule_ids']) === false
+            ) {
+                throw ApiException::validation([
+                    'schedule_ids' => ['Liste non vide d’identifiants requise.'],
+                ]);
+            }
+            $ids = array_map(
+                fn (mixed $id): int => $this->positiveInteger(
+                    $id,
+                    'schedule_ids'
+                ),
+                $data['schedule_ids']
+            );
+            return array_values(array_unique($ids));
+        }
+        return [$this->positiveInteger(
+            $data['schedule_id'] ?? null,
+            'schedule_id'
+        )];
     }
 
     private function positiveInteger(mixed $value, string $field): int

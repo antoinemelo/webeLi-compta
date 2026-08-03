@@ -1,0 +1,15 @@
+{
+  "data": {
+    "email": "admin@example.test",
+    "mode": "totp",
+    "mfa_active_at": "2026-07-29T18:30:00+02:00",
+    "recovery_codes_remaining": 7,
+    "totp_available": true,
+    "email_available": true
+  },
+  "meta": {
+    "contract_version": "compta-api-v1",
+    "correlation_id": "example-security-0001"
+  },
+  "errors": []
+}

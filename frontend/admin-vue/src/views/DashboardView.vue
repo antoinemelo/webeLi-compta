@@ -29,7 +29,7 @@ const selectedExercise = computed(() =>
 const treasuryRows = computed<Array<Record<string, unknown>>>(() =>
   (projection.value?.treasury.accounts ?? []).map((account) => ({
     id: account.id,
-    account: `${account.ledger_account.number} — ${account.label}`,
+    account: account.label,
     accounting: formatMoney(account.accounting_balance_cents, currency.value),
     bank: account.bank_balance_cents === null
       ? 'Non importé'
@@ -292,7 +292,7 @@ async function refresh(): Promise<void> {
             Non alloué :
             {{ formatMoney(projection.operations.payments_to_process.amount_cents, currency) }}
           </small>
-          <RouterLink to="/facturation/paiements">Ouvrir le lettrage</RouterLink>
+          <RouterLink to="/liquidites/lettrage">Ouvrir le lettrage</RouterLink>
         </article>
       </section>
 

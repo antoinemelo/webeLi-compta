@@ -67,11 +67,13 @@ final class InternalTransferService
             'lignes' => [
                 [
                     'compte_id' => (int) $accounts[$destinationTreasuryId]['compte_comptable_id'],
+                    'compte_tresorerie_operationnel_id' => $destinationTreasuryId,
                     'libelle' => trim($label),
                     'debit_centimes' => $amountCents,
                 ],
                 [
                     'compte_id' => (int) $accounts[$sourceTreasuryId]['compte_comptable_id'],
+                    'compte_tresorerie_operationnel_id' => $sourceTreasuryId,
                     'libelle' => trim($label),
                     'credit_centimes' => $amountCents,
                 ],

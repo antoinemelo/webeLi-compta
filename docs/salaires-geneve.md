@@ -43,6 +43,10 @@ qu’une fiche existe, l’employé est conservé ; dès qu’un contrat figure 
 snapshot de fiche, il peut être désactivé mais plus supprimé. Les snapshots
 historiques ne sont jamais réécrits par ces modifications.
 
+L’**Historique des contrats** s’ouvre dans une fenêtre modale propre à
+l’employé choisi. Les taux LPP employé et employeur peuvent être surchargés sur
+la fiche de l’employé ; une valeur vide conserve le taux annuel du dossier.
+
 Avant validation, un brouillon peut être repris dans le formulaire, recalculé
 avec contrôle de version ou supprimé. Son employé et sa période restent fixes ;
 un changement de périmètre exige de supprimer le brouillon puis d’en créer un

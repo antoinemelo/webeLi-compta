@@ -170,6 +170,12 @@ final class ApiRouteRegistry
             $this->add(
                 $router,
                 'POST',
+                '/api/v1/configuration/payment-accounting',
+                $this->configuration->updatePaymentAccounting(...)
+            );
+            $this->add(
+                $router,
+                'POST',
                 '/api/v1/configuration/audit/clear',
                 $this->configuration->clearAudit(...)
             );
@@ -503,6 +509,12 @@ final class ApiRouteRegistry
             $this->add(
                 $router,
                 'POST',
+                '/api/v1/liquidites/depenses/modifier',
+                $this->expenses->update(...)
+            );
+            $this->add(
+                $router,
+                'POST',
                 '/api/v1/liquidites/depenses/soumettre',
                 $this->expenses->submit(...)
             );
@@ -511,6 +523,12 @@ final class ApiRouteRegistry
                 'POST',
                 '/api/v1/liquidites/depenses/approuver',
                 $this->expenses->approve(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/liquidites/depenses/refuser',
+                $this->expenses->reject(...)
             );
             $this->add(
                 $router,
@@ -568,7 +586,10 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/facturation/documents/emettre', $this->billing->issueDocument(...));
             $this->add($router, 'POST', '/api/v1/facturation/documents/comptabiliser', $this->billing->postDocument(...));
             $this->add($router, 'POST', '/api/v1/facturation/documents/avoirs', $this->billing->createCredit(...));
+            $this->add($router, 'POST', '/api/v1/facturation/documents/extourner', $this->billing->reverseDocument(...));
             $this->add($router, 'POST', '/api/v1/facturation/documents/pdf', $this->billing->archivePdf(...));
+            $this->add($router, 'POST', '/api/v1/facturation/commerciaux/pdf', $this->billing->commercialPdf(...));
+            $this->add($router, 'POST', '/api/v1/facturation/paiements/pdf', $this->billing->paymentPdf(...));
             $this->add($router, 'POST', '/api/v1/facturation/contacts', $this->billing->createContact(...));
             $this->add($router, 'POST', '/api/v1/facturation/contacts/modifier', $this->billing->updateContact(...));
             $this->add($router, 'POST', '/api/v1/facturation/contacts/supprimer', $this->billing->deleteContact(...));

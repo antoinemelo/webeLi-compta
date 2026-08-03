@@ -31,6 +31,10 @@ final class ConfigurationService
                 $organisationId,
                 $dossierId
             ),
+            'payment_accounting' => $this->paymentAccounting(
+                $organisationId,
+                $dossierId
+            ),
             'audit' => $this->recentAudit($organisationId, $dossierId),
             'definitions' => [
                 'contacts' => 'Le registre unique reste celui de Facturation.',
@@ -726,6 +730,79 @@ final class ConfigurationService
         });
     }
 
+    /** @return array{trigger:string,version:int} */
+    public function setPaymentAccounting(
+        int $organisationId,
+        int $dossierId,
+        string $trigger,
+        int $version,
+        int $actorId,
+    ): array {
+        if (!in_array($trigger, ['premier_lettrage', 'lettrage_complet'], true)) {
+            throw new ConfigurationException(
+                'Déclencheur de comptabilisation des paiements invalide.'
+            );
+        }
+        return $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $trigger,
+            $version,
+            $actorId
+        ): array {
+            $this->assertScope($organisationId, $dossierId);
+            $existing = $this->pdo->prepare(
+                'SELECT version FROM politiques_comptabilisation_paiements
+                 WHERE organisation_id = ? AND dossier_id = ?'
+            );
+            $existing->execute([$organisationId, $dossierId]);
+            $current = $existing->fetchColumn();
+            if ($current === false) {
+                if ($version !== 0) {
+                    throw new ConfigurationException(
+                        'La politique de paiement a été modifiée par un autre utilisateur.'
+                    );
+                }
+                $this->pdo->prepare(
+                    'INSERT INTO politiques_comptabilisation_paiements
+                     (organisation_id, dossier_id, declencheur, cree_par)
+                     VALUES (?, ?, ?, ?)'
+                )->execute([$organisationId, $dossierId, $trigger, $actorId]);
+                $newVersion = 1;
+            } else {
+                $update = $this->pdo->prepare(
+                    "UPDATE politiques_comptabilisation_paiements
+                     SET declencheur = ?, modifie_le = datetime('now'),
+                         modifie_par = ?, version = version + 1
+                     WHERE organisation_id = ? AND dossier_id = ? AND version = ?"
+                );
+                $update->execute([
+                    $trigger,
+                    $actorId,
+                    $organisationId,
+                    $dossierId,
+                    $version,
+                ]);
+                if ($update->rowCount() !== 1) {
+                    throw new ConfigurationException(
+                        'La politique de paiement a été modifiée par un autre utilisateur.'
+                    );
+                }
+                $newVersion = $version + 1;
+            }
+            $this->audit->log(
+                'configuration.comptabilisation_paiements_modifiee',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'politique_comptabilisation_paiements',
+                (string) $dossierId,
+                ['declencheur' => $trigger]
+            );
+            return ['trigger' => $trigger, 'version' => $newVersion];
+        });
+    }
+
     /** @return array<string,mixed> */
     private function identity(int $organisationId, int $dossierId): array
     {
@@ -860,6 +937,24 @@ final class ConfigurationService
                 && ($row['date_fin'] === null
                     || (string) $row['date_fin'] >= date('Y-m-d')),
         ], $stmt->fetchAll());
+    }
+
+    /** @return array{trigger:string,version:int} */
+    private function paymentAccounting(int $organisationId, int $dossierId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT declencheur, version
+             FROM politiques_comptabilisation_paiements
+             WHERE organisation_id = ? AND dossier_id = ?'
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        $row = $stmt->fetch();
+        return $row === false
+            ? ['trigger' => 'premier_lettrage', 'version' => 0]
+            : [
+                'trigger' => (string) $row['declencheur'],
+                'version' => (int) $row['version'],
+            ];
     }
 
     /** @return list<array<string,mixed>> */

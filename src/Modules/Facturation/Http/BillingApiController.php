@@ -288,11 +288,28 @@ final class BillingApiController
         ], 201);
     }
 
+    public function reverseDocument(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.post');
+        $data = $this->validator->reversal($request);
+        return $this->execute($request, fn (): array => [
+            'entry_id' => $this->billing->reverseInvoice(
+                $organisationId,
+                $dossierId,
+                $data['document_id'],
+                $data['version'],
+                $data['date'],
+                $userId
+            ),
+        ]);
+    }
+
     public function archivePdf(Request $request): Response
     {
-        [, $organisationId, $dossierId] = $this->scope('facturation.issue');
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.issue');
         $documentId = $this->validator->identifier($request, 'document_id');
         return $this->execute($request, function () use (
+            $userId,
             $organisationId,
             $dossierId,
             $documentId
@@ -301,20 +318,85 @@ final class BillingApiController
                 $organisationId,
                 $dossierId,
                 $documentId,
-                $this->billing->creditorProfile($organisationId, $dossierId)
+                $this->billing->creditorProfile($organisationId, $dossierId),
+                $userId
             );
             $document = $this->billing->document(
                 $organisationId,
                 $dossierId,
                 $documentId
             );
+            $qrExpected = (string) $document['type'] === 'facture_client'
+                && (int) $document['total_brut_centimes'] > 0;
             return [
                 'filename' => ((string) $document['numero'] ?: 'facture') . '.pdf',
                 'content_base64' => base64_encode($bytes),
                 'qr_included' => (string) $document['qr_payload'] !== '',
-                'warning' => (string) $document['qr_payload'] === ''
+                'warning' => $qrExpected && (string) $document['qr_payload'] === ''
                     ? 'PDF généré sans section Swiss QR. Complétez l’identité, l’IBAN de facturation et l’adresse du client pour l’ajouter.'
                     : '',
+            ];
+        });
+    }
+
+    public function commercialPdf(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.view');
+        $documentId = $this->validator->identifier($request, 'document_id');
+        return $this->execute($request, function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $documentId
+        ): array {
+            $documents = $this->commercial->all($organisationId, $dossierId);
+            $document = null;
+            foreach ($documents as $candidate) {
+                if ((int) $candidate['id'] === $documentId) {
+                    $document = $candidate;
+                    break;
+                }
+            }
+            if ($document === null) {
+                throw new BillingException('Document commercial absent du dossier.');
+            }
+            $bytes = $this->pdf->commercial(
+                $organisationId,
+                $dossierId,
+                $documentId,
+                $this->billing->creditorProfile($organisationId, $dossierId),
+                $userId
+            );
+            $number = trim((string) $document['numero']);
+            return [
+                'filename' => ($number !== ''
+                    ? $number
+                    : 'document-commercial-' . $documentId) . '.pdf',
+                'content_base64' => base64_encode($bytes),
+            ];
+        });
+    }
+
+    public function paymentPdf(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('facturation.view');
+        $paymentId = $this->validator->identifier($request, 'payment_id');
+        return $this->execute($request, function () use (
+            $userId,
+            $organisationId,
+            $dossierId,
+            $paymentId
+        ): array {
+            $bytes = $this->pdf->payment(
+                $organisationId,
+                $dossierId,
+                $paymentId,
+                $this->billing->creditorProfile($organisationId, $dossierId),
+                $userId
+            );
+            return [
+                'filename' => 'paiement-' . $paymentId . '.pdf',
+                'content_base64' => base64_encode($bytes),
             ];
         });
     }
@@ -533,7 +615,8 @@ final class BillingApiController
                 $data['ledger_account_id'],
                 $userId,
                 currency: $data['currency'],
-                exchangeRateId: $data['exchange_rate_id']
+                exchangeRateId: $data['exchange_rate_id'],
+                treasuryOperationalAccountId: $data['treasury_account_id']
             ),
         ], 201);
     }
@@ -664,9 +747,57 @@ final class BillingApiController
                 throw ApiException::conflict('BILLING_CONFLICT', $message);
             }
             throw ApiException::validation(['billing' => [$message]]);
-        } catch (PDOException) {
+        } catch (PDOException $exception) {
+            $databaseMessage = $exception->getMessage();
+            error_log(sprintf(
+                '[COMPTA API %s] %s %s — %s: %s',
+                ApiResponse::correlationId($request),
+                $request->method,
+                $request->path,
+                $exception::class,
+                $databaseMessage
+            ));
+            if (
+                str_contains($databaseMessage, 'UNIQUE constraint failed')
+                && str_contains($databaseMessage, 'numero_externe')
+            ) {
+                $reference = trim((string) (
+                    $request->input()['external_number'] ?? ''
+                ));
+                throw ApiException::conflict(
+                    'BILLING_REFERENCE_ALREADY_USED',
+                    $reference === ''
+                        ? 'Cette référence fournisseur est déjà utilisée.'
+                        : sprintf(
+                            'La référence fournisseur « %s » est déjà utilisée.',
+                            $reference
+                        )
+                );
+            }
+            if (
+                str_contains($databaseMessage, 'UNIQUE constraint failed')
+                && str_contains($databaseMessage, 'documents_financiers.dossier_id')
+                && str_contains($databaseMessage, 'documents_financiers.numero')
+            ) {
+                throw ApiException::conflict(
+                    'BILLING_NUMBER_CONFLICT',
+                    'La numérotation du document est en conflit. Rechargez la liste puis réessayez.'
+                );
+            }
+            if (
+                str_contains($databaseMessage, 'FOREIGN KEY constraint failed')
+                || str_contains($databaseMessage, 'hors scope')
+            ) {
+                throw ApiException::validation([
+                    'billing' => [
+                        'Une référence sélectionnée n’est plus disponible dans ce dossier. Rechargez le formulaire et sélectionnez-la à nouveau.',
+                    ],
+                ]);
+            }
             throw ApiException::validation([
-                'billing' => ['Référence invalide, déjà utilisée ou hors du dossier.'],
+                'billing' => [
+                    'La facturation n’a pas pu enregistrer cette opération. Réessayez après avoir rechargé la page.',
+                ],
             ]);
         }
     }

@@ -10,10 +10,17 @@ use DateTimeImmutable;
 final class ExpenseInputValidator
 {
     /** @return array<string,mixed> */
-    public function expense(Request $request): array
+    public function expense(Request $request, bool $update = false): array
     {
         $data = $request->input();
         $errors = [];
+        if ($update) {
+            foreach (['document_id', 'version'] as $field) {
+                if (!is_int($data[$field] ?? null) || (int) $data[$field] < 1) {
+                    $errors[$field][] = 'Entier positif requis.';
+                }
+            }
+        }
         foreach (['contact_id', 'collective_account_id'] as $field) {
             if (!is_int($data[$field] ?? null) || (int) $data[$field] < 1) {
                 $errors[$field][] = 'Identifiant positif requis.';
@@ -41,6 +48,8 @@ final class ExpenseInputValidator
         $attachment = $this->attachment($data['attachment'] ?? null, $errors);
         $this->fail($errors);
         return [
+            'document_id' => $update ? (int) $data['document_id'] : 0,
+            'version' => $update ? (int) $data['version'] : 0,
             'contact_id' => (int) $data['contact_id'],
             'document_date' => (string) $data['document_date'],
             'due_date' => (string) $data['due_date'],

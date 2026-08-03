@@ -149,6 +149,25 @@ final class BillingInputValidator
         return ['document_id' => $id, 'date' => $date];
     }
 
+    /** @return array{document_id:int,version:int,date:string} */
+    public function reversal(Request $request): array
+    {
+        $this->rejectScope($request);
+        $data = $request->input();
+        $errors = [];
+        $date = (string) ($data['date'] ?? '');
+        if (!$this->validDate($date)) {
+            $errors['date'][] = 'Date AAAA-MM-JJ requise.';
+        }
+        $result = [
+            'document_id' => $this->positiveInt($data, 'document_id', $errors),
+            'version' => $this->positiveInt($data, 'version', $errors),
+            'date' => $date,
+        ];
+        $this->fail($errors);
+        return $result;
+    }
+
     /** @return array<string,mixed> */
     public function contact(Request $request, bool $update = false): array
     {
@@ -306,7 +325,7 @@ final class BillingInputValidator
         $errors = [];
         $status = (string) ($data['status'] ?? '');
         if (!in_array($status, [
-            'envoye', 'recu', 'accepte', 'refuse', 'remplace',
+            'envoye', 'livre', 'recu', 'accepte', 'refuse', 'remplace',
             'annule', 'archive',
         ], true)) {
             $errors['status'][] = 'Statut commercial invalide.';
@@ -552,6 +571,11 @@ final class BillingInputValidator
             'ledger_account_id' => $this->positiveInt(
                 $data,
                 'ledger_account_id',
+                $errors
+            ),
+            'treasury_account_id' => $this->positiveInt(
+                $data,
+                'treasury_account_id',
                 $errors
             ),
             'currency' => $currency,

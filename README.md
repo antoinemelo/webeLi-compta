@@ -38,7 +38,7 @@ COMPTA_RESET_PASSWORD='une phrase secrète unique' \
   php bin/console user:reset-password --email=utilisateur@example.test
 ```
 
-`qualify` est la porte unique avant livraison : garde des migrations 001–010,
+`qualify` est la porte unique avant livraison : garde des migrations 001–005,
 lint PHP, deux suites de tests, migration vierge avec sauvegarde, diagnostic,
 intégrité SQLite et vérification du contenu de l'archive mutualisée. Voir
 [`docs/qualification.md`](docs/qualification.md).
@@ -69,7 +69,8 @@ référentiels existants. Une désactivation est appliquée dans la navigation e
 côté serveur sans supprimer les données. Voir
 [le guide de configuration](docs/configuration.md).
 
-L’espace `/app/organisations-dossiers`, accessible depuis l’icône de filtre,
+L’espace `/app/organisations-dossiers`, accessible depuis le menu
+**Contexte de travail**,
 fournit le registre paginé des
 organisations, leurs identités juridiques datées et une arborescence de
 dossiers. L’assistant Vue crée un dossier complet (modules, plan, exercice,
@@ -102,7 +103,7 @@ Le plan fourni est le Plan comptable suisse PME VEB, version officielle du
 12 août 2024 (© veb.ch, Zürich), avec variantes de forme juridique et overlay
 association versionné. Voir `database/seeds/README.md`.
 
-Le module `Compta` expose `EntryService::postGenerated()` aux futurs modules.
+Le module `Compta` expose `EntryService::postGenerated()` aux modules métier.
 La clé d’idempotence, le scope organisation/dossier et l’empreinte de commande
 empêchent les doubles comptabilisations.
 
@@ -112,9 +113,10 @@ ou compte en T, grand livre, soldes initiaux et états. Les différences et les
 garanties supplémentaires sont décrites dans la
 [correspondance avec Journal](docs/journal-correspondance.md).
 
-Les onglets Vue couvrent aussi le grand livre, la balance, le bilan, le compte
-de résultat comparatif, le flux de trésorerie réconcilié, le décompte TVA, la
-checklist de clôture et le dossier fiscal préparatoire. Les anciennes routes de
+Les onglets Vue couvrent aussi les extraits, les balances de vérification, le
+bilan, le compte de résultat comparatif, le flux de trésorerie réconcilié et
+les archives financières. La clôture regroupe, dans cet ordre,
+**Amortissements / TVA / Contrôles / Dossier fiscal**. Les anciennes routes de
 rapports ne rendent plus d’écran parallèle et redirigent vers ce parcours
 unique. Voir [le guide rapports, clôture et fiscal](docs/rapports-cloture-fiscal.md).
 
@@ -193,9 +195,11 @@ allocations N–N. L’émission numérote par dossier/année, la comptabilisati
 idempotente et les documents émis conservent leurs snapshots d’adresse et de
 TVA.
 
-L’espace Vue `/app/facturation` sépare ventes, achats, récurrences, contacts
-360° et échéancier. Les tranches 0–30, 31–60, 61–90 et plus de 90 jours sont
-calculées à une date de référence visible ; avoirs, paiements partiels et
+L’espace Vue `/app/facturation` s’ouvre sur l’échéancier, puis présente
+**Offres / Commandes / Achats / Ventes / Récurrences / Contacts**. Les offres,
+demandes et commandes restent sans effet comptable jusqu’à leur conversion
+facultative en facture. Les tranches 0–30, 31–60, 61–90 et plus de 90 jours
+sont calculées à une date de référence visible ; avoirs, paiements partiels et
 acomptes non alloués restent réconciliables au centime. Les factures clients
 peuvent être archivées en PDF avec QR-facture suisse et référence SCOR. Voir
 [le guide de facturation](docs/facturation.md).
@@ -253,11 +257,14 @@ hébergées localement sous `public/assets/fonts/`.
 Aucun CDN n’est nécessaire à l’exécution. La licence MIT de Bootstrap et les
 licences SIL Open Font License des polices sont conservées avec leurs fichiers.
 
-Toutes les pages authentifiées conservent l’instance, l’organisation, le
-dossier, l’exercice et le module visibles. Les dossiers réel, démonstration et
-exercice ont des bandeaux textuels distincts. La navigation, la saisie
-comptable, le réordonnancement clavier, les vues 360 px et l’impression sont
-documentés dans le [guide interface et accessibilité](docs/interface-accessibilite.md).
+Toutes les pages authentifiées conservent l’organisation, le dossier,
+l’exercice et la devise visibles. Sur ordinateur et tablette, les modules et
+leurs sous-menus sont placés dans l’en-tête ; sur mobile, un menu compact ne
+duplique que les modules principaux. La recherche globale distingue un préfixe
+(`/paie`) d’une recherche contenant le terme (`paie`). La navigation, la
+saisie comptable, le réordonnancement clavier, les vues 360 px et l’impression
+sont documentés dans le
+[guide interface et accessibilité](docs/interface-accessibilite.md).
 
 ## Administration
 

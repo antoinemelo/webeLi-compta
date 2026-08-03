@@ -32,14 +32,23 @@ final class AccountingCsvService
             $dossierId,
             $exerciseId
         );
-        $rows = [['numero', 'libelle', 'sens', 'solde']];
+        $rows = [[
+            'numero', 'libelle', 'sens', 'solde',
+            'compte_tresorerie_id', 'compte_tresorerie',
+        ]];
         foreach ($this->openingAccounts($organisationId, $dossierId) as $account) {
-            $cents = (int) ($state['soldes'][(int) $account['id']] ?? 0);
+            $treasuryAccountId = $account['treasury_account_id'] === null
+                ? 0 : (int) $account['treasury_account_id'];
+            $cents = $treasuryAccountId > 0
+                ? (int) ($state['soldes_tresorerie'][$treasuryAccountId] ?? 0)
+                : (int) ($state['soldes'][(int) $account['id']] ?? 0);
             $rows[] = [
                 (string) $account['numero'],
                 (string) $account['libelle'],
                 (string) $account['sens_normal'],
                 $this->decimal($cents),
+                $treasuryAccountId > 0 ? (string) $treasuryAccountId : '',
+                (string) ($account['treasury_label'] ?? ''),
             ];
         }
         return [
@@ -78,6 +87,12 @@ final class AccountingCsvService
             $debit += $onDebit ? abs($balance) : 0;
             $credit += $onDebit ? 0 : abs($balance);
         }
+        foreach ($parsed['treasury_balances'] as $accountId => $balance) {
+            $side = $parsed['treasury_sides'][$accountId];
+            $onDebit = ($balance > 0) === ($side === 'debit');
+            $debit += $onDebit ? abs($balance) : 0;
+            $credit += $onDebit ? 0 : abs($balance);
+        }
         if ($debit !== $credit) {
             throw new AccountingException(
                 'Les soldes d’ouverture importés ne sont pas équilibrés : '
@@ -88,15 +103,20 @@ final class AccountingCsvService
         return [
             'fingerprint' => $this->openingFingerprint($csv, $state),
             'summary' => [
-                'accounts' => count($parsed['balances']),
+                'accounts' => count($parsed['balances'])
+                    + count($parsed['treasury_balances']),
                 'non_zero' => count(array_filter(
                     $parsed['balances'],
+                    static fn (int $value): bool => $value !== 0
+                )) + count(array_filter(
+                    $parsed['treasury_balances'],
                     static fn (int $value): bool => $value !== 0
                 )),
                 'debit_cents' => $debit,
                 'credit_cents' => $credit,
             ],
             'balances' => $parsed['balances'],
+            'treasury_balances' => $parsed['treasury_balances'],
         ];
     }
 
@@ -131,7 +151,8 @@ final class AccountingCsvService
             $exerciseId,
             $journalId,
             $preview['balances'],
-            $actorId
+            $actorId,
+            $preview['treasury_balances']
         );
         return ['id' => $id, 'number' => ''];
     }
@@ -149,7 +170,10 @@ final class AccountingCsvService
                     df.id AS financial_document_id,
                     df.numero AS financial_document_number,
                     df.type AS financial_document_type,
+                    df.workflow AS financial_document_workflow,
                     l.ordre AS line_order, c.id AS account_id,
+                    l.compte_tresorerie_operationnel_id AS treasury_account_id,
+                    t.libelle AS treasury_account_label,
                     c.numero AS account_number,
                     c.libelle AS account_label,
                     COALESCE(NULLIF(l.libelle, \'\'), e.libelle) AS line_label,
@@ -158,6 +182,8 @@ final class AccountingCsvService
              JOIN journaux j ON j.id = e.journal_id
              JOIN lignes_ecriture l ON l.ecriture_id = e.id
              JOIN comptes c ON c.id = l.compte_id
+             LEFT JOIN comptes_tresorerie t
+               ON t.id = l.compte_tresorerie_operationnel_id
              LEFT JOIN documents_financiers df
                ON e.source_type = \'document_financier\'
               AND CAST(e.source_id AS INTEGER) = df.id
@@ -175,6 +201,8 @@ final class AccountingCsvService
         foreach ($items as &$item) {
             $item['entry_id'] = (int) $item['entry_id'];
             $item['line_order'] = (int) $item['line_order'];
+            $item['treasury_account_id'] = $item['treasury_account_id'] === null
+                ? null : (int) $item['treasury_account_id'];
             $item['debit_centimes'] = (int) $item['debit_centimes'];
             $item['credit_centimes'] = (int) $item['credit_centimes'];
             $item['financial_document_id'] =
@@ -209,7 +237,7 @@ final class AccountingCsvService
         $rows = [[
             'ecriture', 'date', 'journal', 'reference', 'piece',
             'libelle_ecriture', 'compte', 'libelle_ligne', 'debit', 'credit',
-            'statut',
+            'statut', 'compte_tresorerie_id', 'compte_tresorerie',
         ]];
         foreach ($details['items'] as $line) {
             $rows[] = [
@@ -224,6 +252,9 @@ final class AccountingCsvService
                 $this->decimal((int) $line['debit_centimes']),
                 $this->decimal((int) $line['credit_centimes']),
                 $line['statut'] === 'brouillon' ? 'brouillon' : 'validee',
+                $line['treasury_account_id'] === null
+                    ? '' : (string) $line['treasury_account_id'],
+                (string) ($line['treasury_account_label'] ?? ''),
             ];
         }
         return [
@@ -325,18 +356,29 @@ final class AccountingCsvService
     private function openingAccounts(int $organisationId, int $dossierId): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT id, numero, libelle, sens_normal
-             FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ?
-               AND actif = 1 AND imputable = 1 AND type IN ('actif', 'passif')
-             ORDER BY length(numero), numero COLLATE NOCASE"
+            "SELECT c.id, c.numero, c.libelle, c.sens_normal,
+                    t.id AS treasury_account_id, t.libelle AS treasury_label
+             FROM comptes c
+             LEFT JOIN comptes_tresorerie t
+               ON t.organisation_id = c.organisation_id
+              AND t.dossier_id = c.dossier_id
+              AND t.compte_comptable_id = c.id
+              AND t.actif = 1
+             WHERE c.organisation_id = ? AND c.dossier_id = ?
+               AND c.actif = 1 AND c.imputable = 1
+               AND c.type IN ('actif', 'passif')
+             ORDER BY length(c.numero), c.numero COLLATE NOCASE,
+                      t.libelle COLLATE NOCASE, t.id"
         );
         $stmt->execute([$organisationId, $dossierId]);
         return $stmt->fetchAll();
     }
 
     /**
-     * @return array{balances:array<int,int>,sides:array<int,string>}
+     * @return array{
+     *   balances:array<int,int>,sides:array<int,string>,
+     *   treasury_balances:array<int,int>,treasury_sides:array<int,string>
+     * }
      */
     private function parseOpening(
         int $organisationId,
@@ -347,6 +389,7 @@ final class AccountingCsvService
         $header = array_map([$this, 'key'], array_shift($rows) ?: []);
         $numberIndex = array_search('numero', $header, true);
         $balanceIndex = array_search('solde', $header, true);
+        $treasuryIndex = array_search('compte_tresorerie_id', $header, true);
         if ($numberIndex === false || $balanceIndex === false) {
             throw new AccountingException(
                 'CSV d’ouverture invalide : colonnes « numero » et « solde » requises.'
@@ -354,10 +397,12 @@ final class AccountingCsvService
         }
         $accounts = [];
         foreach ($this->openingAccounts($organisationId, $dossierId) as $account) {
-            $accounts[(string) $account['numero']] = $account;
+            $accounts[(string) $account['numero']][] = $account;
         }
         $balances = [];
         $sides = [];
+        $treasuryBalances = [];
+        $treasurySides = [];
         foreach ($rows as $offset => $row) {
             if ($this->emptyRow($row)) {
                 continue;
@@ -368,22 +413,65 @@ final class AccountingCsvService
                     'Ligne ' . ($offset + 2) . " : compte d’ouverture « {$number} » introuvable."
                 );
             }
-            $accountId = (int) $accounts[$number]['id'];
+            $candidates = $accounts[$number];
+            $treasuryAccountId = $treasuryIndex === false
+                ? 0 : (int) trim((string) ($row[$treasuryIndex] ?? ''));
+            if ($treasuryAccountId > 0) {
+                $candidates = array_values(array_filter(
+                    $candidates,
+                    static fn (array $candidate): bool =>
+                        (int) ($candidate['treasury_account_id'] ?? 0)
+                            === $treasuryAccountId
+                ));
+            } elseif (count($candidates) > 1) {
+                throw new AccountingException(
+                    'Ligne ' . ($offset + 2) . " : le compte « {$number} » "
+                    . 'correspond à plusieurs comptes de trésorerie ; '
+                    . 'la colonne « compte_tresorerie_id » est requise.'
+                );
+            }
+            if (count($candidates) !== 1) {
+                throw new AccountingException(
+                    'Ligne ' . ($offset + 2)
+                    . ' : compte de trésorerie absent ou incohérent.'
+                );
+            }
+            $selected = $candidates[0];
+            $accountId = (int) $selected['id'];
+            $selectedTreasuryId = (int) ($selected['treasury_account_id'] ?? 0);
+            $balance = $this->cents(
+                (string) ($row[$balanceIndex] ?? ''),
+                $offset + 2
+            );
+            if ($selectedTreasuryId > 0) {
+                if (isset($treasuryBalances[$selectedTreasuryId])) {
+                    throw new AccountingException(
+                        'Ligne ' . ($offset + 2)
+                        . " : compte de trésorerie {$selectedTreasuryId} dupliqué."
+                    );
+                }
+                $treasuryBalances[$selectedTreasuryId] = $balance;
+                $treasurySides[$selectedTreasuryId]
+                    = (string) $selected['sens_normal'];
+                continue;
+            }
             if (isset($balances[$accountId])) {
                 throw new AccountingException(
                     'Ligne ' . ($offset + 2) . " : compte « {$number} » dupliqué."
                 );
             }
-            $balances[$accountId] = $this->cents(
-                (string) ($row[$balanceIndex] ?? ''),
-                $offset + 2
-            );
-            $sides[$accountId] = (string) $accounts[$number]['sens_normal'];
+            $balances[$accountId] = $balance;
+            $sides[$accountId] = (string) $selected['sens_normal'];
         }
-        if ($balances === []) {
+        if ($balances === [] && $treasuryBalances === []) {
             throw new AccountingException('Le CSV d’ouverture ne contient aucun compte.');
         }
-        return ['balances' => $balances, 'sides' => $sides];
+        return [
+            'balances' => $balances,
+            'sides' => $sides,
+            'treasury_balances' => $treasuryBalances,
+            'treasury_sides' => $treasurySides,
+        ];
     }
 
     /**
@@ -420,6 +508,18 @@ final class AccountingCsvService
             $organisationId,
             $dossierId
         );
+        $treasuryAccounts = [];
+        $treasury = $this->pdo->prepare(
+            'SELECT id, compte_comptable_id
+             FROM comptes_tresorerie
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1'
+        );
+        $treasury->execute([$organisationId, $dossierId]);
+        foreach ($treasury->fetchAll() as $treasuryAccount) {
+            $treasuryAccounts[(int) $treasuryAccount['compte_comptable_id']][
+                (int) $treasuryAccount['id']
+            ] = true;
+        }
         $rows = $this->rows($csv);
         $header = array_map([$this, 'key'], array_shift($rows) ?: []);
         $required = [
@@ -434,7 +534,10 @@ final class AccountingCsvService
             }
             $indexes[$column] = $index;
         }
-        foreach (['reference', 'piece', 'libelle_ligne', 'statut'] as $column) {
+        foreach ([
+            'reference', 'piece', 'libelle_ligne', 'statut',
+            'compte_tresorerie_id',
+        ] as $column) {
             $indexes[$column] = array_search($column, $header, true);
         }
         $groups = [];
@@ -466,6 +569,31 @@ final class AccountingCsvService
             if (!in_array($status, ['brouillon', 'validee'], true)) {
                 throw new AccountingException(
                     "Ligne {$lineNumber} : statut « {$status} » non importable."
+                );
+            }
+            $accountId = (int) $accounts[$account]['id'];
+            $treasuryAccountId = $indexes['compte_tresorerie_id'] === false
+                ? 0
+                : (int) trim((string) (
+                    $row[$indexes['compte_tresorerie_id']] ?? ''
+                ));
+            $mappedTreasury = $treasuryAccounts[$accountId] ?? [];
+            if (
+                $treasuryAccountId > 0
+                && !isset($mappedTreasury[$treasuryAccountId])
+            ) {
+                throw new AccountingException(
+                    "Ligne {$lineNumber} : compte de trésorerie incohérent."
+                );
+            }
+            if (
+                $treasuryAccountId === 0
+                && count($mappedTreasury) > 1
+                && $status === 'validee'
+            ) {
+                throw new AccountingException(
+                    "Ligne {$lineNumber} : précisez le compte de trésorerie "
+                    . "du compte général {$account}."
                 );
             }
             $debit = $this->cents((string) ($row[$indexes['debit']] ?? ''), $lineNumber);
@@ -502,7 +630,9 @@ final class AccountingCsvService
                 );
             }
             $groups[$key]['lines'][] = [
-                'compte_id' => (int) $accounts[$account]['id'],
+                'compte_id' => $accountId,
+                'compte_tresorerie_operationnel_id' =>
+                    $treasuryAccountId > 0 ? $treasuryAccountId : null,
                 'libelle' => $lineLabel,
                 'debit_centimes' => $debit,
                 'credit_centimes' => $credit,

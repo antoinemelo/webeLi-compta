@@ -30,6 +30,13 @@ final class TreasuryAccountService
         if ($iban !== '' && preg_match('/^[A-Z]{2}[0-9A-Z]{13,32}$/', $iban) !== 1) {
             throw new TreasuryException('IBAN invalide.');
         }
+        $this->assertCompatibleLedgerGroup(
+            (int) $data['organisation_id'],
+            (int) $data['dossier_id'],
+            (int) $data['compte_comptable_id'],
+            $currency,
+            (int) ($data['multiplicateur_comptable'] ?? 1)
+        );
         $stmt = $this->pdo->prepare(
             'INSERT INTO comptes_tresorerie
              (organisation_id, dossier_id, compte_comptable_id, libelle, type,
@@ -50,6 +57,12 @@ final class TreasuryAccountService
             $actorId,
         ]);
         $id = (int) $this->pdo->lastInsertId();
+        $this->adoptUnallocatedHistory(
+            (int) $data['organisation_id'],
+            (int) $data['dossier_id'],
+            (int) $data['compte_comptable_id'],
+            $id
+        );
         $this->audit->log(
             'tresorerie.compte_cree',
             $actorId,
@@ -60,6 +73,45 @@ final class TreasuryAccountService
             ['type' => $type, 'iban' => $iban]
         );
         return $id;
+    }
+
+    /**
+     * Lors du premier rattachement d'un compte général, les mouvements
+     * historiques ne pouvaient appartenir qu'à ce compte opérationnel. Ils
+     * sont donc ventilés immédiatement. L'ajout ultérieur d'un second compte
+     * ne réaffecte jamais cet historique au hasard.
+     */
+    private function adoptUnallocatedHistory(
+        int $organisationId,
+        int $dossierId,
+        int $ledgerAccountId,
+        int $treasuryAccountId,
+    ): void {
+        $count = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM comptes_tresorerie
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND compte_comptable_id = ?'
+        );
+        $count->execute([$organisationId, $dossierId, $ledgerAccountId]);
+        if ((int) $count->fetchColumn() !== 1) {
+            return;
+        }
+        $lines = $this->pdo->prepare(
+            'UPDATE lignes_ecriture
+             SET compte_tresorerie_operationnel_id = ?
+             WHERE compte_id = ? AND compte_tresorerie_operationnel_id IS NULL
+               AND ecriture_id IN (
+                 SELECT id FROM ecritures
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND statut = \'brouillon\'
+               )'
+        );
+        $lines->execute([
+            $treasuryAccountId,
+            $ledgerAccountId,
+            $organisationId,
+            $dossierId,
+        ]);
     }
 
     /** @param array<string,mixed> $data */
@@ -97,6 +149,26 @@ final class TreasuryAccountService
         if (!$active) {
             $this->assertNotBillingAccount($dossierId, $accountId);
         }
+        $current = $this->pdo->prepare(
+            'SELECT compte_comptable_id FROM comptes_tresorerie
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+        );
+        $current->execute([$accountId, $organisationId, $dossierId]);
+        $currentLedgerId = $current->fetchColumn();
+        if ($currentLedgerId === false) {
+            throw new TreasuryException('Compte de trésorerie absent du dossier.');
+        }
+        if ((int) $currentLedgerId !== $ledgerAccountId) {
+            $this->assertLedgerMappingChangeAllowed($accountId);
+        }
+        $this->assertCompatibleLedgerGroup(
+            $organisationId,
+            $dossierId,
+            $ledgerAccountId,
+            $currency,
+            $multiplier,
+            $accountId
+        );
         $stmt = $this->pdo->prepare(
             'UPDATE comptes_tresorerie
              SET compte_comptable_id = ?, libelle = ?, type = ?, iban = ?,
@@ -175,12 +247,29 @@ final class TreasuryAccountService
             'lots_paiements_sortants' => 'lot de paiements',
             'rapprochements_bancaires' => 'rapprochement bancaire',
             'soldes_bancaires' => 'solde bancaire',
+            'lignes_ecriture' => 'ligne comptable ventilée',
+            'paiements' => 'paiement',
+            'paiements_salaires' => 'paiement salarial',
         ] as $table => $label) {
-            $count = $this->pdo->prepare(
-                "SELECT COUNT(*) FROM {$table}
-                 WHERE organisation_id = ? AND dossier_id = ?
-                   AND compte_tresorerie_id = ?"
-            );
+            $column = in_array(
+                $table,
+                ['lignes_ecriture', 'paiements', 'paiements_salaires'],
+                true
+            ) ? 'compte_tresorerie_operationnel_id' : 'compte_tresorerie_id';
+            if ($table === 'lignes_ecriture') {
+                $count = $this->pdo->prepare(
+                    "SELECT COUNT(*) FROM lignes_ecriture l
+                     JOIN ecritures e ON e.id = l.ecriture_id
+                     WHERE e.organisation_id = ? AND e.dossier_id = ?
+                       AND l.{$column} = ?"
+                );
+            } else {
+                $count = $this->pdo->prepare(
+                    "SELECT COUNT(*) FROM {$table}
+                     WHERE organisation_id = ? AND dossier_id = ?
+                       AND {$column} = ?"
+                );
+            }
             $count->execute([$organisationId, $dossierId, $accountId]);
             $total = (int) $count->fetchColumn();
             if ($total > 0) {
@@ -274,6 +363,61 @@ final class TreasuryAccountService
             throw new TreasuryException(
                 'Ce compte fournit l’IBAN de facturation. '
                 . 'Choisissez d’abord un autre compte sous Configuration → Entité.'
+            );
+        }
+    }
+
+    private function assertCompatibleLedgerGroup(
+        int $organisationId,
+        int $dossierId,
+        int $ledgerAccountId,
+        string $currency,
+        int $multiplier,
+        ?int $excludedId = null,
+    ): void {
+        $sql = 'SELECT 1 FROM comptes_tresorerie
+                WHERE organisation_id = ? AND dossier_id = ?
+                  AND compte_comptable_id = ?
+                  AND (monnaie <> ? OR multiplicateur_comptable <> ?)';
+        $parameters = [
+            $organisationId,
+            $dossierId,
+            $ledgerAccountId,
+            $currency,
+            $multiplier,
+        ];
+        if ($excludedId !== null) {
+            $sql .= ' AND id <> ?';
+            $parameters[] = $excludedId;
+        }
+        $stmt = $this->pdo->prepare($sql . ' LIMIT 1');
+        $stmt->execute($parameters);
+        if ($stmt->fetchColumn() !== false) {
+            throw new TreasuryException(
+                'Les comptes rattachés au même compte comptable doivent partager la devise et le sens.'
+            );
+        }
+    }
+
+    private function assertLedgerMappingChangeAllowed(int $accountId): void
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT 1 WHERE
+               EXISTS (SELECT 1 FROM lignes_ecriture
+                       WHERE compte_tresorerie_operationnel_id = ?)
+               OR EXISTS (SELECT 1 FROM imports_bancaires
+                          WHERE compte_tresorerie_id = ?)
+               OR EXISTS (SELECT 1 FROM lots_paiements_sortants
+                          WHERE compte_tresorerie_id = ?)
+               OR EXISTS (SELECT 1 FROM paiements
+                          WHERE compte_tresorerie_operationnel_id = ?)
+               OR EXISTS (SELECT 1 FROM paiements_salaires
+                          WHERE compte_tresorerie_operationnel_id = ?)'
+        );
+        $stmt->execute(array_fill(0, 5, $accountId));
+        if ($stmt->fetchColumn() !== false) {
+            throw new TreasuryException(
+                'Le compte comptable ne peut plus être modifié après utilisation.'
             );
         }
     }

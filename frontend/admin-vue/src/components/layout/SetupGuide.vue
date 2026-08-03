@@ -15,6 +15,7 @@ const currentCode = ref<SetupGuideStep['code'] | ''>('');
 const collapsed = ref(false);
 const loading = ref(false);
 let reloadRequested = false;
+let preserveExpandedOnNextRoute = false;
 
 const eligible = computed(() => (
   context.selection?.organization.nature === 'reelle'
@@ -80,7 +81,10 @@ watch(
 watch(
   () => route.fullPath,
   async () => {
-    if (route.path !== '/') collapsed.value = true;
+    if (route.path !== '/' && !preserveExpandedOnNextRoute) {
+      collapsed.value = true;
+    }
+    preserveExpandedOnNextRoute = false;
     if (eligible.value && guide.value) await load(true);
   }
 );
@@ -164,8 +168,12 @@ async function resumeGuide(): Promise<void> {
   }
 }
 
-async function openStep(step: SetupGuideStep): Promise<void> {
-  collapsed.value = true;
+async function openStep(
+  step: SetupGuideStep,
+  collapseAfterOpening = true
+): Promise<void> {
+  collapsed.value = collapseAfterOpening;
+  preserveExpandedOnNextRoute = !collapseAfterOpening;
   if (step.code === 'identity') {
     await router.push({
       path: '/organisations-dossiers',
@@ -184,7 +192,7 @@ async function move(offset: -1 | 1): Promise<void> {
   const target = steps.value[currentIndex.value + offset];
   if (!target) return;
   currentCode.value = target.code;
-  await openStep(target);
+  await openStep(target, false);
 }
 
 async function returnToRequiredStep(): Promise<void> {

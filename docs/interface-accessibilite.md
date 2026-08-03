@@ -12,9 +12,20 @@ travail.
 
 ## Navigation et saisie
 
-La navigation principale devient un panneau mobile sur petit écran et reste
-une barre latérale permanente sur grand écran. Le lien d’évitement mène
-directement au contenu. La page courante utilise `aria-current`.
+Sur ordinateur et tablette, la navigation principale est placée dans
+l’en-tête, entre la recherche globale et les actions personnelles. Chaque
+module reste cliquable et ouvre ses sous-menus au survol ou au clavier. Il
+n’existe plus de barre latérale permanente. Sur mobile, le bouton burger ouvre
+uniquement les modules principaux afin d’éviter un menu trop long ; les onglets
+compacts restent disponibles dans chaque module.
+
+Le champ de recherche de l’en-tête accepte deux syntaxes :
+
+- `/paie` limite les résultats aux menus et sous-menus commençant par le terme ;
+- `paie` cherche le terme dans les menus, sous-menus et panneaux indexés.
+
+Le lien d’évitement mène directement au contenu. La page et les onglets actifs
+utilisent `aria-current` ou `aria-selected` selon leur nature.
 
 La saisie comptable suit l’ordre clavier en-tête, lignes, brouillon, validation.
 Les totaux débit/crédit et la différence sont annoncés avec `aria-live`. Le
@@ -29,7 +40,8 @@ au clavier avec `Flèche haut` et `Flèche bas`.
 - [x] libellés explicites ou noms accessibles pour les champs et actions ;
 - [x] focus visible renforcé, messages d’erreur `role=alert`, confirmations et
   changements annoncés ;
-- [x] actions essentielles exprimées par du texte, sans icône seule ;
+- [x] icônes seules réservées aux actions conventionnelles, avec nom accessible
+  et infobulle ; actions irréversibles conservées sous forme textuelle ;
 - [x] mise en page fluide à 360 px et sans largeur de page fixe à 200 % ;
 - [x] tableaux larges limités à un défilement horizontal local, aucun
   défilement vertical imbriqué ;
@@ -39,6 +51,12 @@ au clavier avec `Flèche haut` et `Flèche bas`.
 - [x] parcours HTTP protégés par authentification, permissions, CSRF et
   contrôle serveur ;
 - [x] conflit d’édition collaborative retourné en HTTP 409 sans écrasement.
+
+Les retours métier et erreurs utilisateur passent par la région de
+notifications temporaire en bas à droite. Le parcours de configuration
+initiale occupe, lorsqu’il est actif, le bas gauche et peut être réduit sans
+être annulé. Les menus d’actions « ⋮ » ont un nom accessible propre à leur
+ligne et restent utilisables au clavier.
 
 Les contrôles correspondants sont exécutés par `php bin/console test`. La
 recette de publication doit en plus parcourir au clavier le tableau de bord, la

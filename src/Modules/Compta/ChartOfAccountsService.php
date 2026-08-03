@@ -5,6 +5,7 @@ namespace Compta\Modules\Compta;
 
 use Compta\Core\Audit\AuditLogger;
 use PDO;
+use PDOException;
 use Throwable;
 
 final class ChartOfAccountsService
@@ -367,6 +368,7 @@ final class ChartOfAccountsService
         int $position = 0,
         ?int $expectedVersion = null,
         ?int $actorId = null,
+        ?bool $showSubtotal = null,
     ): int {
         $this->assertDossierScope($organisationId, $dossierId);
         $code = trim($code);
@@ -397,8 +399,9 @@ final class ChartOfAccountsService
             $stmt = $this->pdo->prepare(
                 'INSERT INTO rubriques_comptables
                     (organisation_id, dossier_id, code, libelle,
-                     niveau_structure, type, parent_id, ordre, cree_par)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                     niveau_structure, type, parent_id, ordre, cree_par,
+                     afficher_sous_total)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId,
@@ -410,6 +413,7 @@ final class ChartOfAccountsService
                 $parentId,
                 $position,
                 $actorId,
+                $showSubtotal === true ? 1 : 0,
             ]);
             $id = (int) $this->pdo->lastInsertId();
             $action = 'creee';
@@ -418,7 +422,11 @@ final class ChartOfAccountsService
                     SET code = :code, libelle = :libelle,
                         niveau_structure = :niveau, type = :type,
                         parent_id = :parent, ordre = :ordre, actif = 1,
-                        modifie_le = datetime('now'), version = version + 1
+                        modifie_le = datetime('now'), version = version + 1";
+            if ($showSubtotal !== null) {
+                $sql .= ', afficher_sous_total = :afficher_sous_total';
+            }
+            $sql .= "
                     WHERE id = :id AND organisation_id = :organisation
                       AND dossier_id = :dossier";
             $params = [
@@ -432,6 +440,9 @@ final class ChartOfAccountsService
                 'organisation' => $organisationId,
                 'dossier' => $dossierId,
             ];
+            if ($showSubtotal !== null) {
+                $params['afficher_sous_total'] = $showSubtotal ? 1 : 0;
+            }
             if ($expectedVersion !== null) {
                 $sql .= ' AND version = :version';
                 $params['version'] = $expectedVersion;
@@ -460,6 +471,7 @@ final class ChartOfAccountsService
                 'libelle' => $label,
                 'type' => $type,
                 'parent_id' => $parentId,
+                'afficher_sous_total' => $showSubtotal,
             ]
         );
         return $id;
@@ -468,7 +480,7 @@ final class ChartOfAccountsService
     /**
      * @param list<array{
      *   id:int,code:string,libelle:string,type:string,parent_id:?int,
-     *   ordre:int,version:int
+     *   ordre:int,version:int,afficher_sous_total:bool
      * }> $rows
      * @param list<int> $orderedIds
      */
@@ -500,7 +512,8 @@ final class ChartOfAccountsService
                     $row['parent_id'] === null ? null : (int) $row['parent_id'],
                     (int) $row['ordre'],
                     (int) $row['version'],
-                    $actorId
+                    $actorId,
+                    (bool) $row['afficher_sous_total']
                 );
             }
             if ($orderedIds !== []) {
@@ -849,14 +862,28 @@ final class ChartOfAccountsService
             );
             $used->execute([$accountId]);
             $action = (int) $used->fetchColumn() === 1 ? 'desactive' : 'supprime';
+            if ($action === 'supprime') {
+                try {
+                    $this->pdo->prepare(
+                        'DELETE FROM comptes
+                         WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+                    )->execute([$accountId, $organisationId, $dossierId]);
+                } catch (PDOException $exception) {
+                    if (!str_contains(
+                        $exception->getMessage(),
+                        'FOREIGN KEY constraint failed'
+                    )) {
+                        throw $exception;
+                    }
+                    $action = 'desactive';
+                }
+            }
             if ($action === 'desactive') {
                 $this->pdo->prepare(
                     "UPDATE comptes
                      SET actif = 0, modifie_le = datetime('now'), version = version + 1
-                     WHERE id = ?"
-                )->execute([$accountId]);
-            } else {
-                $this->pdo->prepare('DELETE FROM comptes WHERE id = ?')->execute([$accountId]);
+                     WHERE id = ? AND organisation_id = ? AND dossier_id = ?"
+                )->execute([$accountId, $organisationId, $dossierId]);
             }
             $this->audit->log(
                 'compta.compte_' . $action,
@@ -871,6 +898,55 @@ final class ChartOfAccountsService
         });
     }
 
+    public function reactivateAccount(
+        int $organisationId,
+        int $dossierId,
+        int $accountId,
+        int $expectedVersion,
+        ?int $actorId = null,
+    ): void {
+        $account = $this->pdo->prepare(
+            'SELECT numero FROM comptes
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND imputable = 1 AND actif = 0'
+        );
+        $account->execute([$accountId, $organisationId, $dossierId]);
+        $number = $account->fetchColumn();
+        if ($number === false) {
+            throw new AccountingException(
+                'Compte absent du dossier ou déjà actif.'
+            );
+        }
+
+        $stmt = $this->pdo->prepare(
+            "UPDATE comptes
+             SET actif = 1, modifie_le = datetime('now'), version = version + 1
+             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+               AND imputable = 1 AND actif = 0 AND version = ?"
+        );
+        $stmt->execute([
+            $accountId,
+            $organisationId,
+            $dossierId,
+            $expectedVersion,
+        ]);
+        if ($stmt->rowCount() !== 1) {
+            throw new AccountingException(
+                'Compte modifié par un autre utilisateur. Rechargez la page.'
+            );
+        }
+
+        $this->audit->log(
+            'compta.compte_reactive',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'compte',
+            (string) $accountId,
+            ['numero' => $number]
+        );
+    }
+
     public function exportCsv(int $organisationId, int $dossierId): string
     {
         $this->assertDossierScope($organisationId, $dossierId);
@@ -881,17 +957,18 @@ final class ChartOfAccountsService
         fwrite($stream, "\xEF\xBB\xBF");
         fputcsv($stream, [
             'type_ligne', 'niveau', 'code', 'libelle', 'parent_code',
-            'type_compte', 'sens', 'ordre',
+            'type_compte', 'sens', 'ordre', 'sous_total',
         ], ';', '"', '');
         foreach ($this->accountTypes($organisationId, $dossierId) as $type) {
             $this->writeCsvRow($stream, [
                 'type_compte', '', $type['code'], $type['libelle'], '',
-                '', '', $type['ordre'],
+                '', '', $type['ordre'], '',
             ]);
         }
         foreach ($this->creditPrefixes($organisationId, $dossierId) as $order => $prefix) {
             $this->writeCsvRow($stream, [
                 'regle_sens', '', $prefix, '', '', '', '', ($order + 1) * 10,
+                '',
             ]);
         }
         $rubrics = $this->rubrics($organisationId, $dossierId);
@@ -910,6 +987,7 @@ final class ChartOfAccountsService
                 $rubric['type'],
                 '',
                 $rubric['ordre'],
+                (int) $rubric['afficher_sous_total'] === 1 ? '1' : '0',
             ]);
         }
         foreach ($this->accounts($organisationId, $dossierId, false) as $account) {
@@ -922,6 +1000,7 @@ final class ChartOfAccountsService
                 $account['type'],
                 $account['sens_mode'],
                 $account['ordre'],
+                '',
             ]);
         }
         rewind($stream);
@@ -1157,7 +1236,10 @@ final class ChartOfAccountsService
                     $changed = $existing === null
                         || (string) $existing['libelle'] !== $row['label']
                         || (string) $existing['type'] !== $row['type']
-                        || (int) ($existing['parent_id'] ?? 0) !== (int) ($parentId ?? 0);
+                        || (int) ($existing['parent_id'] ?? 0) !== (int) ($parentId ?? 0)
+                        || ($row['show_subtotal'] !== null
+                            && (int) $existing['afficher_sous_total']
+                                !== ($row['show_subtotal'] ? 1 : 0));
                     if ($changed) {
                         $id = $this->saveRubric(
                             $organisationId,
@@ -1170,7 +1252,8 @@ final class ChartOfAccountsService
                             $parentId,
                             $row['order'],
                             $existing === null ? null : (int) $existing['version'],
-                            $actorId
+                            $actorId,
+                            $row['show_subtotal']
                         );
                     }
                     $orderedIds[] = (int) $id;
@@ -1440,6 +1523,9 @@ final class ChartOfAccountsService
                 || (string) $existing['type'] !== $type
                 || (string) ($currentRubricsById[(int) ($existing['parent_id'] ?? 0)]['code'] ?? '')
                     !== $parentCode
+                || ($row['sous_total'] !== ''
+                    && (int) $existing['afficher_sous_total']
+                        !== ($row['sous_total'] === '1' ? 1 : 0))
             ) {
                 $rubricUpdates++;
             }
@@ -1451,6 +1537,9 @@ final class ChartOfAccountsService
                 'parent_code' => $parentCode,
                 'type' => $type,
                 'order' => $row['ordre'],
+                'show_subtotal' => $row['sous_total'] === ''
+                    ? null
+                    : $row['sous_total'] === '1',
             ];
         }
 
@@ -1584,16 +1673,18 @@ final class ChartOfAccountsService
         if (is_array($headers) && isset($headers[0])) {
             $headers[0] = preg_replace('/^\xEF\xBB\xBF/', '', $headers[0]) ?? $headers[0];
         }
-        $expected = [
+        $legacy = [
             'type_ligne', 'niveau', 'code', 'libelle', 'parent_code',
             'type_compte', 'sens', 'ordre',
         ];
-        if ($headers !== $expected) {
+        $expected = [...$legacy, 'sous_total'];
+        if ($headers !== $expected && $headers !== $legacy) {
             fclose($stream);
             throw new AccountingException(
                 'En-tête CSV invalide. Utilisez un fichier exporté par COMPTA.'
             );
         }
+        $columns = $headers === $legacy ? $legacy : $expected;
         $rows = [];
         $line = 1;
         while (($values = fgetcsv($stream, 0, ';', '"', '')) !== false) {
@@ -1601,11 +1692,11 @@ final class ChartOfAccountsService
             if ($values === [null] || $values === []) {
                 continue;
             }
-            if (count($values) !== count($expected)) {
+            if (count($values) !== count($columns)) {
                 fclose($stream);
                 throw new AccountingException("Nombre de colonnes invalide à la ligne {$line}.");
             }
-            $row = array_combine($expected, array_map(
+            $row = array_combine($columns, array_map(
                 fn (mixed $value): string => $this->unescapeCsvCell(trim((string) $value)),
                 $values
             ));
@@ -1616,6 +1707,13 @@ final class ChartOfAccountsService
             if (preg_match('/^[0-9]+$/', $row['ordre']) !== 1) {
                 fclose($stream);
                 throw new AccountingException("Ordre invalide à la ligne {$line}.");
+            }
+            $row['sous_total'] ??= '';
+            if (!in_array($row['sous_total'], ['', '0', '1'], true)) {
+                fclose($stream);
+                throw new AccountingException(
+                    "Sous-total invalide à la ligne {$line} (0 ou 1 attendu)."
+                );
             }
             $row['ordre'] = (int) $row['ordre'];
             $row['_line'] = $line;

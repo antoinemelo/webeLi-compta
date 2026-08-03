@@ -44,6 +44,11 @@ final class ReportingService
                   JOIN journaux j ON j.id = e.journal_id
                   JOIN lignes_ecriture l ON l.ecriture_id = e.id
                   JOIN comptes c ON c.id = l.compte_id
+                  LEFT JOIN documents_financiers df
+                    ON e.source_type = 'document_financier'
+                   AND CAST(e.source_id AS INTEGER) = df.id
+                   AND df.organisation_id = e.organisation_id
+                   AND df.dossier_id = e.dossier_id
                   WHERE {$whereSql}
                   GROUP BY e.id {$havingSql}";
         $count = $this->pdo->prepare("SELECT COUNT(*) FROM (SELECT e.id {$base}) q");
@@ -55,7 +60,11 @@ final class ReportingService
             : 'e.date_comptable, e.id';
         $query = $this->pdo->prepare(
             "SELECT e.id, e.numero, e.date_comptable, e.libelle, e.reference,
-                    e.statut, e.source_type, j.code AS journal,
+                    e.statut, e.source_type, e.source_id, j.code AS journal,
+                    df.id AS financial_document_id,
+                    df.numero AS financial_document_number,
+                    df.type AS financial_document_type,
+                    df.workflow AS financial_document_workflow,
                     GROUP_CONCAT(DISTINCT CASE
                       WHEN l.debit_centimes > 0 THEN c.numero END) AS comptes_debit,
                     GROUP_CONCAT(DISTINCT CASE
@@ -101,6 +110,10 @@ final class ReportingService
             }
         }
         foreach ($items as &$item) {
+            $item['financial_document_id'] =
+                $item['financial_document_id'] === null
+                    ? null
+                    : (int) $item['financial_document_id'];
             $entryAccounts = $accountsByEntry[(int) $item['id']] ?? [];
             $item['debit_accounts'] = $entryAccounts['debit'] ?? [];
             $item['credit_accounts'] = $entryAccounts['credit'] ?? [];
@@ -482,11 +495,20 @@ final class ReportingService
         return $csv === false ? '' : $csv;
     }
 
-    /** @return array{id:int,libelle:string,date_debut:string,date_fin:string} */
+    /**
+     * @return array{
+     *   id:int,libelle:string,date_debut:string,date_fin:string,
+     *   organisation_nom:string,dossier_nom:string,monnaie:string
+     * }
+     */
     public function exercise(int $organisationId, int $dossierId, ?int $exerciseId = null): array
     {
-        $sql = 'SELECT x.id, x.libelle, x.date_debut, x.date_fin
-                FROM exercices x JOIN dossiers d ON d.id = x.dossier_id
+        $sql = 'SELECT x.id, x.libelle, x.date_debut, x.date_fin,
+                       COALESCE(NULLIF(o.raison_sociale, \'\'), o.nom) AS organisation_nom,
+                       d.nom AS dossier_nom, d.monnaie
+                FROM exercices x
+                JOIN dossiers d ON d.id = x.dossier_id
+                JOIN organisations o ON o.id = d.organisation_id
                 WHERE d.organisation_id = :organisation AND x.dossier_id = :dossier';
         $params = ['organisation' => $organisationId, 'dossier' => $dossierId];
         if ($exerciseId !== null && $exerciseId > 0) {
@@ -505,6 +527,9 @@ final class ReportingService
             'libelle' => (string) $row['libelle'],
             'date_debut' => (string) $row['date_debut'],
             'date_fin' => (string) $row['date_fin'],
+            'organisation_nom' => (string) $row['organisation_nom'],
+            'dossier_nom' => (string) $row['dossier_nom'],
+            'monnaie' => (string) $row['monnaie'],
         ];
     }
 

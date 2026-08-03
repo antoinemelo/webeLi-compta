@@ -220,6 +220,26 @@ final class ConfigurationInputValidator
         ];
     }
 
+    /** @return array{trigger:string,version:int} */
+    public function paymentAccounting(Request $request): array
+    {
+        $data = $this->only($request, ['trigger', 'version']);
+        $trigger = is_string($data['trigger'] ?? null)
+            ? trim((string) $data['trigger'])
+            : '';
+        if (!in_array($trigger, ['premier_lettrage', 'lettrage_complet'], true)) {
+            throw ApiException::validation([
+                'trigger' => ['Mode de comptabilisation invalide.'],
+            ]);
+        }
+        if (!is_int($data['version'] ?? null) || (int) $data['version'] < 0) {
+            throw ApiException::validation([
+                'version' => ['Version positive ou nulle requise.'],
+            ]);
+        }
+        return ['trigger' => $trigger, 'version' => (int) $data['version']];
+    }
+
     /** @return array<string,mixed> */
     public function contact(Request $request): array
     {

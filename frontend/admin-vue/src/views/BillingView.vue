@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import AgingChart from '@/components/billing/AgingChart.vue';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
 import ActionMenu from '@/components/ui/ActionMenu.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
@@ -11,7 +12,11 @@ import ErrorSummary from '@/components/ui/ErrorSummary.vue';
 import FormField from '@/components/ui/FormField.vue';
 import ModalDialog from '@/components/ui/ModalDialog.vue';
 import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
-import type { BillingDocument, CommercialDocument } from '@/api/contracts';
+import type {
+  BillingDocument,
+  BillingPayment,
+  CommercialDocument
+} from '@/api/contracts';
 import { runtimeConfig } from '@/config';
 import { useToastFeedback } from '@/composables/toastFeedback';
 import { subNavigation } from '@/router/navigation';
@@ -29,6 +34,7 @@ type DraftLine = {
 };
 
 const route = useRoute();
+const router = useRouter();
 const context = useContextStore();
 const store = useBillingStore();
 useToastFeedback(store);
@@ -44,6 +50,7 @@ const documentDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const commercialDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const commercialViewerDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const financialViewerDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const reversalDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const conversionDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const contactEditorDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const contact360Dialog = ref<InstanceType<typeof ModalDialog> | null>(null);
@@ -54,6 +61,7 @@ const paymentDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const allocationDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const editingDocument = ref<BillingDocument | null>(null);
 const viewedDocument = ref<BillingDocument | null>(null);
+const reversingDocument = ref<BillingDocument | null>(null);
 const viewedCommercial = ref<CommercialDocument | null>(null);
 const documentAttachment = ref<{ name: string; content_base64: string } | null>(null);
 const contactSearch = ref('');
@@ -115,7 +123,7 @@ const paymentDraft = reactive({
   date: today,
   amount: '',
   reference: '',
-  ledger_account_id: 0,
+  treasury_account_id: 0,
   currency: context.context?.selection?.dossier.currency || 'CHF',
   exchange_rate_id: 0
 });
@@ -124,8 +132,11 @@ const allocationDraft = reactive({
   document_id: 0,
   amount: ''
 });
+const reversalDraft = reactive({ date: today });
 const availableAllocationPayments = computed(() =>
-  (workspace.value?.payments ?? []).filter((item) => item.unallocated_cents > 0)
+  (workspace.value?.payments ?? []).filter(
+    (item) => item.matching_eligible && item.unallocated_cents > 0
+  )
 );
 const selectedAllocationPayment = computed(() =>
   availableAllocationPayments.value.find(
@@ -206,6 +217,9 @@ const documentVatExempt = computed(() => {
     && (regime.valid_until === null || regime.valid_until >= date)
   );
 });
+const documentVatInputEnabled = computed(() =>
+  direction.value === 'purchases' || !documentVatExempt.value
+);
 const documentPaymentDefault = computed(() => {
   const date = documentDraft.document_date;
   const requestedDirection = direction.value === 'sales' ? 'client' : 'fournisseur';
@@ -245,7 +259,7 @@ const commercialRows = computed(() =>
       ...item,
       display_number: item.numero || `Brouillon #${item.id}`,
       type_label: commercialTypeLabel(item.type),
-      status_label: statusLabel(item.statut),
+      status_label: commercialStatusLabel(item),
       total: money(item.total_brut_centimes, item.monnaie),
       source: item.document_source_id
         ? commercialNumber(item.document_source_id)
@@ -289,8 +303,11 @@ const documentRows = computed(() =>
       item.open_base_cents,
       item.base_currency
     ),
-    status_label: statusLabel(item.status),
-    payment_label: paymentLabel(item.payment_state)
+    status_label: documentStatusLabel(item),
+    payment_label: paymentLabel(item.payment_state),
+    accounting_label: item.reversal_entry_id
+      ? 'Extournée'
+      : (item.entry_id ? 'Comptabilisée' : 'Non comptabilisée')
   }))
 );
 const recurrenceRows = computed(() =>
@@ -314,6 +331,9 @@ const contactRows = computed(() => {
   }).map((item) => ({
     ...item,
     roles_label: item.roles.join(', '),
+    receivable_cents: item.balance.receivable_cents,
+    payable_cents: item.balance.payable_cents,
+    net_cents: item.balance.net_cents,
     receivable: money(item.balance.receivable_cents),
     payable: money(item.balance.payable_cents),
     net: money(item.balance.net_cents)
@@ -354,7 +374,7 @@ const contactCommercialRows = computed(() =>
     ...item,
     display_number: item.numero || `Brouillon #${item.id}`,
     type_label: commercialTypeLabel(item.type),
-    status_label: statusLabel(item.statut),
+    status_label: commercialStatusLabel(item),
     total: money(item.total_brut_centimes, item.monnaie)
   }))
 );
@@ -387,8 +407,10 @@ onMounted(async () => {
     const document = workspace.value?.documents.find((item) => item.id === requested);
     if (document) {
       await nextTick();
-      viewDocument(document);
+      openDocument(document);
+      return;
     }
+    await openRequestedContact();
   }
 });
 watch(
@@ -417,7 +439,10 @@ watch(
 );
 watch(activeTab, async () => {
   syncDirection();
-  if (context.context?.selection) await store.load();
+  if (context.context?.selection) {
+    await store.load();
+    await openRequestedContact();
+  }
 });
 watch(
   () => allocationDraft.payment_id,
@@ -462,10 +487,10 @@ watch(
         documentPaymentDefault.value.end_of_month
       );
     }
-    if (documentVatExempt.value) {
+    if (documentVatExempt.value && direction.value === 'sales') {
       documentDraft.lines.forEach((line) => {
         line.vat_code_id = '';
-        line.input_mode = direction.value === 'purchases' ? 'brut' : 'net';
+        line.input_mode = 'net';
       });
     }
   }
@@ -604,7 +629,7 @@ function commercialTypeLabel(type: CommercialDocument['type']): string {
   return {
     offre_client: 'Offre client',
     demande_offre_fournisseur: 'Demande d’offre fournisseur',
-    reponse_offre_fournisseur: 'Réponse fournisseur',
+    reponse_offre_fournisseur: 'Offre fournisseur',
     commande_client: 'Commande client',
     commande_fournisseur: 'Commande fournisseur'
   }[type];
@@ -632,6 +657,14 @@ function money(value: number, currency = 'CHF'): string {
   } ${currency}`;
 }
 
+function plainMoney(value: number): string {
+  const sign = value < 0 ? '−' : '';
+  const absolute = Math.abs(value);
+  return `${sign}${Math.floor(absolute / 100).toLocaleString('fr-CH')}.${
+    String(absolute % 100).padStart(2, '0')
+  }`;
+}
+
 function dualMoney(
   originalCents: number,
   originalCurrency: string,
@@ -654,6 +687,7 @@ function statusLabel(status: string): string {
     pause: 'En pause',
     termine: 'Terminé',
     envoye: 'Envoyé',
+    livre: 'Livré',
     recu: 'Reçu',
     accepte: 'Accepté',
     refuse: 'Refusé',
@@ -662,6 +696,20 @@ function statusLabel(status: string): string {
     facture: 'Facturé',
     archive: 'Archivé'
   }[status] || status;
+}
+
+function commercialStatusLabel(document: Pick<CommercialDocument, 'type' | 'statut'>): string {
+  if (document.type.startsWith('commande_')) {
+    const commandLabels: Partial<Record<CommercialDocument['statut'], string>> = {
+      envoye: 'Envoyée',
+      livre: 'Livrée',
+      facture: 'Facturée',
+      annule: 'Annulée',
+      archive: 'Archivée'
+    };
+    return commandLabels[document.statut] || statusLabel(document.statut);
+  }
+  return statusLabel(document.statut);
 }
 
 function paymentLabel(status: string): string {
@@ -675,6 +723,31 @@ function paymentLabel(status: string): string {
     retard_61_90: '61–90 jours',
     retard_91_plus: '> 90 jours'
   }[status] || status;
+}
+
+function documentStatusLabel(document: BillingDocument): string {
+  return document.reversal_entry_id ? 'Extournée' : statusLabel(document.status);
+}
+
+function financialTypeLabel(type: BillingDocument['type']): string {
+  return {
+    facture_client: 'Facture client',
+    avoir_client: 'Avoir client',
+    facture_fournisseur: 'Facture fournisseur',
+    avoir_fournisseur: 'Avoir fournisseur'
+  }[type];
+}
+
+function priceModeLabel(
+  line: BillingDocument['lines'][number],
+  document: BillingDocument
+): string {
+  if (line.input_mode !== 'brut') return 'Hors TVA';
+  return document.direction === 'purchases'
+    && (line.vat_code_id === 0
+      || (line.vat_cents > 0 && line.deductible_vat_cents === 0))
+    ? 'TVA comprise · non récupérable'
+    : 'TVA comprise';
 }
 
 function apiLines(
@@ -726,7 +799,7 @@ async function applyFilters(): Promise<void> {
 
 async function saveDocument(): Promise<void> {
   try {
-    if (!documentVatExempt.value && documentVatCodes.value.length === 0) {
+    if (documentVatInputEnabled.value && documentVatCodes.value.length === 0) {
       throw new Error(
         'Aucun code TVA applicable. Configurez les codes TVA dans Configuration > Référentiels.'
       );
@@ -744,7 +817,7 @@ async function saveDocument(): Promise<void> {
       lines: apiLines(
         documentDraft.lines,
         documentDraft.document_date,
-        documentVatExempt.value
+        documentVatExempt.value && direction.value === 'sales'
       )
     };
     const wasEditing = editingDocument.value !== null;
@@ -838,6 +911,35 @@ async function createCredit(item: BillingDocument): Promise<void> {
   }
 }
 
+function openReversal(item: BillingDocument): void {
+  reversingDocument.value = item;
+  reversalDraft.date = item.document_date;
+  reversalDialog.value?.open();
+}
+
+async function reverseInvoice(): Promise<void> {
+  const item = reversingDocument.value;
+  if (!item) return;
+  try {
+    await store.mutate('/facturation/documents/extourner', {
+      document_id: item.id,
+      version: item.version,
+      date: reversalDraft.date
+    });
+    reversalDialog.value?.close();
+    reversingDocument.value = null;
+    notifications.push(
+      'Facture extournée : seul le solde restant a été contre-passé et la facture est soldée.',
+      'success'
+    );
+  } catch (error) {
+    notifications.push(
+      store.error || (error instanceof Error ? error.message : 'Extourne impossible.'),
+      'warning'
+    );
+  }
+}
+
 async function downloadPdf(item: BillingDocument): Promise<void> {
   try {
     const result = await store.mutate<{
@@ -847,25 +949,56 @@ async function downloadPdf(item: BillingDocument): Promise<void> {
       warning: string;
     }>(
       '/facturation/documents/pdf',
-      { document_id: item.id }
+      { document_id: item.id },
+      false
     );
-    const bytes = Uint8Array.from(
-      atob(result.content_base64),
-      (character) => character.charCodeAt(0)
-    );
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = result.filename;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBase64Pdf(result.filename, result.content_base64);
     notifications.push(
-      result.warning || 'PDF et QR-facture archivés puis téléchargés.',
-      result.qr_included ? 'success' : 'warning'
+      result.warning || 'PDF téléchargé.',
+      result.warning ? 'warning' : 'success'
     );
   } catch {
     notifications.push(store.error, 'warning');
   }
+}
+
+async function downloadCommercialPdf(item: CommercialDocument): Promise<void> {
+  try {
+    const result = await store.mutate<{
+      filename: string;
+      content_base64: string;
+    }>('/facturation/commerciaux/pdf', { document_id: item.id }, false);
+    downloadBase64Pdf(result.filename, result.content_base64);
+    notifications.push('PDF du document commercial téléchargé.', 'success');
+  } catch {
+    notifications.push(store.error, 'warning');
+  }
+}
+
+async function downloadPaymentPdf(item: BillingPayment): Promise<void> {
+  try {
+    const result = await store.mutate<{
+      filename: string;
+      content_base64: string;
+    }>('/facturation/paiements/pdf', { payment_id: item.id }, false);
+    downloadBase64Pdf(result.filename, result.content_base64);
+    notifications.push('Justificatif de paiement téléchargé.', 'success');
+  } catch {
+    notifications.push(store.error, 'warning');
+  }
+}
+
+function downloadBase64Pdf(filename: string, content: string): void {
+  const bytes = Uint8Array.from(
+    atob(content),
+    (character) => character.charCodeAt(0)
+  );
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function resetContactDraft(): void {
@@ -971,11 +1104,28 @@ async function saveContact(): Promise<void> {
   }
 }
 
-async function selectContact(id: number): Promise<void> {
+async function openContactDialog(id: number): Promise<void> {
   store.filters.contact_id = id;
   await store.load();
   await nextTick();
   contact360Dialog.value?.open();
+}
+
+async function openRequestedContact(): Promise<void> {
+  if (activeTab.value !== 'contacts') return;
+  const id = Number(route.query.contact || 0);
+  if (id > 0) await openContactDialog(id);
+}
+
+async function selectContact(id: number): Promise<void> {
+  if (activeTab.value !== 'contacts') {
+    await router.push({
+      path: '/facturation/contacts',
+      query: { contact: String(id) }
+    });
+    return;
+  }
+  await openContactDialog(id);
 }
 
 async function removeContact(contactId?: number): Promise<void> {
@@ -1022,9 +1172,31 @@ function viewDocument(document: BillingDocument): void {
   financialViewerDialog.value?.open();
 }
 
+function openDocument(document: BillingDocument): void {
+  if (document.status === 'brouillon') {
+    editDocument(document);
+    return;
+  }
+  viewDocument(document);
+}
+
 function viewCommercial(document: CommercialDocument): void {
   viewedCommercial.value = document;
   commercialViewerDialog.value?.open();
+}
+
+function openCommercial(document: CommercialDocument): void {
+  if (document.statut === 'brouillon') {
+    editCommercial(document);
+    return;
+  }
+  viewCommercial(document);
+}
+
+async function openContactFromDocument(contactId: number): Promise<void> {
+  financialViewerDialog.value?.close();
+  commercialViewerDialog.value?.close();
+  await selectContact(contactId);
 }
 
 function printCommercial(): void {
@@ -1041,6 +1213,9 @@ function printCommercial(): void {
 async function clearContact(): Promise<void> {
   store.filters.contact_id = 0;
   await store.load();
+  if (route.query.contact) {
+    await router.replace({ path: '/facturation/contacts' });
+  }
 }
 
 function resetCommercialDraft(type?: CommercialDocument['type']): void {
@@ -1129,7 +1304,7 @@ async function saveCommercial(): Promise<void> {
 
 async function setCommercialStatus(
   document: CommercialDocument,
-  status: string
+  status: CommercialDocument['statut']
 ): Promise<void> {
   try {
     await store.mutate('/facturation/commerciaux/statut', {
@@ -1137,7 +1312,10 @@ async function setCommercialStatus(
       version: document.version,
       status
     });
-    notifications.push(`Document marqué « ${statusLabel(status)} ».`, 'success');
+    notifications.push(
+      `Document marqué « ${commercialStatusLabel({ ...document, statut: status })} ».`,
+      'success'
+    );
   } catch {
     notifications.push(store.error, 'warning');
   }
@@ -1183,23 +1361,31 @@ function openCommercialConversion(
 
 async function convertCommercial(): Promise<void> {
   try {
+    const targetType = conversionDraft.target_type;
     await store.mutate('/facturation/commerciaux/convertir', {
       ...conversionDraft,
-      collective_account_id: conversionDraft.target_type.startsWith('facture_')
+      collective_account_id: targetType.startsWith('facture_')
         ? Number(conversionDraft.collective_account_id)
         : null,
-      due_date: conversionDraft.target_type.startsWith('facture_')
+      due_date: targetType.startsWith('facture_')
         ? conversionDraft.due_date
         : '',
       external_number: conversionDraft.external_number
     });
     conversionDialog.value?.close();
     notifications.push(
-      conversionDraft.target_type.startsWith('facture_')
+      targetType.startsWith('facture_')
         ? 'Brouillon de facture créé et relié au document d’origine.'
         : 'Nouveau document commercial relié à son origine.',
       'success'
     );
+    await router.push(targetType === 'facture_client'
+      ? '/facturation/ventes'
+      : targetType === 'facture_fournisseur'
+        ? '/facturation/achats'
+        : targetType === 'reponse_offre_fournisseur'
+          ? '/facturation/offres'
+          : '/facturation/commandes');
   } catch {
     notifications.push(store.error, 'warning');
   }
@@ -1280,6 +1466,10 @@ async function saveReminder(): Promise<void> {
 }
 
 async function savePayment(): Promise<void> {
+  const treasuryAccount = workspace.value?.catalog.treasury_accounts.find(
+    (account) => account.id === Number(paymentDraft.treasury_account_id)
+  );
+  if (!treasuryAccount) return;
   try {
     await store.mutate('/facturation/paiements', {
       contact_id: Number(paymentDraft.contact_id),
@@ -1287,8 +1477,9 @@ async function savePayment(): Promise<void> {
       date: paymentDraft.date,
       amount_cents: cents(paymentDraft.amount),
       reference: paymentDraft.reference,
-      ledger_account_id: Number(paymentDraft.ledger_account_id),
-      currency: paymentDraft.currency,
+      ledger_account_id: treasuryAccount.ledger_account_id,
+      treasury_account_id: treasuryAccount.id,
+      currency: treasuryAccount.currency,
       exchange_rate_id: paymentDraft.exchange_rate_id || null
     });
     paymentDraft.amount = '';
@@ -1532,8 +1723,11 @@ async function postPayment(
           <RouterLink to="/configuration/paiements">Créer ou définir une condition</RouterLink>.
         </div>
         <div v-if="documentVatExempt" class="notice info">
-          Dossier non assujetti : aucune TVA n’est calculée.
-          <span v-if="direction === 'purchases'">Les montants fournisseurs sont saisis TVA comprise et entièrement comptabilisés en charge.</span>
+          Dossier non assujetti.
+          <span v-if="direction === 'sales'">Aucune TVA n’est calculée sur les ventes.</span>
+          <span v-if="direction === 'purchases'">
+            La TVA indiquée par le fournisseur peut être saisie en montant net ou brut ; elle reste non récupérable et entièrement comptabilisée en charge.
+          </span>
         </div>
         <div class="invoice-lines-heading">
           <div><h3>Lignes de facture</h3><p>Le montant peut être saisi net ou brut selon la ligne.</p></div>
@@ -1563,7 +1757,7 @@ async function postPayment(
             <FormField :id="`billing-line-amount-${index}`" label="Prix unitaire">
               <template #default="{ describedBy }"><input :id="`billing-line-amount-${index}`" v-model="line.amount" inputmode="decimal" :aria-describedby="describedBy" placeholder="0.00" required></template>
             </FormField>
-            <FormField v-if="!documentVatExempt" :id="`billing-line-vat-${index}`" label="Code TVA">
+            <FormField v-if="documentVatInputEnabled" :id="`billing-line-vat-${index}`" label="Code TVA">
               <template #default="{ describedBy }">
                 <select :id="`billing-line-vat-${index}`" v-model.number="line.vat_code_id" :aria-describedby="describedBy" required>
                   <option value="" disabled>Sélectionner</option>
@@ -1571,7 +1765,7 @@ async function postPayment(
                 </select>
               </template>
             </FormField>
-            <FormField v-if="!documentVatExempt" :id="`billing-line-mode-${index}`" label="Saisie">
+            <FormField v-if="documentVatInputEnabled" :id="`billing-line-mode-${index}`" label="Saisie">
               <template #default="{ describedBy }">
                 <select :id="`billing-line-mode-${index}`" v-model="line.input_mode" :aria-describedby="describedBy">
                   <option value="net">Montant net</option>
@@ -1592,19 +1786,40 @@ async function postPayment(
 
       <DataTable
         v-if="documentRows.length"
+        sortable
         :caption="direction === 'sales' ? 'Documents clients' : 'Documents fournisseurs'"
         :columns="[
           { key: 'display_number', label: 'Document' },
           { key: 'contact', label: 'Contact' },
           { key: 'document_date', label: 'Date' },
           { key: 'due_date', label: 'Échéance' },
-          { key: 'amount', label: 'Total' },
-          { key: 'open', label: 'Ouvert' },
+          { key: 'amount', label: 'Total', sortKey: 'gross_cents', type: 'number' },
+          { key: 'open', label: 'Ouvert', sortKey: 'open_cents', type: 'number' },
           { key: 'payment_label', label: 'Paiement' },
+          { key: 'accounting_label', label: 'Comptabilité' },
           { key: 'actions', label: 'Actions' }
         ]"
         :rows="documentRows"
       >
+        <template #cell-display_number="{ row }">
+          <button
+            class="table-primary-link"
+            type="button"
+            @click="openDocument(row as BillingDocument)"
+          >{{ row.display_number }}</button>
+        </template>
+        <template #cell-contact="{ row }">
+          <button
+            class="table-secondary-link"
+            type="button"
+            @click="selectContact(Number(row.contact_id))"
+          >{{ row.contact }}</button>
+        </template>
+        <template #cell-accounting_label="{ row }">
+          <span :class="['status-chip', row.reversal_entry_id ? 'warning' : (row.entry_id ? 'ok' : 'warning')]">
+            {{ row.accounting_label }}
+          </span>
+        </template>
         <template #cell-actions="{ row }">
           <ActionMenu :label="`Actions pour ${row.display_number}`">
             <button type="button" @click="viewDocument(row as BillingDocument)">Consulter</button>
@@ -1612,39 +1827,166 @@ async function postPayment(
             <button v-if="row.status === 'brouillon' && workspace.capabilities.issue" type="button" @click="issueDocument(row as BillingDocument)">Émettre</button>
             <button v-if="row.status === 'emis' && workspace.capabilities.post" type="button" @click="postDocument(row as BillingDocument)">Comptabiliser</button>
             <button v-if="['emis', 'comptabilise'].includes(String(row.status)) && String(row.type).startsWith('facture_') && workspace.capabilities.manage" type="button" @click="createCredit(row as BillingDocument)">Créer un avoir</button>
-            <button v-if="String(row.type) === 'facture_client' && ['emis', 'comptabilise'].includes(String(row.status)) && workspace.capabilities.issue" type="button" @click="downloadPdf(row as BillingDocument)">PDF</button>
+            <button v-if="row.status === 'comptabilise' && String(row.type).startsWith('facture_') && Number(row.open_cents) > 0 && !row.reversal_entry_id && workspace.capabilities.post" class="danger" type="button" @click="openReversal(row as BillingDocument)">Extourner</button>
+            <button v-if="['emis', 'comptabilise', 'annule'].includes(String(row.status)) && workspace.capabilities.issue" type="button" @click="downloadPdf(row as BillingDocument)">PDF</button>
           </ActionMenu>
         </template>
       </DataTable>
       <EmptyState v-else title="Aucun document" description="Aucun document ne correspond aux filtres et à la date de référence." />
       <ModalDialog
+        ref="reversalDialog"
+        title="Extourner la facture"
+        :description="reversingDocument ? `Contre-passation du solde ouvert de ${money(reversingDocument.open_cents, reversingDocument.currency)} sur ${reversingDocument.number}.` : ''"
+        @closed="reversingDocument = null"
+      >
+        <form v-if="reversingDocument" class="modal-form-grid" @submit.prevent="reverseInvoice">
+          <div class="notice warning full-row">
+            Les lettrages existants seront conservés. Seul le montant encore ouvert sera
+            contre-passé, avec sa part de TVA, puis la facture sera considérée comme soldée.
+          </div>
+          <FormField id="invoice-reversal-date" label="Date de l’extourne">
+            <template #default="{ describedBy }">
+              <input
+                id="invoice-reversal-date"
+                v-model="reversalDraft.date"
+                type="date"
+                :min="reversingDocument.document_date"
+                :aria-describedby="describedBy"
+                required
+              >
+            </template>
+          </FormField>
+          <div class="dialog-actions full-row">
+            <button class="button secondary" type="button" @click="reversalDialog?.close()">
+              Annuler
+            </button>
+            <button class="button danger" :disabled="store.saving">
+              Confirmer l’extourne
+            </button>
+          </div>
+        </form>
+      </ModalDialog>
+      <ModalDialog
         ref="financialViewerDialog"
         :title="viewedDocument?.number || `Brouillon #${viewedDocument?.id || ''}`"
         description="Pièce financière du dossier, consultable quel que soit son statut."
-        wide
+        extra-wide
         @closed="viewedDocument = null"
       >
-        <article v-if="viewedDocument" class="document-preview">
-          <dl class="detail-grid">
-            <div><dt>Contact</dt><dd>{{ viewedDocument.contact }}</dd></div>
-            <div><dt>Nature</dt><dd>{{ viewedDocument.type.includes('fournisseur') ? 'Fournisseur' : 'Client' }}</dd></div>
-            <div><dt>Date</dt><dd>{{ viewedDocument.document_date }}</dd></div>
-            <div><dt>Échéance</dt><dd>{{ viewedDocument.due_date }}</dd></div>
-            <div><dt>Statut</dt><dd>{{ statusLabel(viewedDocument.status) }}</dd></div>
-            <div><dt>Total</dt><dd>{{ money(viewedDocument.gross_cents, viewedDocument.currency) }}</dd></div>
-          </dl>
-          <div class="table-wrap">
+        <article v-if="viewedDocument" class="financial-document-sheet">
+          <header class="financial-document-hero">
+            <div class="financial-document-identity">
+              <p class="eyebrow">{{ financialTypeLabel(viewedDocument.type) }}</p>
+              <h2>{{ viewedDocument.number || `Brouillon #${viewedDocument.id}` }}</h2>
+              <button
+                class="financial-contact-link"
+                type="button"
+                @click="openContactFromDocument(viewedDocument.contact_id)"
+              >{{ viewedDocument.contact }}</button>
+              <span v-if="viewedDocument.external_number" class="financial-external-reference">
+                Référence fournisseur : <strong>{{ viewedDocument.external_number }}</strong>
+              </span>
+            </div>
+            <div class="financial-document-state">
+              <span class="status-chip">{{ documentStatusLabel(viewedDocument) }}</span>
+              <span :class="['status-chip', viewedDocument.reversal_entry_id ? 'warning' : (viewedDocument.entry_id ? 'ok' : 'warning')]">
+                {{ viewedDocument.reversal_entry_id ? 'Extournée' : (viewedDocument.entry_id ? 'Comptabilisée' : 'Non comptabilisée') }}
+              </span>
+            </div>
+          </header>
+
+          <div class="financial-document-overview">
+            <dl class="financial-document-dates">
+              <div><dt>Date du document</dt><dd>{{ viewedDocument.document_date }}</dd></div>
+              <div><dt>Échéance</dt><dd>{{ viewedDocument.due_date }}</dd></div>
+              <div><dt>État du paiement</dt><dd>{{ paymentLabel(viewedDocument.payment_state) }}</dd></div>
+              <div><dt>Devise</dt><dd>{{ viewedDocument.currency }}</dd></div>
+            </dl>
+            <aside class="financial-amount-card" aria-label="Résumé financier">
+              <span>Total de la pièce</span>
+              <strong>{{ money(viewedDocument.gross_cents, viewedDocument.currency) }}</strong>
+              <dl>
+                <div>
+                  <dt>Déjà lettré</dt>
+                  <dd>{{ money(viewedDocument.allocated_cents, viewedDocument.currency) }}</dd>
+                </div>
+                <div class="financial-open-amount">
+                  <dt>Solde ouvert</dt>
+                  <dd>{{ money(viewedDocument.open_cents, viewedDocument.currency) }}</dd>
+                </div>
+              </dl>
+            </aside>
+          </div>
+
+          <div class="table-wrap financial-lines-table">
             <table>
-              <thead><tr><th>Position</th><th>Quantité</th><th>Prix unitaire</th><th>Total</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Référence</th>
+                  <th>Quantité</th>
+                  <th>Prix unitaire</th>
+                  <th>Mode du prix</th>
+                  <th>Net</th>
+                  <th>TVA</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
               <tbody>
                 <tr v-for="line in viewedDocument.lines" :key="line.id">
-                  <td>{{ line.label }}</td>
+                  <td><strong>{{ line.label }}</strong></td>
                   <td>{{ quantityInput(line.quantity_milli) }}</td>
                   <td>{{ money(line.unit_price_cents, viewedDocument.currency) }}</td>
-                  <td>{{ money(line.gross_cents, viewedDocument.currency) }}</td>
+                  <td>{{ priceModeLabel(line, viewedDocument) }}</td>
+                  <td>{{ money(line.net_cents, viewedDocument.currency) }}</td>
+                  <td>{{ money(line.vat_cents, viewedDocument.currency) }}</td>
+                  <td><strong>{{ money(line.gross_cents, viewedDocument.currency) }}</strong></td>
                 </tr>
               </tbody>
+              <tfoot>
+                <tr>
+                  <th colspan="4">Totaux</th>
+                  <th>{{ money(viewedDocument.net_cents, viewedDocument.currency) }}</th>
+                  <th>{{ money(viewedDocument.vat_cents, viewedDocument.currency) }}</th>
+                  <th>{{ money(viewedDocument.gross_cents, viewedDocument.currency) }}</th>
+                </tr>
+              </tfoot>
             </table>
+          </div>
+
+          <dl class="financial-document-traceability">
+            <div v-if="viewedDocument.entry_id">
+              <dt>Écriture comptable</dt>
+              <dd>#{{ viewedDocument.entry_id }}</dd>
+            </div>
+            <div v-if="viewedDocument.reversal_entry_id">
+              <dt>Écriture d’extourne</dt>
+              <dd>#{{ viewedDocument.reversal_entry_id }}</dd>
+            </div>
+            <div v-if="viewedDocument.scor_reference">
+              <dt>Référence de paiement</dt>
+              <dd>{{ viewedDocument.scor_reference }}</dd>
+            </div>
+            <div v-if="viewedDocument.currency !== viewedDocument.base_currency">
+              <dt>Contre-valeur</dt>
+              <dd>{{ money(viewedDocument.gross_base_cents, viewedDocument.base_currency) }}</dd>
+            </div>
+            <div v-if="viewedDocument.exchange_rate.source">
+              <dt>Taux de change</dt>
+              <dd>
+                {{ viewedDocument.exchange_rate.date }} ·
+                {{ viewedDocument.exchange_rate.numerator }}/{{ viewedDocument.exchange_rate.denominator }} ·
+                {{ viewedDocument.exchange_rate.source }}
+              </dd>
+            </div>
+          </dl>
+
+          <div class="dialog-actions financial-document-actions">
+            <button
+              v-if="['emis', 'comptabilise', 'annule'].includes(viewedDocument.status) && workspace.capabilities.issue"
+              class="button primary"
+              type="button"
+              @click="downloadPdf(viewedDocument)"
+            >Télécharger le PDF</button>
           </div>
         </article>
       </ModalDialog>
@@ -1653,17 +1995,17 @@ async function postPayment(
     <template v-else-if="workspace && ['offres', 'commandes'].includes(activeTab)">
       <div class="toolbar">
         <div>
-          <p v-if="activeTab === 'offres'">Offres clients, demandes d’offre et réponses fournisseur reliées sans imposer le parcours.</p>
+          <p v-if="activeTab === 'offres'">Offres clients et fournisseurs reliées sans imposer de parcours préalable.</p>
           <p v-else>Une commande peut provenir d’une offre ou être créée directement.</p>
         </div>
         <div v-if="workspace.capabilities.manage" class="button-row">
           <template v-if="activeTab === 'offres'">
-            <button class="button primary" type="button" @click="openCommercialEditor('offre_client')">Nouvelle offre client</button>
-            <button class="button secondary" type="button" @click="openCommercialEditor('demande_offre_fournisseur')">Nouvelle demande fournisseur</button>
+            <button class="button primary" type="button" @click="openCommercialEditor('offre_client')">Offre client</button>
+            <button class="button secondary" type="button" @click="openCommercialEditor('reponse_offre_fournisseur')">Offre fournisseur</button>
           </template>
           <template v-else>
-            <button class="button primary" type="button" @click="openCommercialEditor('commande_client')">Commande client directe</button>
-            <button class="button secondary" type="button" @click="openCommercialEditor('commande_fournisseur')">Commande fournisseur directe</button>
+            <button class="button primary" type="button" @click="openCommercialEditor('commande_client')">Commande client</button>
+            <button class="button secondary" type="button" @click="openCommercialEditor('commande_fournisseur')">Commande fournisseur</button>
           </template>
         </div>
       </div>
@@ -1693,7 +2035,7 @@ async function postPayment(
           <div v-if="commercialVatExempt" class="notice info">Dossier non assujetti : aucune TVA n’est présentée sur ce document.</div>
           <div class="invoice-lines-heading">
             <div>
-              <h3>Positions</h3>
+              <h3>Références</h3>
               <p v-if="commercialDraft.type.startsWith('commande_')">
                 La répartition comptable est facultative à ce stade et sera
                 confirmée lors de la facturation.
@@ -1703,10 +2045,10 @@ async function postPayment(
                 imputation comptable.
               </p>
             </div>
-            <button class="button secondary small" type="button" @click="commercialDraft.lines.push(newLine())">Ajouter une position</button>
+            <button class="button secondary small" type="button" @click="commercialDraft.lines.push(newLine())">Ajouter une référence</button>
           </div>
           <fieldset v-for="(line, index) in commercialDraft.lines" :key="index" class="invoice-line">
-            <legend>Position {{ index + 1 }}</legend>
+            <legend>Référence {{ index + 1 }}</legend>
             <div class="invoice-line-grid">
               <FormField :id="`commercial-line-label-${index}`" label="Libellé"><template #default="{ describedBy }"><input :id="`commercial-line-label-${index}`" v-model="line.label" :aria-describedby="describedBy" required></template></FormField>
               <FormField v-if="commercialDraft.type.startsWith('commande_')" :id="`commercial-line-account-${index}`" label="Répartition comptable (facultative)"><template #default="{ describedBy }"><AccountCombobox :id="`commercial-line-account-${index}`" v-model="line.account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" /></template></FormField>
@@ -1723,6 +2065,7 @@ async function postPayment(
 
       <DataTable
         v-if="commercialRows.length"
+        sortable
         :caption="activeTab === 'offres' ? 'Offres, demandes et réponses' : 'Commandes clients et fournisseurs'"
         :columns="[
           { key: 'display_number', label: 'Document' },
@@ -1730,17 +2073,33 @@ async function postPayment(
           { key: 'contact', label: 'Contact' },
           { key: 'date_document', label: 'Date' },
           { key: 'source', label: 'Origine' },
-          { key: 'total', label: 'Total' },
+          { key: 'total', label: 'Total', sortKey: 'total_brut_centimes', type: 'number' },
           { key: 'status_label', label: 'Statut' },
           { key: 'actions', label: 'Actions' }
         ]"
         :rows="commercialRows"
       >
+        <template #cell-display_number="{ row }">
+          <button
+            class="table-primary-link"
+            type="button"
+            @click="openCommercial(row as unknown as CommercialDocument)"
+          >{{ row.display_number }}</button>
+        </template>
+        <template #cell-contact="{ row }">
+          <button
+            class="table-secondary-link"
+            type="button"
+            @click="selectContact(Number(row.contact_id))"
+          >{{ row.contact }}</button>
+        </template>
         <template #cell-actions="{ row }">
           <ActionMenu :label="`Actions pour ${row.display_number}`">
             <button type="button" @click="viewCommercial(row as unknown as CommercialDocument)">Consulter</button>
             <button v-if="row.statut === 'brouillon'" type="button" @click="editCommercial(row as unknown as CommercialDocument)">Modifier</button>
-            <button v-if="row.statut === 'brouillon' && row.type !== 'reponse_offre_fournisseur'" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'envoye')">Marquer envoyé</button>
+            <button v-if="row.statut === 'brouillon' && String(row.type).startsWith('commande_')" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'envoye')">Marquer envoyée</button>
+            <button v-if="row.statut === 'envoye' && String(row.type).startsWith('commande_')" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'livre')">Confirmer la livraison</button>
+            <button v-if="row.statut === 'brouillon' && !String(row.type).startsWith('commande_') && row.type !== 'reponse_offre_fournisseur'" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'envoye')">Marquer envoyé</button>
             <button v-if="row.statut === 'brouillon' && row.type === 'reponse_offre_fournisseur'" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'recu')">Marquer reçue</button>
             <button v-if="row.type === 'demande_offre_fournisseur' && row.statut === 'envoye'" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'reponse_offre_fournisseur')">Enregistrer la réponse</button>
             <button v-if="['offre_client', 'reponse_offre_fournisseur'].includes(String(row.type)) && ['envoye', 'recu'].includes(String(row.statut))" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'accepte')">Accepter</button>
@@ -1750,9 +2109,10 @@ async function postPayment(
             <button v-if="row.type === 'reponse_offre_fournisseur' && row.statut === 'accepte'" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'commande_fournisseur')">Créer la commande</button>
             <button v-if="row.type === 'offre_client' && row.statut === 'accepte'" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'facture_client')">Facturer directement</button>
             <button v-if="row.type === 'reponse_offre_fournisseur' && row.statut === 'accepte'" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'facture_fournisseur')">Créer la facture</button>
-            <button v-if="row.type === 'commande_client' && ['brouillon', 'envoye', 'accepte'].includes(String(row.statut))" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'facture_client')">Créer la facture</button>
-            <button v-if="row.type === 'commande_fournisseur' && ['brouillon', 'envoye', 'accepte'].includes(String(row.statut))" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'facture_fournisseur')">Créer la facture</button>
-            <button v-if="['brouillon', 'envoye', 'recu', 'accepte'].includes(String(row.statut))" class="danger" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'annule')">Annuler</button>
+            <button v-if="row.type === 'commande_client' && row.statut === 'livre'" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'facture_client')">Créer la facture</button>
+            <button v-if="row.type === 'commande_fournisseur' && row.statut === 'livre'" type="button" @click="openCommercialConversion(row as unknown as CommercialDocument, 'facture_fournisseur')">Créer la facture</button>
+            <button v-if="['brouillon', 'envoye', 'livre', 'recu', 'accepte'].includes(String(row.statut))" class="danger" type="button" @click="setCommercialStatus(row as unknown as CommercialDocument, 'annule')">Annuler</button>
+            <button type="button" @click="downloadCommercialPdf(row as unknown as CommercialDocument)">PDF</button>
           </ActionMenu>
         </template>
       </DataTable>
@@ -1770,17 +2130,21 @@ async function postPayment(
             <div>
               <p class="eyebrow">{{ commercialTypeLabel(viewedCommercial.type) }}</p>
               <h2>{{ viewedCommercial.numero || `Brouillon #${viewedCommercial.id}` }}</h2>
-              <p>{{ viewedCommercial.contact }}</p>
+              <button
+                class="table-secondary-link"
+                type="button"
+                @click="openContactFromDocument(viewedCommercial.contact_id)"
+              >{{ viewedCommercial.contact }}</button>
             </div>
             <div>
               <strong>{{ viewedCommercial.date_document }}</strong>
-              <span class="status-chip">{{ statusLabel(viewedCommercial.statut) }}</span>
+              <span class="status-chip">{{ commercialStatusLabel(viewedCommercial) }}</span>
             </div>
           </header>
           <p v-if="viewedCommercial.texte_entete">{{ viewedCommercial.texte_entete }}</p>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Position</th><th>Quantité</th><th>Prix unitaire</th><th>Total</th></tr></thead>
+              <thead><tr><th>Référence</th><th>Quantité</th><th>Prix unitaire</th><th>Total</th></tr></thead>
               <tbody>
                 <tr v-for="line in viewedCommercial.lines" :key="line.id">
                   <td>{{ line.libelle }}</td>
@@ -1794,7 +2158,8 @@ async function postPayment(
           </div>
           <p v-if="viewedCommercial.texte_pied">{{ viewedCommercial.texte_pied }}</p>
           <div class="dialog-actions no-print">
-            <button class="button primary" type="button" @click="printCommercial">Imprimer</button>
+            <button class="button secondary" type="button" @click="printCommercial">Imprimer cette vue</button>
+            <button class="button primary" type="button" @click="downloadCommercialPdf(viewedCommercial)">Télécharger le PDF</button>
           </div>
         </article>
       </ModalDialog>
@@ -1813,7 +2178,7 @@ async function postPayment(
             <FormField v-if="conversionDraft.target_type === 'facture_fournisseur' || conversionDraft.target_type === 'reponse_offre_fournisseur'" id="conversion-reference" label="Référence fournisseur"><template #default="{ describedBy }"><input id="conversion-reference" v-model="conversionDraft.external_number" :aria-describedby="describedBy" :required="conversionDraft.target_type === 'facture_fournisseur'"></template></FormField>
           </div>
           <fieldset v-if="conversionDraft.target_type.startsWith('facture_')">
-            <legend>Répartition comptable des positions</legend>
+            <legend>Répartition comptable des références</legend>
             <div class="configuration-grid">
               <label v-for="line in conversionDraft.line_accounts" :key="line.line_id">
                 {{ line.label }}
@@ -1862,6 +2227,7 @@ async function postPayment(
       </form>
       <DataTable
         v-if="recurrenceRows.length"
+        sortable
         caption="Modèles de factures récurrentes"
         :columns="[{ key: 'label', label: 'Modèle' }, { key: 'type_label', label: 'Parcours' }, { key: 'contact', label: 'Contact' }, { key: 'cadence', label: 'Cadence' }, { key: 'next_date', label: 'Prochaine' }, { key: 'generation_count', label: 'Brouillons' }, { key: 'status_label', label: 'Statut' }, { key: 'actions', label: 'Actions' }]"
         :rows="recurrenceRows"
@@ -1940,8 +2306,9 @@ async function postPayment(
       </ModalDialog>
       <DataTable
         v-if="contactRows.length"
+        sortable
         caption="Contacts du dossier"
-        :columns="[{ key: 'label', label: 'Contact' }, { key: 'company_contact_name', label: 'Entreprise' }, { key: 'roles_label', label: 'Rôles' }, { key: 'offers_count', label: 'Offres actives' }, { key: 'orders_count', label: 'Commandes actives' }, { key: 'receivable', label: 'Créances' }, { key: 'payable', label: 'Dettes' }, { key: 'net', label: 'Net' }, { key: 'active', label: 'Statut' }, { key: 'actions', label: 'Actions' }]"
+        :columns="[{ key: 'label', label: 'Contact' }, { key: 'company_contact_name', label: 'Entreprise' }, { key: 'roles_label', label: 'Rôles' }, { key: 'offers_count', label: 'Offres actives', type: 'number' }, { key: 'orders_count', label: 'Commandes actives', type: 'number' }, { key: 'receivable', label: 'Créances', sortKey: 'receivable_cents', type: 'number' }, { key: 'payable', label: 'Dettes', sortKey: 'payable_cents', type: 'number' }, { key: 'net', label: 'Net', sortKey: 'net_cents', type: 'number' }, { key: 'active', label: 'Statut' }, { key: 'actions', label: 'Actions' }]"
         :rows="contactRows"
       >
         <template #cell-active="{ row }">{{ row.active ? 'Actif' : 'Archivé' }}</template>
@@ -1971,8 +2338,7 @@ async function postPayment(
           <dl class="detail-grid contact-kpis">
             <div><dt>Créances nettes</dt><dd>{{ money(workspace.contact_360.balance.receivable_cents) }}</dd></div>
             <div><dt>Dettes nettes</dt><dd>{{ money(workspace.contact_360.balance.payable_cents) }}</dd></div>
-            <div><dt>Solde net</dt><dd>{{ money(workspace.contact_360.balance.net_cents) }}</dd></div>
-            <div><dt>Documents</dt><dd>{{ workspace.contact_360.documents.length }}</dd></div>
+            <div><dt>Factures</dt><dd>{{ workspace.contact_360.documents.length }}</dd></div>
             <div><dt>Offres et commandes</dt><dd>{{ workspace.contact_360.commercial_documents.length }}</dd></div>
             <div><dt>Paiements</dt><dd>{{ workspace.contact_360.payments.length }}</dd></div>
           </dl>
@@ -1989,14 +2355,23 @@ async function postPayment(
                 { key: 'status_label', label: 'Statut' }
               ]"
               :rows="contactCommercialRows"
-            />
+            >
+              <template #cell-display_number="{ row }">
+                <button
+                  class="table-primary-link"
+                  type="button"
+                  title="Télécharger le PDF sans quitter la fiche contact"
+                  @click="downloadCommercialPdf(row as unknown as CommercialDocument)"
+                >{{ row.display_number }}</button>
+              </template>
+            </DataTable>
             <EmptyState v-else title="Aucun document commercial" description="Aucune offre, demande ou commande pour ce contact." />
           </section>
           <section class="history-section">
-            <h3>Documents</h3>
+            <h3>Factures</h3>
             <DataTable
               v-if="contactDocumentRows.length"
-              caption="Historique des documents du contact"
+              caption="Historique des factures du contact"
               :columns="[
                 { key: 'display_number', label: 'Document' },
                 { key: 'type_label', label: 'Nature' },
@@ -2007,8 +2382,18 @@ async function postPayment(
                 { key: 'status_label', label: 'Statut' }
               ]"
               :rows="contactDocumentRows"
-            />
-            <EmptyState v-else title="Aucun document" description="Aucun document pour ce contact à la date choisie." />
+            >
+              <template #cell-display_number="{ row }">
+                <button
+                  class="table-primary-link"
+                  type="button"
+                  title="Télécharger le PDF sans quitter la fiche contact"
+                  :disabled="!workspace.capabilities.issue || !['emis', 'comptabilise', 'annule'].includes(String(row.status))"
+                  @click="downloadPdf(row as BillingDocument)"
+                >{{ row.display_number }}</button>
+              </template>
+            </DataTable>
+            <EmptyState v-else title="Aucune facture" description="Aucune facture pour ce contact à la date choisie." />
           </section>
           <section class="history-section">
             <h3>Paiements</h3>
@@ -2024,7 +2409,16 @@ async function postPayment(
                 { key: 'unallocated', label: 'Non alloué' }
               ]"
               :rows="contactPaymentRows"
-            />
+            >
+              <template #cell-reference="{ row }">
+                <button
+                  class="table-primary-link"
+                  type="button"
+                  title="Télécharger le justificatif sans quitter la fiche contact"
+                  @click="downloadPaymentPdf(row as BillingPayment)"
+                >{{ row.reference || `Paiement #${row.id}` }}</button>
+              </template>
+            </DataTable>
             <EmptyState v-else title="Aucun paiement" description="Aucun paiement n’est rattaché à ce contact." />
           </section>
         </div>
@@ -2050,12 +2444,23 @@ async function postPayment(
         <article class="kpi-card"><span>Avances fournisseurs</span><strong>{{ money(workspace.aging.payables.unallocated_payments_cents) }}</strong><small>Non ventilées dans l’aging</small></article>
       </div>
       <DataTable
+        class="aging-table"
         caption="Tranches d’âge des créances et dettes"
         :columns="[{ key: 'side', label: 'Nature' }, { key: 'not_due', label: 'Non échu' }, { key: 'd0', label: '0–30' }, { key: 'd31', label: '31–60' }, { key: 'd61', label: '61–90' }, { key: 'd91', label: '> 90' }, { key: 'net', label: 'Solde net' }]"
         :rows="[
-          { id: 'receivables', side: 'Créances', not_due: money(workspace.aging.receivables.buckets.not_due), d0: money(workspace.aging.receivables.buckets.days_0_30), d31: money(workspace.aging.receivables.buckets.days_31_60), d61: money(workspace.aging.receivables.buckets.days_61_90), d91: money(workspace.aging.receivables.buckets.days_91_plus), net: money(workspace.aging.receivables.net_open_cents) },
-          { id: 'payables', side: 'Dettes', not_due: money(workspace.aging.payables.buckets.not_due), d0: money(workspace.aging.payables.buckets.days_0_30), d31: money(workspace.aging.payables.buckets.days_31_60), d61: money(workspace.aging.payables.buckets.days_61_90), d91: money(workspace.aging.payables.buckets.days_91_plus), net: money(workspace.aging.payables.net_open_cents) }
+          { id: 'receivables', side: 'Créances', not_due: plainMoney(workspace.aging.receivables.buckets.not_due), d0: plainMoney(workspace.aging.receivables.buckets.days_0_30), d31: plainMoney(workspace.aging.receivables.buckets.days_31_60), d61: plainMoney(workspace.aging.receivables.buckets.days_61_90), d91: plainMoney(workspace.aging.receivables.buckets.days_91_plus), net: plainMoney(workspace.aging.receivables.net_open_cents) },
+          { id: 'payables', side: 'Dettes', not_due: plainMoney(workspace.aging.payables.buckets.not_due), d0: plainMoney(workspace.aging.payables.buckets.days_0_30), d31: plainMoney(workspace.aging.payables.buckets.days_31_60), d61: plainMoney(workspace.aging.payables.buckets.days_61_90), d91: plainMoney(workspace.aging.payables.buckets.days_91_plus), net: plainMoney(workspace.aging.payables.net_open_cents) }
         ]"
+      >
+        <template #cell-side="{ row }">
+          <span :class="['aging-table-label', String(row.id)]">
+            <i aria-hidden="true"></i>{{ row.side }}
+          </span>
+        </template>
+      </DataTable>
+      <AgingChart
+        :receivables="workspace.aging.receivables"
+        :payables="workspace.aging.payables"
       />
 
       <ModalDialog ref="paymentDialog" title="Saisir un paiement" description="Enregistrez le règlement indépendamment de son allocation aux factures.">
@@ -2067,7 +2472,7 @@ async function postPayment(
           <FormField id="payment-reference" label="Référence"><template #default="{ describedBy }"><input id="payment-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy" placeholder="Communication ou référence bancaire"></template></FormField>
           <FormField id="payment-currency" label="Devise"><template #default="{ describedBy }"><select id="payment-currency" v-model="paymentDraft.currency" :aria-describedby="describedBy" required @change="paymentDraft.exchange_rate_id = 0"><option v-for="currencyItem in workspace.catalog.currencies" :key="currencyItem.code" :value="currencyItem.code">{{ currencyItem.code }}{{ currencyItem.is_base ? ' · base' : '' }}</option></select></template></FormField>
           <FormField v-if="paymentDraft.currency !== context.context?.selection?.dossier.currency" id="payment-rate" label="Taux figé"><template #default="{ describedBy }"><select id="payment-rate" v-model.number="paymentDraft.exchange_rate_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="rate in paymentExchangeRates" :key="rate.id" :value="rate.id">{{ rate.rate_date }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option></select></template></FormField>
-          <FormField id="payment-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="payment-account" v-model="paymentDraft.ledger_account_id" :options="workspace.catalog.accounts" :aria-describedby="describedBy" required /></template></FormField>
+          <FormField id="payment-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="payment-account" v-model="paymentDraft.treasury_account_id" :options="workspace.catalog.treasury_accounts" number-key="ledger_number" label-key="label" :aria-describedby="describedBy" required /></template></FormField>
           <div class="dialog-actions full-row"><button class="button primary" :disabled="store.saving">Enregistrer</button></div>
         </form>
       </ModalDialog>
@@ -2226,6 +2631,35 @@ async function postPayment(
 .contact-kpis dd {
   margin: 0.25rem 0 0;
   font-weight: 750;
+}
+
+.aging-table-label {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  font-weight: 750;
+}
+
+.aging-table-label i {
+  width: .8rem;
+  height: .8rem;
+  border-radius: .2rem;
+}
+
+.aging-table-label.receivables i {
+  background: #087f8c;
+}
+
+.aging-table-label.payables i {
+  background: #c2413b;
+}
+
+:deep(.aging-table tbody tr:first-child td) {
+  background: color-mix(in srgb, #087f8c 7%, var(--surface));
+}
+
+:deep(.aging-table tbody tr:last-child td) {
+  background: color-mix(in srgb, #c2413b 7%, var(--surface));
 }
 
 @media (max-width: 980px) {

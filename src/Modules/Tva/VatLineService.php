@@ -32,13 +32,14 @@ final class VatLineService
         string $reason = '',
         ?int $tdfnId = null,
         int $correctionCents = 0,
+        bool $purchaseDocument = false,
     ): array {
         $regime = (new VatConfigurationService($this->pdo, $this->audit))
             ->regimeAt($organisationId, $dossierId, $serviceDate);
         $code = $this->codeAt($organisationId, $dossierId, $codeId, $serviceDate);
         $rateBp = 0;
         if (
-            $regime['statut'] !== 'non_assujetti'
+            ($regime['statut'] !== 'non_assujetti' || $purchaseDocument)
             && $code['taux_legal_id'] !== null
         ) {
             $rateBp = $this->legalRateAt((int) $code['taux_legal_id'], $serviceDate);
@@ -118,6 +119,7 @@ final class VatLineService
         int $correctionCents = 0,
         array $document = [],
         ?int $actorId = null,
+        bool $purchaseDocument = false,
     ): int {
         $quote = $this->quote(
             $organisationId,
@@ -129,7 +131,8 @@ final class VatLineService
             $deductionBp,
             $reason,
             $tdfnId,
-            $correctionCents
+            $correctionCents,
+            $purchaseDocument
         );
         $stmt = $this->pdo->prepare(
             'INSERT INTO tva_lignes

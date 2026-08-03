@@ -20,7 +20,6 @@ const route = useRoute();
 const mobileOpen = ref(false);
 const scopeMenuOpen = ref(false);
 const accountMenuOpen = ref(false);
-const desktopMenusSuppressed = ref(false);
 const topbarActions = ref<HTMLElement | null>(null);
 const logoutDialog = ref<InstanceType<typeof ConfirmDialog> | null>(null);
 const securityDialog = ref<InstanceType<typeof AccountSecurityDialog> | null>(null);
@@ -74,18 +73,6 @@ function closeMenus(): void {
   mobileOpen.value = false;
   scopeMenuOpen.value = false;
   accountMenuOpen.value = false;
-}
-
-function closeNavigationMenu(event: MouseEvent): void {
-  desktopMenusSuppressed.value = true;
-  if (event.currentTarget instanceof HTMLElement) {
-    event.currentTarget.blur();
-  }
-  closeMenus();
-}
-
-function enableDesktopMenus(): void {
-  desktopMenusSuppressed.value = false;
 }
 
 function toggleScopeMenu(): void {
@@ -142,7 +129,7 @@ function updateSetupGuideState(event: Event): void {
         >
           <span aria-hidden="true">☰</span>
         </button>
-        <RouterLink to="/" class="brand" aria-label="Ouvrir le tableau de bord" @click="closeNavigationMenu">
+        <RouterLink to="/" class="brand" aria-label="Ouvrir le tableau de bord" @click="closeMenus">
           <strong>{{ organizationName }}</strong>
           <span>
             {{ dossierName }}
@@ -153,7 +140,6 @@ function updateSetupGuideState(event: Event): void {
       <GlobalNavigationSearch :modules="allNavigation" />
       <nav
         class="desktop-module-navigation navbar-nav flex-row"
-        :class="{ 'menus-suppressed': desktopMenusSuppressed }"
         aria-label="Navigation principale"
       >
         <div
@@ -161,14 +147,12 @@ function updateSetupGuideState(event: Event): void {
           :key="item.key"
           class="desktop-module-menu nav-item"
           :class="{ active: activeSection === item.key }"
-          @mouseenter="enableDesktopMenus"
-          @focusin="enableDesktopMenus"
         >
           <RouterLink
             :to="item.path"
             class="desktop-module-link nav-link"
             :aria-haspopup="subNavigation[item.key]?.length ? 'menu' : undefined"
-            @click="closeNavigationMenu"
+            @click="closeMenus"
           >
             <span>{{ item.label }}</span>
             <svg
@@ -192,7 +176,7 @@ function updateSetupGuideState(event: Event): void {
               :to="child.path"
               class="dropdown-item rounded-2"
               role="menuitem"
-              @click="closeNavigationMenu"
+              @click="closeMenus"
             >
               {{ child.label }}
             </RouterLink>

@@ -123,7 +123,8 @@ final class AccountingApiController
                 $query['exercise_id'],
                 $query['type'],
                 $query['date_start'],
-                $query['date_end']
+                $query['date_end'],
+                $query['format']
             );
             $this->audit->log(
                 'compta.rapport_exporte',
@@ -135,13 +136,15 @@ final class AccountingApiController
                 [
                     'date_debut' => $query['date_start'],
                     'date_fin' => $query['date_end'],
+                    'format' => $query['format'],
                 ],
                 $request->ip()
             );
             return new Response($export['content'], 200, [
-                'Content-Type' => 'text/csv; charset=UTF-8',
+                'Content-Type' => $export['mime_type'],
                 'Content-Disposition' =>
                     'attachment; filename="' . $export['filename'] . '"',
+                'X-Content-Type-Options' => 'nosniff',
             ]);
         });
     }
@@ -812,6 +815,7 @@ final class AccountingApiController
             $dossierId,
             $data['exercise_id'],
             $data['balances'],
+            $data['treasury_balances'],
             $data['validate'],
             $userId
         ));

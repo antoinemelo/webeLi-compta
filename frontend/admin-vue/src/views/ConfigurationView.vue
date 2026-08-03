@@ -105,6 +105,9 @@ const clientDefault = ref(0);
 const supplierDefault = ref(0);
 const clientDefaultFrom = ref(today);
 const supplierDefaultFrom = ref(today);
+const paymentAccountingTrigger = ref<'premier_lettrage' | 'lettrage_complet'>(
+  'premier_lettrage'
+);
 const contactReferenceSearch = ref('');
 const contactReferenceStatus = ref<'active' | 'archived' | 'all'>('active');
 const contactDraft = reactive({
@@ -350,6 +353,13 @@ watch(
   { deep: true }
 );
 watch(
+  () => store.configuration?.payment_accounting.trigger,
+  (value) => {
+    if (value) paymentAccountingTrigger.value = value;
+  },
+  { immediate: true }
+);
+watch(
   managedReferences,
   (value) => {
     if (!value) return;
@@ -515,6 +525,7 @@ async function importPayrollRates(event: Event): Promise<void> {
   const file = input.files?.[0];
   if (!file) return;
   try {
+    store.error = '';
     if (file.size > 1_000_000) {
       throw new Error('Le fichier CSV dépasse la taille maximale de 1 Mo.');
     }
@@ -565,17 +576,21 @@ async function importPayrollRates(event: Event): Promise<void> {
     });
 
     for (const payload of payloads) await store.savePayrollRates(payload);
+    payrollRatesDialog.value?.close();
     notifications.push(
-      `${payloads.length} millésime(s) importé(s) après validation du CSV.`,
+      `${payloads.length} millésime(s) importé(s) : ${
+        [...years].sort((left, right) => left - right).join(', ')
+      }.`,
       'success'
     );
   } catch (error) {
-    if (!store.error) {
-      notifications.push(
-        error instanceof Error ? error.message : 'Import des taux annuels impossible.',
-        'error'
-      );
-    }
+    notifications.push(
+      store.error
+        || (error instanceof Error
+          ? error.message
+          : 'Import des taux annuels impossible.'),
+      'error'
+    );
   } finally {
     input.value = '';
   }
@@ -925,12 +940,34 @@ function resetTreasuryDraft(): void {
 function editTreasuryAccount(
   account: NonNullable<typeof managedReferences.value>['treasury']['accounts'][number]
 ): void {
-  Object.assign(treasuryDraft, account);
+  Object.assign(treasuryDraft, {
+    id: account.id,
+    version: account.version,
+    ledger_account_id: account.ledger_account_id,
+    label: account.label,
+    type: account.type,
+    iban: account.iban,
+    bic: account.bic,
+    currency: account.currency,
+    accounting_multiplier: account.accounting_multiplier,
+    active: account.active
+  });
   void treasuryDialog.value?.open();
 }
 
 async function saveTreasuryAccount(): Promise<void> {
-  await store.saveTreasuryAccount({ ...treasuryDraft });
+  await store.saveTreasuryAccount({
+    id: treasuryDraft.id,
+    version: treasuryDraft.version,
+    ledger_account_id: treasuryDraft.ledger_account_id,
+    label: treasuryDraft.label,
+    type: treasuryDraft.type,
+    iban: treasuryDraft.iban,
+    bic: treasuryDraft.bic,
+    currency: treasuryDraft.currency,
+    accounting_multiplier: treasuryDraft.accounting_multiplier,
+    active: treasuryDraft.active
+  });
   resetTreasuryDraft();
   treasuryDialog.value?.close();
   notifications.push('Compte de trésorerie enregistré.', 'success');
@@ -1112,6 +1149,18 @@ async function saveDefault(direction: 'client' | 'fournisseur'): Promise<void> {
   if (!conditionId) return;
   await store.savePaymentDefault(direction, conditionId, validFrom);
   notifications.push('Nouveau défaut daté enregistré sans effet rétroactif.', 'success');
+}
+
+async function savePaymentAccounting(): Promise<void> {
+  if (!configuration.value) return;
+  await store.savePaymentAccounting(
+    paymentAccountingTrigger.value,
+    configuration.value.payment_accounting.version
+  );
+  notifications.push(
+    'Règle de comptabilisation des paiements enregistrée.',
+    'success'
+  );
 }
 
 async function clearAudit(): Promise<void> {
@@ -1304,6 +1353,46 @@ async function clearAudit(): Promise<void> {
             Nouvelle condition
           </button>
         </div>
+        <form class="panel" @submit.prevent="savePaymentAccounting">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Grand livre et liquidités</p>
+              <h3>Comptabilisation des paiements</h3>
+            </div>
+          </div>
+          <p>
+            Une écriture opposant un compte de trésorerie à un compte d’actif
+            ou de passif devient automatiquement un paiement déjà comptabilisé
+            à lettrer. Les produits, charges et comptes hors bilan sont exclus.
+          </p>
+          <div class="configuration-grid">
+            <FormField
+              id="payment-accounting-trigger"
+              label="Paiement saisi dans Liquidités"
+              hint="Une ligne bancaire associée déclenche toujours la comptabilisation. En devise étrangère, le lettrage complet reste requis pour figer correctement l’écart de change."
+            >
+              <template #default="{ describedBy }">
+                <select
+                  id="payment-accounting-trigger"
+                  v-model="paymentAccountingTrigger"
+                  :aria-describedby="describedBy"
+                >
+                  <option value="premier_lettrage">
+                    Comptabiliser au premier lettrage
+                  </option>
+                  <option value="lettrage_complet">
+                    Attendre le lettrage complet
+                  </option>
+                </select>
+              </template>
+            </FormField>
+          </div>
+          <div class="form-actions">
+            <button class="button secondary" type="submit" :disabled="store.saving">
+              Enregistrer la règle
+            </button>
+          </div>
+        </form>
         <ModalDialog
           ref="paymentTermDialog"
           title="Nouvelle condition de paiement"
@@ -1438,8 +1527,7 @@ async function clearAudit(): Promise<void> {
         </nav>
 
         <template v-if="managedReferences && referenceSection === 'treasury'">
-          <div class="section-toolbar">
-            <div><p class="eyebrow">Grand livre lié</p><h2>Comptes de trésorerie</h2></div>
+          <div class="section-toolbar justify-content-end">
             <button
               v-if="managedReferences.capabilities.treasury"
               class="button primary"
@@ -1450,7 +1538,7 @@ async function clearAudit(): Promise<void> {
           <ModalDialog
             ref="treasuryDialog"
             :title="treasuryDraft.id ? 'Modifier le compte de trésorerie' : 'Nouveau compte de trésorerie'"
-            description="Chaque compte de trésorerie est relié à un compte unique du grand livre."
+            description="Plusieurs comptes de trésorerie peuvent être regroupés sous le même compte du grand livre."
             wide
           >
             <form class="configuration-form" @submit.prevent="saveTreasuryAccount">
@@ -1686,8 +1774,7 @@ async function clearAudit(): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'contacts'">
-          <div class="section-toolbar">
-            <div><p class="eyebrow">Registre partagé</p><h2>Débiteurs et créanciers</h2></div>
+          <div class="section-toolbar justify-content-end">
             <button
               v-if="managedReferences.capabilities.contacts"
               class="button primary"
@@ -1858,8 +1945,7 @@ async function clearAudit(): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'vat'">
-          <div class="section-toolbar">
-            <div><p class="eyebrow">Valeurs datées</p><h2>Références TVA</h2></div>
+          <div class="section-toolbar justify-content-end">
             <div v-if="managedReferences.capabilities.vat" class="button-row">
               <button class="button primary" type="button" @click="resetVatCode(); vatDialog?.open()">
                 Nouveau code TVA
@@ -2148,8 +2234,7 @@ async function clearAudit(): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'payroll'">
-          <div class="section-toolbar">
-            <div><p class="eyebrow">Genève · valeurs en pourcentage</p><h2>Charges sociales</h2></div>
+          <div class="section-toolbar justify-content-end">
             <button
               v-if="managedReferences.capabilities.payroll"
               class="button primary"
@@ -2329,8 +2414,7 @@ async function clearAudit(): Promise<void> {
         </template>
 
         <template v-else-if="managedReferences && referenceSection === 'exercises'">
-          <div class="section-toolbar">
-            <div><p class="eyebrow">Dossier</p><h2>Exercices comptables</h2></div>
+          <div class="section-toolbar justify-content-end">
             <div v-if="managedReferences.capabilities.accounting_setup" class="button-row">
               <button class="button primary" type="button" @click="exerciseDialog?.open()">Nouvel exercice comptable</button>
               <button class="button secondary" type="button" @click="periodDialog?.open()">Nouvelle période</button>
@@ -2366,9 +2450,6 @@ async function clearAudit(): Promise<void> {
             </form>
           </ModalDialog>
           <article class="panel">
-            <div class="panel-heading">
-              <div><p class="eyebrow">Dossier</p><h2>Exercices comptables</h2></div>
-            </div>
             <div class="table-wrap">
               <table>
                 <thead><tr><th>Exercice</th><th>Début</th><th>Fin</th><th>Statut</th><th></th></tr></thead>

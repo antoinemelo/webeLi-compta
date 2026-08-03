@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
+import ActionMenu from '@/components/ui/ActionMenu.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import DataTable from '@/components/ui/DataTable.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -19,6 +20,7 @@ import { useNotificationStore } from '@/stores/notifications';
 import type { ExpenseItem, PublicMarketSeries } from '@/api/contracts';
 
 const route = useRoute();
+const router = useRouter();
 const context = useContextStore();
 const store = useExpensesStore();
 const treasury = useTreasuryStore();
@@ -31,9 +33,13 @@ const exchangeMode = ref<'moyenne' | 'fin_mois'>('moyenne');
 const selectedInterestCode = ref('');
 const reconciliationSection = ref<'import' | 'suggestion' | 'matching'>('import');
 const ratesSection = ref<'exchange' | 'interest'>('exchange');
+const paymentSection = ref<'list' | 'batches'>('list');
+const paymentFilter = ref<'unallocated' | 'all' | 'allocated'>('unallocated');
 const today = new Date().toISOString().slice(0, 10);
 const selectedId = ref(0);
+const editingExpense = ref<ExpenseItem | null>(null);
 const expenseDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
+const expenseViewerDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const recurrenceDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const paymentDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const attachment = ref<{ name: string; content_base64: string } | null>(null);
@@ -57,12 +63,27 @@ const paymentDraft = reactive({
   amount: '',
   reference: '',
   treasury_account_id: 0,
+  collective_account_id: 0,
   bank_line_id: 0
 });
 const allocationDraft = reactive({ payment_id: 0, document_id: 0, amount: '' });
+const collectiveAccountOptions = computed(() => {
+  const treasuryAccountIds = new Set(
+    (treasury.workspace?.treasury_accounts ?? [])
+      .map((account) => Number(account.ledger_account_id))
+  );
+  return (treasury.workspace?.catalog.accounts ?? []).filter((account) =>
+    account.lettrable
+    && !treasuryAccountIds.has(Number(account.id))
+    && (paymentDraft.direction === 'encaissement'
+      ? account.type === 'actif'
+      : account.type === 'passif')
+  );
+});
 const availableAllocationPayments = computed(() =>
   (treasury.workspace?.payments ?? []).filter(
-    (item) => item.non_alloue_centimes > 0 && item.statut === 'valide'
+    (item) => item.matching_eligible
+      && item.non_alloue_centimes > 0 && item.statut === 'valide'
   )
 );
 const selectedAllocationPayment = computed(() =>
@@ -78,10 +99,37 @@ const compatibleAllocationDocuments = computed(() => {
     : 'facture_fournisseur';
   return (treasury.workspace?.open_documents ?? []).filter((document) =>
     document.type === expectedType
-    && document.contact_id === payment.contact_id
     && document.currency === payment.monnaie
+    && (
+      !payment.compte_collectif_id
+      || document.collective_account_id === Number(payment.compte_collectif_id)
+    )
   );
 });
+const paymentRows = computed(() => (
+  (treasury.workspace?.payments ?? [])
+    .filter((payment) => {
+      if (paymentFilter.value === 'unallocated') {
+        return payment.matching_eligible
+          && payment.non_alloue_centimes > 0 && payment.statut === 'valide';
+      }
+      if (paymentFilter.value === 'allocated') {
+        return payment.non_alloue_centimes === 0 && payment.statut === 'valide';
+      }
+      return true;
+    })
+    .map((payment) => ({
+      ...payment,
+      display_reference: payment.reference || `Paiement #${payment.id}`,
+      direction_label: payment.sens === 'encaissement'
+        ? 'Encaissement' : 'Décaissement',
+      origin_label: payment.origine === 'journal'
+        ? 'Journal' : payment.origine === 'lot' ? 'Lot' : 'Liquidités',
+      accounting_label: payment.ecriture_id
+        ? 'Comptabilisé' : 'À comptabiliser',
+      contact_label: payment.contact || 'Plusieurs / non attribué'
+    }))
+));
 const selectedDebtIds = ref<number[]>([]);
 const batchDraft = reactive({
   treasury_account_id: 0,
@@ -139,6 +187,7 @@ const recurrence = reactive({
 });
 
 function resetExpenseDraft(): void {
+  editingExpense.value = null;
   Object.assign(expense, {
     contact_id: 0,
     document_date: today,
@@ -170,6 +219,33 @@ function openExpenseDialog(): void {
   expenseDialog.value?.open();
 }
 
+async function openExpense(item: ExpenseItem): Promise<void> {
+  selectedId.value = item.id;
+  if (item.status === 'brouillon' && workspace.value?.capabilities.manage) {
+    editingExpense.value = item;
+    Object.assign(expense, {
+      contact_id: item.contact_id,
+      document_date: item.document_date,
+      due_date: item.due_date,
+      external_number: item.external_number,
+      collective_account_id: item.collective_account.id,
+      lines: item.lines.map((line) => ({
+        libelle: line.label,
+        prix: inputMoney(line.unit_price_cents),
+        mode_saisie: line.input_mode,
+        compte_id: line.account_id,
+        code_tva_id: line.vat_code_id
+      }))
+    });
+    attachment.value = null;
+    await nextTick();
+    expenseDialog.value?.open();
+    return;
+  }
+  await nextTick();
+  expenseViewerDialog.value?.open();
+}
+
 function openRecurrenceDialog(): void {
   resetRecurrenceDraft();
   recurrenceDialog.value?.open();
@@ -183,6 +259,7 @@ function openPaymentDialog(): void {
     amount: '',
     reference: '',
     treasury_account_id: 0,
+    collective_account_id: 0,
     bank_line_id: 0
   });
   paymentDialog.value?.open();
@@ -193,7 +270,7 @@ const expenseRows = computed(() => (workspace.value?.expenses ?? []).map((item) 
   display_number: item.number || `Brouillon #${item.id}`,
   amount: money(item.gross_cents, item.currency),
   open: money(item.open_cents, item.currency),
-  status_label: statusLabel(item.status)
+  status_label: item.rejected ? 'Refusée' : statusLabel(item.status)
 })));
 
 const recurrenceRows = computed(() => (workspace.value?.recurrences ?? []).map((item) => ({
@@ -235,7 +312,14 @@ const interestChartSeries = computed(() => {
     : [];
 });
 
-onMounted(load);
+onMounted(async () => {
+  await load();
+  const requested = Number(route.query.expense || 0);
+  const item = workspace.value?.expenses.find((expenseItem) =>
+    expenseItem.id === requested
+  );
+  if (item) await openExpense(item);
+});
 watch(
   () => context.context?.selection?.dossier.id,
   () => {
@@ -563,12 +647,15 @@ async function createPayment(): Promise<void> {
   if (!treasuryAccount) return;
   try {
     await treasury.mutate('/liquidites/lettrage/paiements', {
-      contact_id: Number(paymentDraft.contact_id),
+      contact_id: paymentDraft.contact_id
+        ? Number(paymentDraft.contact_id) : null,
       direction: paymentDraft.direction,
       date: paymentDraft.date,
       amount_cents: cents(paymentDraft.amount),
       reference: paymentDraft.reference,
       ledger_account_id: treasuryAccount.ledger_account_id,
+      treasury_account_id: treasuryAccount.id,
+      collective_account_id: Number(paymentDraft.collective_account_id),
       bank_line_id: paymentDraft.bank_line_id || null,
       currency: treasuryAccount.currency
     });
@@ -577,6 +664,30 @@ async function createPayment(): Promise<void> {
   } catch {
     notifications.push(treasury.error, 'warning');
   }
+}
+
+async function openContact(contactId: number): Promise<void> {
+  if (contactId < 1) return;
+  await router.push({
+    path: '/facturation/contacts',
+    query: { contact: String(contactId) }
+  });
+}
+
+async function openAllocatedDocument(row: Record<string, unknown>): Promise<void> {
+  const documentId = Number(row.document_id);
+  if (documentId < 1) return;
+  await router.push({
+    path: row.document_type === 'facture_fournisseur'
+      ? '/facturation/achats'
+      : '/facturation/ventes',
+    query: { document: String(documentId) }
+  });
+}
+
+async function startAllocation(paymentId: number): Promise<void> {
+  allocationDraft.payment_id = paymentId;
+  await router.push('/liquidites/lettrage');
 }
 
 async function allocatePayment(): Promise<void> {
@@ -672,7 +783,8 @@ async function confirmBatch(item: { id: number }): Promise<void> {
 
 async function saveExpense(): Promise<void> {
   try {
-    await store.mutate('/liquidites/depenses', {
+    const wasEditing = editingExpense.value !== null;
+    const payload = {
       contact_id: Number(expense.contact_id),
       document_date: expense.document_date,
       due_date: expense.due_date,
@@ -680,10 +792,24 @@ async function saveExpense(): Promise<void> {
       collective_account_id: Number(expense.collective_account_id),
       lines: apiLines(expense.lines, expense.document_date),
       attachment: attachment.value
-    });
+    };
+    if (editingExpense.value) {
+      await store.mutate('/liquidites/depenses/modifier', {
+        ...payload,
+        document_id: editingExpense.value.id,
+        version: editingExpense.value.version
+      });
+    } else {
+      await store.mutate('/liquidites/depenses', payload);
+    }
     expenseDialog.value?.close();
     attachment.value = null;
-    notifications.push('Dépense enregistrée comme brouillon, sans comptabilisation.', 'success');
+    notifications.push(
+      wasEditing
+        ? 'Brouillon de dépense mis à jour.'
+        : 'Dépense enregistrée comme brouillon, sans comptabilisation.',
+      'success'
+    );
   } catch {
     notifications.push(store.error, 'warning');
   }
@@ -718,7 +844,7 @@ async function postExpense(item: ExpenseItem): Promise<void> {
 }
 
 async function cancelExpense(item: ExpenseItem): Promise<void> {
-  if (!window.confirm('Annuler cette dépense ? Une écriture validée sera contre-passée.')) return;
+  if (!window.confirm('Annuler définitivement cette dépense non comptabilisée ?')) return;
   try {
     await store.mutate('/liquidites/depenses/annuler', {
       document_id: item.id,
@@ -807,7 +933,7 @@ async function toggleRecurrence(item: {
 
       <ModalDialog
         ref="expenseDialog"
-        title="Nouvelle dépense ponctuelle"
+        :title="editingExpense ? `Modifier ${editingExpense.number || `le brouillon #${editingExpense.id}`}` : 'Nouvelle dépense ponctuelle'"
         description="Renseignez le fournisseur puis répartissez la dépense entre ses contreparties."
         wide
         @closed="resetExpenseDraft"
@@ -822,7 +948,7 @@ async function toggleRecurrence(item: {
               </select>
             </template>
           </FormField>
-          <FormField id="expense-number" label="Référence fournisseur">
+          <FormField id="expense-number" label="Référence fournisseur" hint="Unique pour ce fournisseur, y compris après le refus ou l’annulation d’un document.">
             <template #default="{ describedBy }">
               <input id="expense-number" v-model="expense.external_number" :aria-describedby="describedBy" required>
             </template>
@@ -878,23 +1004,27 @@ async function toggleRecurrence(item: {
 
       <DataTable
         v-if="expenseRows.length"
+        sortable
         caption="Dépenses du dossier"
         :columns="[
           { key: 'display_number', label: 'Dépense' },
           { key: 'supplier', label: 'Fournisseur' },
           { key: 'due_date', label: 'Échéance' },
-          { key: 'amount', label: 'Montant' },
-          { key: 'open', label: 'Ouvert' },
+          { key: 'amount', label: 'Montant', sortKey: 'gross_cents', type: 'number' },
+          { key: 'open', label: 'Ouvert', sortKey: 'open_cents', type: 'number' },
           { key: 'status_label', label: 'Statut' },
           { key: 'actions', label: 'Actions' }
         ]"
         :rows="expenseRows"
       >
         <template #cell-display_number="{ row }">
-          <button class="table-link" type="button" @click="selectedId = Number(row.id)">{{ row.display_number }}</button>
+          <button class="table-link" type="button" @click="openExpense(row as ExpenseItem)">{{ row.display_number }}</button>
         </template>
         <template #cell-actions="{ row }">
-          <div class="table-actions">
+          <ActionMenu :label="`Actions pour ${row.display_number}`">
+            <button type="button" @click="openExpense(row as ExpenseItem)">
+              {{ row.status === 'brouillon' && workspace.capabilities.manage ? 'Modifier' : 'Consulter' }}
+            </button>
             <button
               v-if="row.status === 'brouillon' && workspace.capabilities.manage"
               type="button"
@@ -906,20 +1036,34 @@ async function toggleRecurrence(item: {
               @click="transition('/liquidites/depenses/approuver', row as ExpenseItem, 'Dépense approuvée.')"
             >Approuver</button>
             <button
+              v-if="row.status === 'a_approuver' && workspace.capabilities.approve"
+              class="danger"
+              type="button"
+              @click="transition('/liquidites/depenses/refuser', row as ExpenseItem, 'Dépense refusée.')"
+            >Refuser</button>
+            <button
               v-if="row.status === 'approuve' && workspace.capabilities.post"
               type="button"
               @click="postExpense(row as ExpenseItem)"
             >Comptabiliser</button>
             <button
-              v-if="!['annule'].includes(String(row.status)) && workspace.capabilities.post"
+              v-if="['brouillon', 'approuve'].includes(String(row.status)) && workspace.capabilities.manage"
+              class="danger"
               type="button"
               @click="cancelExpense(row as ExpenseItem)"
             >Annuler</button>
-          </div>
+          </ActionMenu>
         </template>
       </DataTable>
       <EmptyState v-else title="Aucune dépense" description="Ajoutez une dépense ponctuelle ou générez une échéance récurrente." />
 
+      <ModalDialog
+        ref="expenseViewerDialog"
+        :title="selected?.number || `Brouillon #${selected?.id || ''}`"
+        description="Détail de la dépense"
+        extra-wide
+        @closed="selectedId = 0"
+      >
       <article v-if="selected" class="detail-card expense-detail">
         <header class="expense-detail-heading">
           <div>
@@ -927,14 +1071,11 @@ async function toggleRecurrence(item: {
             <div class="expense-title-row">
               <h3>{{ selected.number || `Brouillon #${selected.id}` }}</h3>
               <span :class="['status-chip', `status-${selected.status}`]">
-                {{ statusLabel(selected.status) }}
+                {{ selected.rejected ? 'Refusée' : statusLabel(selected.status) }}
               </span>
             </div>
             <p>{{ selected.supplier }}</p>
           </div>
-          <button class="button ghost small" type="button" @click="selectedId = 0">
-            Fermer
-          </button>
         </header>
 
         <dl class="expense-metadata">
@@ -1012,6 +1153,7 @@ async function toggleRecurrence(item: {
           </div>
         </div>
       </article>
+      </ModalDialog>
 
       <section class="recurrence-section">
         <div class="toolbar">
@@ -1048,11 +1190,16 @@ async function toggleRecurrence(item: {
         </ModalDialog>
         <DataTable
           v-if="recurrenceRows.length"
+          sortable
           caption="Modèles de dépenses récurrentes"
           :columns="[{ key: 'label', label: 'Modèle' }, { key: 'supplier', label: 'Fournisseur' }, { key: 'cadence', label: 'Cadence' }, { key: 'next_date', label: 'Prochaine' }, { key: 'generations', label: 'Générées' }, { key: 'status_label', label: 'Statut' }, { key: 'actions', label: 'Actions' }]"
           :rows="recurrenceRows"
         >
-          <template #cell-actions="{ row }"><button v-if="row.status !== 'termine' && workspace.capabilities.manage" type="button" @click="toggleRecurrence(row as { id: number; version: number; status: string })">{{ row.status === 'actif' ? 'Mettre en pause' : 'Reprendre' }}</button></template>
+          <template #cell-actions="{ row }">
+            <ActionMenu :label="`Actions pour ${row.label}`">
+              <button v-if="row.status !== 'termine' && workspace.capabilities.manage" type="button" @click="toggleRecurrence(row as { id: number; version: number; status: string })">{{ row.status === 'actif' ? 'Mettre en pause' : 'Reprendre' }}</button>
+            </ActionMenu>
+          </template>
         </DataTable>
       </section>
     </template>
@@ -1079,7 +1226,7 @@ async function toggleRecurrence(item: {
                 v-model="importAccountId"
                 :options="treasury.workspace.treasury_accounts"
                 number-key="ledger_number"
-                label-key="ledger_label"
+                label-key="label"
                 :aria-describedby="describedBy"
                 required
               />
@@ -1175,7 +1322,7 @@ async function toggleRecurrence(item: {
             v-model="reconciliationAccountId"
             :options="treasury.workspace.treasury_accounts"
             number-key="ledger_number"
-            label-key="ledger_label"
+            label-key="label"
             aria-label="Compte à rapprocher"
             placeholder="Compte bancaire"
             required
@@ -1259,10 +1406,9 @@ async function toggleRecurrence(item: {
         <div><p>Un paiement reste indépendant et peut couvrir plusieurs documents.</p></div>
       </div>
       <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
-        <h3>Allouer à un document ouvert</h3>
         <div class="form-grid">
           <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in availableAllocationPayments" :key="item.id" :value="item.id">{{ item.date_paiement }} · {{ item.sens === 'encaissement' ? 'Encaissement' : 'Décaissement' }} · {{ item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes, item.monnaie) }}</option></select></template></FormField>
-          <FormField id="allocation-document" label="Facture compatible" :hint="selectedAllocationPayment && !compatibleAllocationDocuments.length ? 'Aucune facture émise du même contact, du même sens et dans la même devise.' : 'Seules les factures compatibles sont proposées.'"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" :disabled="!selectedAllocationPayment || !compatibleAllocationDocuments.length" required><option :value="0" disabled>{{ selectedAllocationPayment ? 'Sélectionner' : 'Choisir d’abord un paiement' }}</option><option v-for="item in compatibleAllocationDocuments" :key="item.id" :value="item.id">{{ item.number }} · {{ item.contact }} · {{ money(item.open_cents, item.currency) }}</option></select></template></FormField>
+          <FormField id="allocation-document" label="Facture compatible" :hint="selectedAllocationPayment && !compatibleAllocationDocuments.length ? 'Aucune facture comptabilisée du même sens, de la même devise et du même compte de paiement.' : undefined"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" :disabled="!selectedAllocationPayment || !compatibleAllocationDocuments.length" required><option :value="0" disabled>{{ selectedAllocationPayment ? 'Sélectionner' : 'Choisir d’abord un paiement' }}</option><option v-for="item in compatibleAllocationDocuments" :key="item.id" :value="item.id">{{ item.number }} · {{ item.contact }} · {{ money(item.open_cents, item.currency) }}</option></select></template></FormField>
           <FormField id="allocation-amount" label="Montant alloué"><template #default="{ describedBy }"><input id="allocation-amount" v-model="allocationDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
         </div>
         <button class="button primary" :disabled="treasury.saving">Lettrer</button>
@@ -1280,15 +1426,57 @@ async function toggleRecurrence(item: {
           { key: 'actions', label: 'Actions' }
         ]"
         :rows="treasury.workspace.allocations"
+        sortable
       >
+        <template #cell-document_numero="{ row }">
+          <button
+            class="table-primary-link"
+            type="button"
+            @click="openAllocatedDocument(row)"
+          >{{ row.document_numero }}</button>
+        </template>
         <template #cell-montant_centimes="{ row }">{{ money(Number(row.montant_centimes)) }}</template>
-        <template #cell-actions="{ row }"><button v-if="row.statut === 'valide' && treasury.workspace?.capabilities.match" type="button" @click="unallocate(Number(row.id))">Délettrer</button></template>
+        <template #cell-contact="{ row }">
+          <button
+            class="table-secondary-link"
+            type="button"
+            @click="openContact(Number(row.contact_id))"
+          >{{ row.contact }}</button>
+        </template>
+        <template #cell-actions="{ row }">
+          <ActionMenu :label="`Actions pour l’allocation ${row.id}`">
+            <button
+              v-if="row.statut === 'valide' && treasury.workspace?.capabilities.match"
+              type="button"
+              @click="unallocate(Number(row.id))"
+            >Délettrer</button>
+          </ActionMenu>
+        </template>
       </DataTable>
     </template>
 
     <template v-else-if="workspace && treasury.workspace && activeTab === 'paiements'">
+      <nav class="subtabs secondary-tabs section-tabs" aria-label="Sections des paiements">
+        <button :class="{ active: paymentSection === 'list' }" type="button" @click="paymentSection = 'list'">
+          Liste et paiement individuel
+        </button>
+        <button :class="{ active: paymentSection === 'batches' }" type="button" @click="paymentSection = 'batches'">
+          Lots
+        </button>
+      </nav>
+      <template v-if="paymentSection === 'list'">
       <div class="toolbar">
-        <div><p>Préparation, export pain.001 non transmis, puis confirmation par relevé.</p></div>
+        <div>
+          <p>Les paiements non entièrement lettrés sont affichés par défaut.</p>
+        </div>
+        <label class="compact-control">
+          Afficher
+          <select v-model="paymentFilter">
+            <option value="unallocated">Non entièrement lettrés</option>
+            <option value="allocated">Entièrement lettrés</option>
+            <option value="all">Tous les paiements</option>
+          </select>
+        </label>
         <button
           v-if="treasury.workspace.capabilities.match"
           class="button primary"
@@ -1307,7 +1495,7 @@ async function toggleRecurrence(item: {
       >
         <form class="modal-editor" @submit.prevent="createPayment">
           <div class="form-grid">
-            <FormField id="matching-contact" label="Contact" hint="Recherche par entreprise, prénom ou nom.">
+            <FormField id="matching-contact" label="Contact indicatif" hint="Facultatif : chaque lettrage reprend le contact de sa facture.">
               <template #default="{ describedBy }">
                 <AccountCombobox
                   id="matching-contact"
@@ -1317,7 +1505,6 @@ async function toggleRecurrence(item: {
                   label-key="label"
                   placeholder="Rechercher un contact…"
                   :aria-describedby="describedBy"
-                  required
                 />
               </template>
             </FormField>
@@ -1325,7 +1512,18 @@ async function toggleRecurrence(item: {
             <FormField id="matching-date" label="Date"><template #default="{ describedBy }"><input id="matching-date" v-model="paymentDraft.date" type="date" :aria-describedby="describedBy" required></template></FormField>
             <FormField id="matching-amount" label="Montant"><template #default="{ describedBy }"><input id="matching-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
             <FormField id="matching-reference" label="Référence"><template #default="{ describedBy }"><input id="matching-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy"></template></FormField>
-            <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="matching-account" v-model="paymentDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="ledger_label" :aria-describedby="describedBy" required /></template></FormField>
+            <FormField id="matching-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="matching-account" v-model="paymentDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="label" :aria-describedby="describedBy" required /></template></FormField>
+            <FormField id="matching-collective-account" label="Compte de paiement" hint="Uniquement un collectif clients ou fournisseurs ; les comptes de trésorerie sont exclus.">
+              <template #default="{ describedBy }">
+                <AccountCombobox
+                  id="matching-collective-account"
+                  v-model="paymentDraft.collective_account_id"
+                  :options="collectiveAccountOptions"
+                  :aria-describedby="describedBy"
+                  required
+                />
+              </template>
+            </FormField>
             <FormField id="matching-bank-line" label="Ligne bancaire facultative" hint="Le montant cumulé et le sens sont contrôlés côté serveur.">
               <template #default="{ describedBy }">
                 <select id="matching-bank-line" v-model.number="paymentDraft.bank_line_id" :aria-describedby="describedBy">
@@ -1344,10 +1542,62 @@ async function toggleRecurrence(item: {
           </div>
         </form>
       </ModalDialog>
+      <DataTable
+        v-if="paymentRows.length"
+        caption="Paiements et état du lettrage"
+        :columns="[
+          { key: 'display_reference', label: 'Paiement' },
+          { key: 'date_paiement', label: 'Date' },
+          { key: 'direction_label', label: 'Sens' },
+          { key: 'contact_label', label: 'Contact indicatif' },
+          { key: 'montant_centimes', label: 'Montant', type: 'number' },
+          { key: 'alloue_centimes', label: 'Lettré', type: 'number' },
+          { key: 'non_alloue_centimes', label: 'À lettrer', type: 'number' },
+          { key: 'origin_label', label: 'Origine' },
+          { key: 'accounting_label', label: 'Comptabilité' },
+          { key: 'actions', label: 'Actions' }
+        ]"
+        :rows="paymentRows"
+        sortable
+      >
+        <template #cell-contact_label="{ row }">
+          <button
+            v-if="Number(row.contact_id) > 0"
+            class="table-secondary-link"
+            type="button"
+            @click="openContact(Number(row.contact_id))"
+          >{{ row.contact_label }}</button>
+          <span v-else>{{ row.contact_label }}</span>
+        </template>
+        <template #cell-montant_centimes="{ row }">{{ money(Number(row.montant_centimes), String(row.monnaie)) }}</template>
+        <template #cell-alloue_centimes="{ row }">{{ money(Number(row.alloue_centimes), String(row.monnaie)) }}</template>
+        <template #cell-non_alloue_centimes="{ row }">{{ money(Number(row.non_alloue_centimes), String(row.monnaie)) }}</template>
+        <template #cell-accounting_label="{ row }">
+          <span :class="['status-chip', row.ecriture_id ? 'ok' : 'warning']">
+            {{ row.accounting_label }}
+          </span>
+        </template>
+        <template #cell-actions="{ row }">
+          <ActionMenu :label="`Actions pour ${row.display_reference}`">
+            <button
+              v-if="row.matching_eligible && Number(row.non_alloue_centimes) > 0 && row.statut === 'valide'"
+              type="button"
+              @click="startAllocation(Number(row.id))"
+            >Lettrer</button>
+          </ActionMenu>
+        </template>
+      </DataTable>
+      <EmptyState
+        v-else
+        title="Aucun paiement dans cette vue"
+        description="Modifiez le filtre ou saisissez un paiement individuel."
+      />
+      </template>
+      <template v-else>
+      <p>Préparation, export pain.001 non transmis, puis confirmation par relevé.</p>
       <form v-if="treasury.workspace.capabilities.prepare_payments" class="editor-card" @submit.prevent="prepareBatch">
-        <h3>Dettes approuvées et comptabilisées</h3>
         <div class="form-grid">
-          <FormField id="batch-account" label="Compte débiteur"><template #default="{ describedBy }"><AccountCombobox id="batch-account" v-model="batchDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="ledger_label" :aria-describedby="describedBy" required /></template></FormField>
+          <FormField id="batch-account" label="Compte débiteur"><template #default="{ describedBy }"><AccountCombobox id="batch-account" v-model="batchDraft.treasury_account_id" :options="treasury.workspace.treasury_accounts" number-key="ledger_number" label-key="label" :aria-describedby="describedBy" required /></template></FormField>
           <FormField id="batch-date" label="Date d’exécution"><template #default="{ describedBy }"><input id="batch-date" v-model="batchDraft.execution_date" type="date" :aria-describedby="describedBy" required></template></FormField>
         </div>
         <label v-for="debt in treasury.workspace.payable_debts" :key="debt.id" class="selection-row">
@@ -1388,6 +1638,7 @@ async function toggleRecurrence(item: {
         </article>
       </section>
       <EmptyState v-else title="Aucun lot de paiements" description="Sélectionnez une ou plusieurs dettes comptabilisées." />
+      </template>
     </template>
 
     <template v-else-if="workspace && treasury.workspace && activeTab === 'taux'">

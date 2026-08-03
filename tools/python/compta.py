@@ -177,7 +177,11 @@ def backup_path(target: Path, reason: str) -> Path:
     directory = storage_for_database(target) / "backups"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     candidate = directory / f"{target.stem}-{reason}-{stamp}.sqlite"
-    if candidate.exists():
+    if any(path.exists() for path in (
+        candidate,
+        Path(str(candidate) + "-wal"),
+        Path(str(candidate) + "-shm"),
+    )):
         candidate = directory / (
             f"{target.stem}-{reason}-{stamp}-{os.urandom(3).hex()}.sqlite"
         )
@@ -185,16 +189,43 @@ def backup_path(target: Path, reason: str) -> Path:
 
 
 def backup_database(source: Path, destination: Path) -> Path:
+    if any(path.exists() for path in (
+        destination,
+        Path(str(destination) + "-wal"),
+        Path(str(destination) + "-shm"),
+    )):
+        raise AdminError(
+            "La destination ou l’un de ses fichiers SQLite auxiliaires "
+            "existe déjà."
+        )
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
         with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as original:
             with sqlite3.connect(destination) as backup:
                 original.backup(backup)
-    except sqlite3.DatabaseError as error:
-        if destination.exists():
-            destination.unlink()
+        with sqlite3.connect(destination) as portable:
+            journal_mode = str(
+                portable.execute("PRAGMA journal_mode = DELETE").fetchone()[0]
+            ).lower()
+            if journal_mode != "delete":
+                raise AdminError(
+                    "La copie ne peut pas être normalisée en fichier SQLite "
+                    "autonome."
+                )
+        check_database(destination)
+        auxiliaries = (
+            Path(str(destination) + "-wal"),
+            Path(str(destination) + "-shm"),
+        )
+        if any(path.exists() for path in auxiliaries):
+            raise AdminError(
+                "La copie conserve des fichiers SQLite auxiliaires."
+            )
+    except (sqlite3.DatabaseError, AdminError) as error:
+        remove_database_files(destination)
+        if isinstance(error, AdminError):
+            raise
         raise AdminError(f"Sauvegarde SQLite impossible : {error}") from error
-    check_database(destination)
     return destination
 
 
@@ -393,6 +424,54 @@ def database_inspect(args: argparse.Namespace) -> int:
     target = args.path.resolve()
     check_database(target)
     print_database_summary(target, "Audit en lecture seule")
+    return 0
+
+
+def database_backup(args: argparse.Namespace) -> int:
+    source = args.source.resolve()
+    check_database(source)
+    output = args.output
+    destination = (
+        backup_path(source, "portable")
+        if output is None
+        else output.resolve()
+    )
+    if ROOT not in destination.parents and not args.allow_outside_project:
+        raise AdminError(
+            "La sauvegarde est hors du projet. Ajoutez "
+            "--allow-outside-project pour confirmer ce périmètre."
+        )
+    if source == destination:
+        raise AdminError("La base source et la sauvegarde sont identiques.")
+    if any(path.exists() for path in (
+        destination,
+        Path(str(destination) + "-wal"),
+        Path(str(destination) + "-shm"),
+    )):
+        raise AdminError(
+            "La sauvegarde ou un fichier SQLite auxiliaire existe déjà. "
+            "Choisissez un autre chemin de sortie."
+        )
+    source_summary = database_summary(source)
+    source_fingerprints = database_fingerprints(source)
+    print(f"Base source : {source}")
+    print(f"Photographie portable : {destination}")
+    print(
+        "Étapes : copie SQLite cohérente incluant le WAL, normalisation en "
+        "fichier unique, contrôle d’intégrité et comparaison du contenu."
+    )
+    ensure_apply(args, "aucune photographie n’a été créée")
+    backup_database(source, destination)
+    destination_summary = database_summary(destination)
+    assert_restored_content(source_summary, destination_summary)
+    assert_restored_fingerprints(
+        source_fingerprints,
+        database_fingerprints(destination),
+    )
+    print_database_summary(destination, "Photographie portable créée")
+    print(
+        "Fichier autonome vérifié : aucun fichier -wal ou -shm n’est requis."
+    )
     return 0
 
 
@@ -1670,6 +1749,28 @@ def interactive_restore_database() -> int:
     ))
 
 
+def interactive_backup_database() -> int:
+    source = Path(ask(
+        "Base source",
+        str(ROOT / "storage" / "database" / "app.sqlite"),
+    ))
+    if not source.is_absolute():
+        source = ROOT / source
+    suggested = backup_path(source, "portable")
+    output = Path(ask("Fichier autonome à créer", str(suggested)))
+    if not output.is_absolute():
+        output = ROOT / output
+    if not confirm("Créer et contrôler cette photographie SQLite"):
+        print("Opération annulée.")
+        return 0
+    return database_backup(argparse.Namespace(
+        source=source,
+        output=output,
+        allow_outside_project=False,
+        apply=True,
+    ))
+
+
 def interactive_inspect_database() -> int:
     target = Path(ask(
         "Base à auditer en lecture seule",
@@ -1688,7 +1789,8 @@ def interactive_database() -> int:
         print(" 1. Créer une instance utilisable (recommandé)")
         print(" 2. Créer uniquement une base technique vierge")
         print(" 3. Restaurer une sauvegarde existante")
-        print(" 4. Auditer une base sans la modifier")
+        print(" 4. Créer une photographie SQLite autonome")
+        print(" 5. Auditer une base sans la modifier")
         print(" 0. Retour")
         try:
             choice = input("Votre choix : ").strip()
@@ -1708,6 +1810,8 @@ def interactive_database() -> int:
         if choice == "3":
             return interactive_restore_database()
         if choice == "4":
+            return interactive_backup_database()
+        if choice == "5":
             return interactive_inspect_database()
         print("Choix invalide.")
 
@@ -1812,9 +1916,13 @@ def interactive_menu() -> int:
             ["php", "bin/console", "qualify"]
         ).returncode),
         "3": ("Créer ou restaurer une base de données", interactive_database),
-        "4": ("Créer un commit Git puis le pousser", interactive_publish),
-        "5": ("Déployer le delta applicatif versionné", interactive_deploy),
-        "6": (
+        "4": (
+            "Créer une photographie SQLite autonome",
+            interactive_backup_database,
+        ),
+        "5": ("Créer un commit Git puis le pousser", interactive_publish),
+        "6": ("Déployer le delta applicatif versionné", interactive_deploy),
+        "7": (
             "Installer un nouveau site depuis un dossier par FTP/FTPS",
             interactive_ftp_install,
         ),
@@ -1926,6 +2034,27 @@ def parser() -> argparse.ArgumentParser:
     restoration.add_argument("--allow-outside-project", action="store_true")
     restoration.add_argument("--apply", action="store_true")
     restoration.set_defaults(handler=database_restore)
+
+    backup = commands.add_parser(
+        "db-backup",
+        help="Créer une photographie SQLite autonome incluant le WAL",
+    )
+    backup.add_argument(
+        "--source",
+        type=Path,
+        default=ROOT / "storage" / "database" / "app.sqlite",
+    )
+    backup.add_argument(
+        "--output",
+        type=Path,
+        help=(
+            "Fichier à créer (par défaut : copie horodatée dans "
+            "storage/backups)"
+        ),
+    )
+    backup.add_argument("--allow-outside-project", action="store_true")
+    backup.add_argument("--apply", action="store_true")
+    backup.set_defaults(handler=database_backup)
 
     inspection = commands.add_parser(
         "db-inspect",

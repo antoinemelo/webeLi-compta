@@ -29,7 +29,7 @@ final class PaymentService
     public function create(
         int $organisationId,
         int $dossierId,
-        int $contactId,
+        ?int $contactId,
         string $direction,
         string $date,
         int $amountCents,
@@ -39,6 +39,9 @@ final class PaymentService
         ?int $bankLineId = null,
         string $currency = 'CHF',
         ?int $exchangeRateId = null,
+        ?int $collectiveAccountId = null,
+        string $origin = 'liquidites',
+        ?int $treasuryOperationalAccountId = null,
     ): int {
         $currency = strtoupper(trim($currency));
         if ($currency === '') {
@@ -53,6 +56,7 @@ final class PaymentService
             || !$this->validDate($date)
             || $amountCents <= 0
             || preg_match('/^[A-Z]{3}$/', $currency) !== 1
+            || !in_array($origin, ['liquidites', 'journal', 'lot'], true)
         ) {
             throw new BillingException('Paiement invalide.');
         }
@@ -68,13 +72,26 @@ final class PaymentService
             $actorId,
             $bankLineId,
             $currency,
-            $exchangeRateId
+            $exchangeRateId,
+            $collectiveAccountId,
+            $origin,
+            $treasuryOperationalAccountId
         ): int {
+            $treasuryOperationalAccountId = $this->resolveOperationalTreasuryAccount(
+                $organisationId,
+                $dossierId,
+                $treasuryAccountId,
+                $treasuryOperationalAccountId,
+                $bankLineId
+            );
             $this->assertPaymentScope(
                 $organisationId,
                 $dossierId,
                 $contactId,
-                $treasuryAccountId
+                $treasuryAccountId,
+                $collectiveAccountId,
+                $direction,
+                $treasuryOperationalAccountId
             );
             if ($bankLineId !== null) {
                 $this->assertBankLineCapacity(
@@ -103,8 +120,10 @@ final class PaymentService
                   montant_centimes, monnaie, reference, compte_tresorerie_id,
                   ligne_bancaire_id, cree_par, devise_base,
                   taux_change_numerateur, taux_change_denominateur,
-                  taux_change_date, taux_change_source, montant_base_centimes)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                  taux_change_date, taux_change_source, montant_base_centimes,
+                  compte_collectif_id, origine,
+                  compte_tresorerie_operationnel_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
             $stmt->execute([
                 $organisationId, $dossierId, $contactId, $direction, $date,
@@ -112,8 +131,18 @@ final class PaymentService
                 $bankLineId, $actorId,
                 $rate['base_currency'], $rate['numerator'], $rate['denominator'],
                 $rate['rate_date'], $rate['source'], $baseAmount,
+                $collectiveAccountId, $origin,
+                $treasuryOperationalAccountId,
             ]);
             $id = (int) $this->pdo->lastInsertId();
+            if ($bankLineId !== null && $collectiveAccountId !== null) {
+                $this->postAutomatically(
+                    $organisationId,
+                    $dossierId,
+                    $id,
+                    $actorId
+                );
+            }
             $this->audit->log(
                 'facturation.paiement_saisi',
                 $actorId,
@@ -157,13 +186,37 @@ final class PaymentService
                 $payment['statut'] !== 'valide'
                 || $document['type'] !== $expectedType
                 || !in_array($document['statut'], ['emis', 'comptabilise'], true)
-                || (int) $document['contact_id'] !== (int) $payment['contact_id']
                 || (string) $document['monnaie'] !== (string) $payment['monnaie']
             ) {
                 throw new BillingException(
                     'Le paiement sélectionné ne peut être lettré qu’avec une facture '
-                    . 'émise du même contact, du même sens et dans la même devise.'
+                    . 'émise du même sens et dans la même devise.'
                 );
+            }
+            if (!$this->isMatchingAccountEligible(
+                $organisationId,
+                $dossierId,
+                (int) $document['compte_collectif_id'],
+                (string) $payment['sens']
+            )) {
+                throw new BillingException(
+                    'Un compte de trésorerie ne peut pas être utilisé comme compte de paiement à lettrer.'
+                );
+            }
+            if (
+                $payment['compte_collectif_id'] !== null
+                && (int) $payment['compte_collectif_id']
+                    !== (int) $document['compte_collectif_id']
+            ) {
+                throw new BillingException(
+                    'La facture utilise un autre compte de paiement que ce paiement.'
+                );
+            }
+            if ($payment['compte_collectif_id'] === null) {
+                $this->pdo->prepare(
+                    'UPDATE paiements SET compte_collectif_id = ?
+                     WHERE id = ? AND compte_collectif_id IS NULL'
+                )->execute([(int) $document['compte_collectif_id'], $paymentId]);
             }
             if (
                 $payment['ecriture_id'] !== null
@@ -212,6 +265,12 @@ final class PaymentService
                 $documentId,
                 $allocationId,
                 (string) $payment['date_paiement'],
+                $actorId
+            );
+            $this->postAutomatically(
+                $organisationId,
+                $dossierId,
+                $paymentId,
                 $actorId
             );
             return $allocationId;
@@ -302,6 +361,21 @@ final class PaymentService
             if ($payment['compte_tresorerie_id'] === null || $payment['statut'] !== 'valide') {
                 throw new BillingException('Compte de trésorerie absent ou paiement annulé.');
             }
+            if (!$this->isMatchingAccountEligible(
+                $organisationId,
+                $dossierId,
+                $collectiveAccountId,
+                (string) $payment['sens']
+            )) {
+                throw new BillingException(
+                    'Le compte de paiement doit être un collectif clients ou fournisseurs, hors trésorerie.'
+                );
+            }
+            $storedCollective = $payment['compte_collectif_id'] === null
+                ? 0 : (int) $payment['compte_collectif_id'];
+            if ($storedCollective > 0 && $storedCollective !== $collectiveAccountId) {
+                throw new BillingException('Compte de paiement incompatible.');
+            }
             $allocatedAccounts = $this->pdo->prepare(
                 "SELECT COUNT(DISTINCT d.compte_collectif_id) AS account_count,
                         MIN(d.compte_collectif_id) AS account_id,
@@ -313,13 +387,19 @@ final class PaymentService
             );
             $allocatedAccounts->execute([$paymentId]);
             $allocationScope = $allocatedAccounts->fetch() ?: [];
-            if (
-                (int) ($allocationScope['account_count'] ?? 0) !== 1
+            $allocatedAccountCount = (int) ($allocationScope['account_count'] ?? 0);
+            if ($allocatedAccountCount > 0 && (
+                $allocatedAccountCount !== 1
                 || (int) ($allocationScope['account_id'] ?? 0) !== $collectiveAccountId
                 || (int) ($allocationScope['unposted_count'] ?? 0) !== 0
-            ) {
+            )) {
                 throw new BillingException(
                     'Les factures lettrées doivent être comptabilisées sur le même compte collectif.'
+                );
+            }
+            if ($allocatedAccountCount === 0 && $payment['ligne_bancaire_id'] === null) {
+                throw new BillingException(
+                    'Un paiement doit être lettré ou lié à une ligne bancaire avant sa comptabilisation.'
                 );
             }
             $amount = (int) $payment['montant_base_centimes'];
@@ -410,17 +490,159 @@ final class PaymentService
         });
     }
 
+    private function postAutomatically(
+        int $organisationId,
+        int $dossierId,
+        int $paymentId,
+        ?int $actorId,
+    ): ?int {
+        $payment = $this->payment($organisationId, $dossierId, $paymentId);
+        if ($payment['ecriture_id'] !== null || $payment['statut'] !== 'valide') {
+            return $payment['ecriture_id'] === null
+                ? null : (int) $payment['ecriture_id'];
+        }
+        if (
+            $payment['compte_tresorerie_id'] === null
+            || $payment['compte_collectif_id'] === null
+        ) {
+            return null;
+        }
+        $allocated = $this->pdo->prepare(
+            "SELECT COALESCE(SUM(montant_centimes), 0)
+             FROM allocations
+             WHERE paiement_id = ? AND statut = 'valide'"
+        );
+        $allocated->execute([$paymentId]);
+        $allocatedCents = (int) $allocated->fetchColumn();
+        $unposted = $this->pdo->prepare(
+            "SELECT COUNT(*)
+             FROM allocations a
+             JOIN documents_financiers d ON d.id = a.document_id
+             WHERE a.paiement_id = ? AND a.statut = 'valide'
+               AND d.statut <> 'comptabilise'"
+        );
+        $unposted->execute([$paymentId]);
+        if ((int) $unposted->fetchColumn() > 0) {
+            return null;
+        }
+        $policy = $this->pdo->prepare(
+            'SELECT declencheur
+             FROM politiques_comptabilisation_paiements
+             WHERE organisation_id = ? AND dossier_id = ?'
+        );
+        $policy->execute([$organisationId, $dossierId]);
+        $trigger = (string) ($policy->fetchColumn() ?: 'premier_lettrage');
+        $foreignCurrency = (string) $payment['monnaie']
+            !== (string) $payment['devise_base'];
+        $ready = $payment['ligne_bancaire_id'] !== null
+            || (
+                $allocatedCents > 0
+                && !$foreignCurrency
+                && (
+                    $trigger === 'premier_lettrage'
+                    || $allocatedCents >= (int) $payment['montant_centimes']
+                )
+            )
+            || (
+                $allocatedCents >= (int) $payment['montant_centimes']
+                && $foreignCurrency
+            );
+        if (!$ready) {
+            return null;
+        }
+        $exercise = $this->pdo->prepare(
+            "SELECT x.id
+             FROM exercices x
+             JOIN dossiers d ON d.id = x.dossier_id
+             WHERE d.organisation_id = ? AND x.dossier_id = ?
+               AND x.statut = 'ouvert'
+               AND ? BETWEEN x.date_debut AND x.date_fin
+               AND EXISTS (
+                   SELECT 1 FROM periodes p
+                   WHERE p.exercice_id = x.id
+                     AND p.organisation_id = d.organisation_id
+                     AND p.dossier_id = x.dossier_id
+                     AND p.statut = 'ouverte'
+                     AND ? BETWEEN p.date_debut AND p.date_fin
+               )
+             ORDER BY x.date_debut DESC
+             LIMIT 1"
+        );
+        $exercise->execute([
+            $organisationId,
+            $dossierId,
+            (string) $payment['date_paiement'],
+            (string) $payment['date_paiement'],
+        ]);
+        $exerciseId = (int) $exercise->fetchColumn();
+        if ($exerciseId < 1) {
+            throw new BillingException(
+                'Aucun exercice et aucune période ouverts ne couvrent la date du paiement.'
+            );
+        }
+        $journal = $this->pdo->prepare(
+            "SELECT j.id
+             FROM journaux j
+             LEFT JOIN comptes_tresorerie t
+               ON t.id = ?
+              AND t.organisation_id = j.organisation_id
+              AND t.dossier_id = j.dossier_id
+             WHERE j.organisation_id = ? AND j.dossier_id = ? AND j.actif = 1
+               AND j.type IN (
+                   CASE WHEN t.type = 'caisse' THEN 'caisse' ELSE 'banque' END,
+                   'general'
+               )
+             ORDER BY CASE
+                 WHEN j.type = CASE
+                     WHEN t.type = 'caisse' THEN 'caisse' ELSE 'banque'
+                 END THEN 0 ELSE 1 END,
+                 j.id
+             LIMIT 1"
+        );
+        $journal->execute([
+            (int) ($payment['compte_tresorerie_operationnel_id'] ?? 0),
+            $organisationId,
+            $dossierId,
+        ]);
+        $journalId = (int) $journal->fetchColumn();
+        if ($journalId < 1) {
+            throw new BillingException(
+                'Configurez un journal de banque, de caisse ou général actif.'
+            );
+        }
+        return $this->post(
+            $organisationId,
+            $dossierId,
+            $paymentId,
+            (int) $payment['compte_collectif_id'],
+            $exerciseId,
+            $journalId,
+            $actorId
+        );
+    }
+
     /** @return list<array<string,mixed>> */
     public function payments(int $organisationId, int $dossierId): array
     {
         $stmt = $this->pdo->prepare(
             "SELECT p.*, c.raison_sociale, c.prenom, c.nom,
+                    COALESCE(NULLIF(c.raison_sociale, ''),
+                             trim(c.prenom || ' ' || c.nom), '') AS contact,
+                    ct.numero AS compte_tresorerie_numero,
+                    ct.libelle AS compte_tresorerie_libelle,
+                    cc.numero AS compte_collectif_numero,
+                    cc.libelle AS compte_collectif_libelle,
+                    top.libelle AS compte_tresorerie_operationnel_libelle,
                     COALESCE((
                         SELECT SUM(a.montant_centimes) FROM allocations a
                         WHERE a.paiement_id = p.id AND a.statut = 'valide'
                     ), 0) AS alloue_centimes
              FROM paiements p
-             JOIN contacts c ON c.id = p.contact_id
+             LEFT JOIN contacts c ON c.id = p.contact_id
+             LEFT JOIN comptes ct ON ct.id = p.compte_tresorerie_id
+             LEFT JOIN comptes cc ON cc.id = p.compte_collectif_id
+             LEFT JOIN comptes_tresorerie top
+               ON top.id = p.compte_tresorerie_operationnel_id
              WHERE p.organisation_id = ? AND p.dossier_id = ?
              ORDER BY p.date_paiement DESC, p.id DESC"
         );
@@ -430,6 +652,13 @@ final class PaymentService
             $row['non_alloue_centimes'] = max(
                 0,
                 (int) $row['montant_centimes'] - (int) $row['alloue_centimes']
+            );
+            $row['matching_eligible'] = $this->isMatchingAccountEligible(
+                $organisationId,
+                $dossierId,
+                $row['compte_collectif_id'] === null
+                    ? null : (int) $row['compte_collectif_id'],
+                (string) $row['sens']
             );
         }
         unset($row);
@@ -442,7 +671,7 @@ final class PaymentService
         $stmt = $this->pdo->prepare(
             "SELECT a.*, d.numero AS document_numero, d.type AS document_type,
                     d.date_echeance, p.reference AS paiement_reference,
-                    p.date_paiement, p.sens,
+                    p.date_paiement, p.sens, d.contact_id,
                     COALESCE(NULLIF(c.raison_sociale, ''),
                              trim(c.prenom || ' ' || c.nom)) AS contact
              FROM allocations a
@@ -647,29 +876,149 @@ final class PaymentService
     private function assertPaymentScope(
         int $organisationId,
         int $dossierId,
-        int $contactId,
+        ?int $contactId,
         ?int $treasuryAccountId,
+        ?int $collectiveAccountId = null,
+        string $direction = 'encaissement',
+        ?int $treasuryOperationalAccountId = null,
     ): void {
-        $contact = $this->pdo->prepare(
-            'SELECT 1 FROM contacts
-             WHERE id = ? AND organisation_id = ? AND dossier_id = ? AND actif = 1'
+        if ($contactId !== null) {
+            $contact = $this->pdo->prepare(
+                'SELECT 1 FROM contacts
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ? AND actif = 1'
+            );
+            $contact->execute([$contactId, $organisationId, $dossierId]);
+            if ($contact->fetchColumn() === false) {
+                throw new BillingException('Contact absent du dossier.');
+            }
+        }
+        if ($treasuryAccountId !== null) {
+            $account = $this->pdo->prepare(
+                'SELECT 1 FROM comptes c
+                 WHERE c.id = ? AND c.organisation_id = ? AND c.dossier_id = ?
+                   AND c.actif = 1 AND c.imputable = 1'
+            );
+            $account->execute([
+                $treasuryAccountId,
+                $organisationId,
+                $dossierId,
+            ]);
+            if ($account->fetchColumn() === false) {
+                throw new BillingException('Compte de trésorerie absent du dossier.');
+            }
+        }
+        if (!$this->isMatchingAccountEligible(
+            $organisationId,
+            $dossierId,
+            $collectiveAccountId,
+            $direction
+        )) {
+            throw new BillingException(
+                'Le compte de paiement doit être un collectif clients ou fournisseurs, hors trésorerie.'
+            );
+        }
+        if ($treasuryOperationalAccountId !== null) {
+            $operational = $this->pdo->prepare(
+                'SELECT 1 FROM comptes_tresorerie
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?
+                   AND compte_comptable_id = ? AND actif = 1'
+            );
+            $operational->execute([
+                $treasuryOperationalAccountId,
+                $organisationId,
+                $dossierId,
+                $treasuryAccountId,
+            ]);
+            if ($operational->fetchColumn() === false) {
+                throw new BillingException('Compte de trésorerie opérationnel invalide.');
+            }
+        } elseif ($treasuryAccountId !== null) {
+            $mapped = $this->pdo->prepare(
+                'SELECT COUNT(*) FROM comptes_tresorerie
+                 WHERE organisation_id = ? AND dossier_id = ?
+                   AND compte_comptable_id = ? AND actif = 1'
+            );
+            $mapped->execute([$organisationId, $dossierId, $treasuryAccountId]);
+            if ((int) $mapped->fetchColumn() > 0) {
+                throw new BillingException('Choisissez le compte de trésorerie utilisé.');
+            }
+        }
+    }
+
+    private function resolveOperationalTreasuryAccount(
+        int $organisationId,
+        int $dossierId,
+        ?int $ledgerAccountId,
+        ?int $requestedId,
+        ?int $bankLineId,
+    ): ?int {
+        if ($ledgerAccountId === null) {
+            return null;
+        }
+        if ($requestedId !== null && $requestedId > 0) {
+            return $requestedId;
+        }
+        if ($bankLineId !== null) {
+            $line = $this->pdo->prepare(
+                'SELECT compte_tresorerie_id FROM lignes_bancaires
+                 WHERE id = ? AND organisation_id = ? AND dossier_id = ?'
+            );
+            $line->execute([$bankLineId, $organisationId, $dossierId]);
+            $id = $line->fetchColumn();
+            if ($id !== false) {
+                return (int) $id;
+            }
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT id FROM comptes_tresorerie
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND compte_comptable_id = ? AND actif = 1
+             ORDER BY id'
         );
-        $contact->execute([$contactId, $organisationId, $dossierId]);
-        if ($contact->fetchColumn() === false) {
-            throw new BillingException('Contact absent du dossier.');
+        $stmt->execute([$organisationId, $dossierId, $ledgerAccountId]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        return count($ids) === 1 ? $ids[0] : null;
+    }
+
+    private function isMatchingAccountEligible(
+        int $organisationId,
+        int $dossierId,
+        ?int $accountId,
+        string $direction,
+    ): bool {
+        if ($accountId === null) {
+            return true;
         }
-        if ($treasuryAccountId === null) {
-            return;
-        }
-        $account = $this->pdo->prepare(
-            'SELECT 1 FROM comptes
-             WHERE id = ? AND organisation_id = ? AND dossier_id = ?
-               AND actif = 1 AND imputable = 1'
+        $incoming = $direction === 'encaissement';
+        $stmt = $this->pdo->prepare(
+            "SELECT 1 FROM comptes c
+             WHERE c.id = ? AND c.organisation_id = ? AND c.dossier_id = ?
+               AND c.actif = 1 AND c.imputable = 1 AND c.type = ?
+               AND NOT EXISTS (
+                 SELECT 1 FROM comptes_tresorerie t
+                 WHERE t.organisation_id = c.organisation_id
+                   AND t.dossier_id = c.dossier_id
+                   AND t.compte_comptable_id = c.id
+               )
+               AND (
+                 c.marque = ?
+                 OR EXISTS (
+                   SELECT 1 FROM documents_financiers d
+                   WHERE d.organisation_id = c.organisation_id
+                     AND d.dossier_id = c.dossier_id
+                     AND d.compte_collectif_id = c.id AND d.type = ?
+                 )
+               )"
         );
-        $account->execute([$treasuryAccountId, $organisationId, $dossierId]);
-        if ($account->fetchColumn() === false) {
-            throw new BillingException('Compte de trésorerie absent du dossier.');
-        }
+        $stmt->execute([
+            $accountId,
+            $organisationId,
+            $dossierId,
+            $incoming ? 'actif' : 'passif',
+            $incoming ? 'client_collectif' : 'fournisseur_collectif',
+            $incoming ? 'facture_client' : 'facture_fournisseur',
+        ]);
+        return $stmt->fetchColumn() !== false;
     }
 
     private function insertAllocation(
@@ -805,6 +1154,11 @@ final class PaymentService
             'montant_base_centimes' => $baseSigned,
             'ecart_arrondi_centimes' => 0,
         ];
+        if ($accountId === (int) $payment['compte_tresorerie_id']) {
+            $line['compte_tresorerie_operationnel_id'] =
+                $payment['compte_tresorerie_operationnel_id'] === null
+                    ? null : (int) $payment['compte_tresorerie_operationnel_id'];
+        }
         $line[$debit ? 'debit_centimes' : 'credit_centimes'] = $baseAmount;
         return $line;
     }
@@ -820,20 +1174,19 @@ final class PaymentService
         if ($this->transactionActive || $this->pdo->inTransaction()) {
             return $callback();
         }
-        if ($immediate) {
-            $this->pdo->exec('BEGIN IMMEDIATE');
-        } else {
-            $this->pdo->beginTransaction();
-        }
+        // PDO doit connaître la transaction pour que EntryService puisse
+        // participer au même commit lors de la comptabilisation automatique.
+        // SQLite sérialise toujours le premier INSERT avec busy_timeout.
+        $this->pdo->beginTransaction();
         $this->transactionActive = true;
         try {
             $result = $callback();
-            $immediate ? $this->pdo->exec('COMMIT') : $this->pdo->commit();
+            $this->pdo->commit();
             $this->transactionActive = false;
             return $result;
         } catch (Throwable $e) {
             if ($this->transactionActive) {
-                $immediate ? $this->pdo->exec('ROLLBACK') : $this->pdo->rollBack();
+                $this->pdo->rollBack();
                 $this->transactionActive = false;
             }
             throw $e;

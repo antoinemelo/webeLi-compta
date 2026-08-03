@@ -4,6 +4,11 @@ La devise du dossier reste la devise fonctionnelle du grand livre. Une devise
 étrangère doit être activée dans `Configuration > Référentiels > Devises et
 change`, puis disposer d’un taux daté, sourcé et vérifié.
 
+Dans **Devises autorisées**, le code ISO, l’état actif et l’enregistrement sont
+présentés sur une même ligne. La devise de base est distinguée dans la liste.
+La création d’un taux daté s’ouvre dans une fenêtre modale ; les titres
+techniques du référentiel public ne sont pas répétés dans le panneau métier.
+
 ## Convention de calcul
 
 Les montants restent des entiers en unités mineures. Un taux est un ratio

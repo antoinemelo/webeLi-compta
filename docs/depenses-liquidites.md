@@ -21,11 +21,23 @@ assujettie, ce régime doit être remplacé par sa configuration réelle dans
 
 1. `brouillon` : lignes modifiables et justificatif numérique facultatif ;
    lorsqu’il existe, il est archivé dans SQLite hors du webroot ;
-2. `a_approuver` : numéro interne attribué, document figé ;
+2. `a_approuver` : numéro interne attribué, document figé, puis explicitement
+   approuvé ou refusé ;
 3. `approuve` : décision tracée avec opérateur et horodatage ;
 4. `comptabilise` : écriture fournisseur équilibrée et idempotente ;
-5. `annule` : aucune allocation ouverte ; si le document était comptabilisé,
-   l’écriture est contre-passée, jamais supprimée.
+5. `annule` : brouillon ou dépense approuvée abandonnée sans écriture.
+
+Une dépense comptabilisée reste immuable et ne peut plus être annulée depuis
+ce parcours. Une soumission refusée est distinguée visuellement d’une
+annulation. Le clic sur l’identifiant ouvre le brouillon en modification et
+les autres états en consultation dans une fenêtre modale. Les actions de
+ligne sont regroupées sous le menu vertical « ⋮ ».
+
+La référence fournisseur est unique pour un même fournisseur dans tout le
+dossier, aussi bien entre **Achats** et **Dépenses** qu’après un refus ou une
+annulation. Cette conservation empêche la double saisie d’une même pièce. En
+cas de doublon, le message indique désormais le document, son numéro et son
+statut au lieu de masquer la contrainte SQLite derrière une erreur générique.
 
 Les permissions `depenses.manage`, `depenses.approve` et `depenses.post`
 séparent préparation, approbation et grand livre. Leur attribution à des
@@ -34,7 +46,7 @@ personnes différentes reste un choix organisationnel configurable.
 ## Récurrences
 
 Un modèle conserve fournisseur, périodicité, fin facultative, jours
-d’échéance, compte collectif et lignes. Chaque couple modèle/date porte une
+d’échéance, compte de paiement et lignes. Chaque couple modèle/date porte une
 unicité persistante et le document généré reçoit une clé de génération unique.
 Un rejeu de la commande ou de l’endpoint ne crée donc pas de doublon.
 
@@ -52,7 +64,14 @@ Une preuve numérique peut être ajoutée, mais elle n’est jamais obligatoire.
 Le paiement demeure un objet séparé dans `paiements`. Le lettrage reste une
 allocation explicite dans `allocations`. La comptabilisation d’une dépense ne
 crée jamais de décaissement et l’annulation est refusée tant qu’une allocation
-valide subsiste. L’émission et le rapprochement sont traités au lot 07.
+valide subsiste. Elle est aussi définitivement refusée après comptabilisation.
+La saisie d’un paiement se fait depuis
+**Liquidités > Paiements > Saisir un paiement** dans une fenêtre modale ; le
+contact indicatif y est facultativement recherchable par entreprise, prénom ou
+nom. Chaque allocation reprend le contact de la facture et un même paiement
+peut donc couvrir plusieurs contacts. Le rapprochement et le lettrage restent
+des actions distinctes, mais partagent le même paiement et la même écriture
+comptable idempotente.
 
 ## Retour arrière en développement
 

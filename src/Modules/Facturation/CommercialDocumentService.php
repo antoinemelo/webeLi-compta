@@ -117,6 +117,7 @@ final class CommercialDocumentService
                 $contactId
             );
             $documentId = (int) ($data['id'] ?? 0);
+            $incomingConversions = [];
             if ($documentId > 0) {
                 $version = (int) ($data['version'] ?? 0);
                 $update = $this->pdo->prepare(
@@ -152,6 +153,25 @@ final class CommercialDocumentService
                     throw new BillingException(
                         'Document commercial absent, émis ou modifié par une autre session.'
                     );
+                }
+                $incoming = $this->pdo->prepare(
+                    'SELECT id, document_source_id
+                     FROM conversions_documents
+                     WHERE organisation_id = ? AND dossier_id = ?
+                       AND document_cible_commercial_id = ?'
+                );
+                $incoming->execute([
+                    $organisationId,
+                    $dossierId,
+                    $documentId,
+                ]);
+                $incomingConversions = $incoming->fetchAll();
+                $unlink = $this->pdo->prepare(
+                    'DELETE FROM conversions_lignes_documents
+                     WHERE conversion_id = ?'
+                );
+                foreach ($incomingConversions as $conversion) {
+                    $unlink->execute([(int) $conversion['id']]);
                 }
                 $this->pdo->prepare(
                     'DELETE FROM lignes_document_commercial WHERE document_id = ?'
@@ -193,6 +213,13 @@ final class CommercialDocumentService
                 $date,
                 $lines
             );
+            foreach ($incomingConversions as $conversion) {
+                $this->linkCommercialLines(
+                    (int) $conversion['id'],
+                    (int) $conversion['document_source_id'],
+                    $documentId
+                );
+            }
             $this->audit->log(
                 $documentId === (int) ($data['id'] ?? 0)
                     ? 'facturation.document_commercial_modifie'
@@ -248,6 +275,7 @@ final class CommercialDocumentService
                 "UPDATE documents_commerciaux
                  SET statut = ?, numero = ?,
                      emis_le = CASE WHEN ? = 'envoye' THEN datetime('now') ELSE emis_le END,
+                     livre_le = CASE WHEN ? = 'livre' THEN datetime('now') ELSE livre_le END,
                      accepte_le = CASE WHEN ? = 'accepte' THEN datetime('now') ELSE accepte_le END,
                      refuse_le = CASE WHEN ? = 'refuse' THEN datetime('now') ELSE refuse_le END,
                      modifie_le = datetime('now'), modifie_par = ?,
@@ -258,6 +286,7 @@ final class CommercialDocumentService
             $update->execute([
                 $status,
                 $number,
+                $status,
                 $status,
                 $status,
                 $status,
@@ -557,7 +586,8 @@ final class CommercialDocumentService
                     $codeId,
                     $date,
                     $amount,
-                    $mode
+                    $mode,
+                    purchaseDocument: $this->direction($type) === 'fournisseur'
                 );
             $insert->execute([
                 $documentId,
@@ -776,9 +806,9 @@ final class CommercialDocumentService
     private function nextNumber(int $dossierId, string $type, string $date): string
     {
         $prefix = match ($type) {
-            'offre_client' => 'OF',
+            'offre_client' => 'OC',
             'demande_offre_fournisseur' => 'DOF',
-            'reponse_offre_fournisseur' => 'ROF',
+            'reponse_offre_fournisseur' => 'OF',
             'commande_client' => 'CC',
             'commande_fournisseur' => 'CF',
         };
@@ -816,8 +846,9 @@ final class CommercialDocumentService
         }
         if ($current === 'envoye') {
             return match ($type) {
-                'offre_client', 'commande_client', 'commande_fournisseur' =>
-                    ['accepte', 'refuse', 'annule'],
+                'offre_client' => ['accepte', 'refuse', 'annule'],
+                'commande_client', 'commande_fournisseur' =>
+                    ['livre', 'annule'],
                 'demande_offre_fournisseur' => ['annule'],
                 default => [],
             };
@@ -826,7 +857,7 @@ final class CommercialDocumentService
             return ['accepte', 'refuse', 'annule'];
         }
         if (
-            $current === 'accepte'
+            $current === 'livre'
             && in_array($type, ['commande_client', 'commande_fournisseur'], true)
         ) {
             return ['annule', 'archive'];
@@ -865,14 +896,28 @@ final class CommercialDocumentService
                     ], true)
                 ),
             'commande_client' =>
-                in_array($sourceStatus, ['brouillon', 'envoye', 'accepte'], true)
+                $sourceStatus === 'livre'
                     && $targetType === 'facture_client',
             'commande_fournisseur' =>
-                in_array($sourceStatus, ['brouillon', 'envoye', 'accepte'], true)
+                $sourceStatus === 'livre'
                     && $targetType === 'facture_fournisseur',
             default => false,
         };
         if (!$allowed) {
+            if (
+                in_array($sourceType, [
+                    'commande_client',
+                    'commande_fournisseur',
+                ], true)
+                && in_array($targetType, [
+                    'facture_client',
+                    'facture_fournisseur',
+                ], true)
+            ) {
+                throw new BillingException(
+                    'La livraison de la commande doit être confirmée avant sa facturation.'
+                );
+            }
             throw new BillingException(
                 'Le statut actuel ne permet pas cette conversion.'
             );

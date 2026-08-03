@@ -23,7 +23,7 @@ export const subNavigation: Record<string, SubNavigationItem[]> = {
     { key: 'tracking', label: 'Suivi', path: '/apprentissage/suivi' }
   ],
   liquidity: [
-    { key: 'use', label: 'Utilisation', path: '/liquidites' },
+    { key: 'use', label: 'Dépenses', path: '/liquidites' },
     { key: 'bank', label: 'Rapprochement', path: '/liquidites/rapprochement' },
     { key: 'matching', label: 'Lettrage', path: '/liquidites/lettrage' },
     { key: 'payments', label: 'Paiements', path: '/liquidites/paiements' },

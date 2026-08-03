@@ -18,6 +18,7 @@ final class AccountingWorkspaceService
         private readonly ClosingAndTaxService $closing,
         private readonly ?ExchangeRevaluationService $revaluations = null,
         private readonly ?AccountingCsvService $csv = null,
+        private readonly FinancialReportPdfService $reportPdf = new FinancialReportPdfService(),
     ) {
     }
 
@@ -98,6 +99,16 @@ final class AccountingWorkspaceService
                     ],
                     $catalog['accounts']
                 ),
+                'treasury_accounts' => array_map(
+                    static fn (array $row): array => [
+                        'id' => (int) $row['id'],
+                        'ledger_account_id' => (int) $row['compte_comptable_id'],
+                        'label' => (string) $row['libelle'],
+                        'type' => (string) $row['type'],
+                        'currency' => (string) $row['monnaie'],
+                    ],
+                    $catalog['treasury_accounts']
+                ),
             ],
             'chart' => [
                 'types' => array_map(
@@ -124,6 +135,7 @@ final class AccountingWorkspaceService
                         'parent_id' => $row['parent_id'] === null
                             ? null
                             : (int) $row['parent_id'],
+                        'show_subtotal' => (int) $row['afficher_sous_total'] === 1,
                         'path' => (string) $row['chemin'],
                         'order' => (int) $row['ordre'],
                         'version' => (int) $row['version'],
@@ -494,7 +506,7 @@ final class AccountingWorkspaceService
         );
     }
 
-    /** @return array{content:string,filename:string} */
+    /** @return array{content:string,filename:string,mime_type:string} */
     public function exportReport(
         int $organisationId,
         int $dossierId,
@@ -502,7 +514,13 @@ final class AccountingWorkspaceService
         string $type,
         string $dateStart,
         string $dateEnd,
+        string $format = 'csv',
     ): array {
+        $exercise = $this->reports->exercise(
+            $organisationId,
+            $dossierId,
+            $exerciseId
+        );
         $financial = $this->financial->read(
             $organisationId,
             $dossierId,
@@ -573,11 +591,11 @@ final class AccountingWorkspaceService
                 ],
             ],
             'bilan' => [
-                $financial['balance_sheet']['items'],
+                $financial['balance_sheet']['presentation_items'],
                 $balanceColumns,
             ],
             'resultat' => [
-                $financial['income_statement']['items'],
+                $financial['income_statement']['presentation_items'],
                 $incomeColumns,
             ],
             'flux_tresorerie' => [
@@ -590,6 +608,27 @@ final class AccountingWorkspaceService
             ],
             default => throw new AccountingException('Rapport inconnu.'),
         };
+        if ($format === 'pdf') {
+            return [
+                'content' => $this->reportPdf->render(
+                    $type,
+                    $financial,
+                    $type === 'journal' ? $rows : [],
+                    [
+                        'organisation_name' => $exercise['organisation_nom'],
+                        'dossier_name' => $exercise['dossier_nom'],
+                        'currency' => $exercise['monnaie'],
+                        'date_start' => $dateStart,
+                        'date_end' => $dateEnd,
+                    ]
+                ),
+                'filename' => $type . '-' . $dateEnd . '.pdf',
+                'mime_type' => 'application/pdf',
+            ];
+        }
+        if ($format !== 'csv') {
+            throw new AccountingException('Format d’export inconnu.');
+        }
         $metadata = $this->reports->csv([
             ['parameter' => 'type', 'value' => $type],
             ['parameter' => 'exercise_id', 'value' => $exerciseId],
@@ -612,6 +651,7 @@ final class AccountingWorkspaceService
         return [
             'content' => $metadata . "\n" . $body,
             'filename' => $type . '-' . $dateEnd . '.csv',
+            'mime_type' => 'text/csv; charset=UTF-8',
         ];
     }
 
@@ -663,6 +703,8 @@ final class AccountingWorkspaceService
             'lignes' => array_map(
                 static fn (array $line): array => [
                     'compte_id' => $line['account_id'],
+                    'compte_tresorerie_operationnel_id' =>
+                        (int) ($line['treasury_account_id'] ?? 0),
                     'libelle' => $line['label'],
                     'debit_centimes' => $line['debit_cents'],
                     'credit_centimes' => $line['credit_cents'],
@@ -778,6 +820,7 @@ final class AccountingWorkspaceService
                     'parent_id' => $row['parent_id'],
                     'ordre' => $row['position'],
                     'version' => $row['version'],
+                    'afficher_sous_total' => $row['show_subtotal'],
                 ], $data['rubrics']),
                 $data['ordered_ids'],
                 $actorId
@@ -814,7 +857,8 @@ final class AccountingWorkspaceService
             $data['parent_id'],
             $data['position'],
             $data['id'] > 0 ? $data['version'] : null,
-            $actorId
+            $actorId,
+            $data['show_subtotal']
         );
     }
 
@@ -914,6 +958,16 @@ final class AccountingWorkspaceService
             );
             return;
         }
+        if ($data['action'] === 'reactivate') {
+            $this->chart->reactivateAccount(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $data['version'],
+                $actorId
+            );
+            return;
+        }
         if ($data['action'] === 'reorder') {
             $this->chart->reorderAccounts(
                 $organisationId,
@@ -950,12 +1004,13 @@ final class AccountingWorkspaceService
         );
     }
 
-    /** @param array<int,int> $balances */
+    /** @param array<int,int> $balances @param array<int,int> $treasuryBalances */
     public function saveOpening(
         int $organisationId,
         int $dossierId,
         int $exerciseId,
         array $balances,
+        array $treasuryBalances,
         bool $validate,
         int $actorId,
     ): array {
@@ -970,7 +1025,8 @@ final class AccountingWorkspaceService
             $exerciseId,
             $journalId,
             $balances,
-            $actorId
+            $actorId,
+            $treasuryBalances
         );
         $number = '';
         if ($validate) {

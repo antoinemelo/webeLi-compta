@@ -182,6 +182,10 @@ final class PayrollInputValidator
             'date' => $this->text($d['date'] ?? '', 'date'),
             'amount_cents' => $this->int($d['amount_cents'] ?? null, 'amount_cents'),
             'account_id' => $this->int($d['account_id'] ?? null, 'account_id'),
+            'treasury_account_id' => $this->int(
+                $d['treasury_account_id'] ?? null,
+                'treasury_account_id'
+            ),
             'reference' => trim((string) ($d['reference'] ?? '')),
         ];
     }

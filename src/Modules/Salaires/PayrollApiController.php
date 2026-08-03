@@ -234,7 +234,8 @@ final class PayrollApiController
             'id' => $this->payments->create(
                 $organisationId, $dossierId, $data['beneficiary_type'],
                 $data['employee_id'], $data['date'], $data['amount_cents'],
-                $data['account_id'], $data['reference'], $userId
+                $data['account_id'], $data['reference'], $userId,
+                $data['treasury_account_id']
             ),
         ]);
     }

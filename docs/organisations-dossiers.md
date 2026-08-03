@@ -1,7 +1,7 @@
 # Organisations et dossiers
 
-Le registre Vue est disponible sous `/app/organisations-dossiers`, depuis
-l’icône de filtre de l’en-tête. Il expose
+Le registre Vue est disponible sous `/app/organisations-dossiers`, depuis le
+menu **Contexte de travail** de l’en-tête. Il expose
 une arborescence organisation → dossiers actifs ou archivés et permet de créer
 plusieurs dossiers réellement exploitables dans la même organisation.
 
@@ -36,6 +36,12 @@ avant/après, puis confirmation avec l’empreinte de cette prévisualisation et
 la version de la matrice. Un changement concurrent produit un conflit 409.
 Le rejeu d’un état déjà appliqué est sans effet et ne crée aucun doublon.
 L’audit conserve les rôles et permissions avant/après.
+
+Cliquer sur un utilisateur ouvre sa vue d’accès : rôles d’installation,
+organisations, dossiers et permissions effectives. Les cases représentent les
+attributions directes ; les droits hérités et le rôle d’administrateur restent
+visibles séparément afin de ne pas faire croire qu’ils sont absents. Lorsqu’un
+dossier est sélectionné, son nom complète explicitement le périmètre affiché.
 
 Un gestionnaire d’organisation ne voit que les utilisateurs déjà rattachés à
 son organisation ou à l’un de ses dossiers. Seul l’administrateur
@@ -93,6 +99,14 @@ les affiche en lecture seule et conserve la gestion des coordonnées
 opérationnelles, de la devise et du compte de trésorerie dont l’IBAN est utilisé
 pour la facturation. Le statut TVA daté se règle dans
 `Configuration > Référentiels > TVA`.
+
+Chaque entrée historique peut être consultée sans écraser la version courante.
+Ses valeurs peuvent être reprises dans le formulaire afin de préparer une
+nouvelle identité datée. Les imports et exports du registre passent par des
+boutons ouvrant une fenêtre modale, avec prévisualisation avant toute mutation.
+Le canton se choisit dans la liste officielle des 26 cantons suisses, affichée
+avec le code à deux lettres et le nom complet ; la même source alimente la
+création et la reprise d’une identité.
 
 ## Archivage, réactivation et suppression
 

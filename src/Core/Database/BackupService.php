@@ -23,9 +23,28 @@ final class BackupService
         );
         $quoted = str_replace("'", "''", $path);
         $pdo->exec("VACUUM INTO '{$quoted}'");
-        $check = ConnectionFactory::sqlite($path);
+        $check = new PDO('sqlite:' . $path, null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES => false,
+        ]);
+        $check->exec('PRAGMA foreign_keys = ON');
+        $journalMode = mb_strtolower(
+            (string) $check->query('PRAGMA journal_mode = DELETE')->fetchColumn()
+        );
+        if ($journalMode !== 'delete') {
+            throw new RuntimeException(
+                'La sauvegarde ne peut pas être normalisée en fichier SQLite autonome.'
+            );
+        }
         if (!IntegrityChecker::check($check)['ok']) {
             throw new RuntimeException('La sauvegarde créée est incohérente.');
+        }
+        $check = null;
+        if (is_file($path . '-wal') || is_file($path . '-shm')) {
+            throw new RuntimeException(
+                'La sauvegarde autonome conserve des fichiers SQLite auxiliaires.'
+            );
         }
         return $path;
     }

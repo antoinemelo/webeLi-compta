@@ -553,11 +553,17 @@ async function cancelPayroll(row: Record<string, unknown>): Promise<void> {
   }, 'Fiche annulée par contre-passation.');
 }
 async function createPayment(): Promise<void> {
+  const treasuryAccount = workspace.value?.catalog.treasury_accounts.find(
+    (account) => n(account, 'id') === payment.account_id
+  );
+  if (!treasuryAccount) return;
   const saved = await mutate('/salaires/paiements', {
     beneficiary_type: payment.beneficiary_type,
     employee_id: payment.beneficiary_type === 'employe' ? payment.employee_id : null,
     date: payment.date, amount_cents: cents(payment.amount),
-    account_id: payment.account_id, reference: payment.reference
+    account_id: n(treasuryAccount, 'ledger_account_id'),
+    treasury_account_id: payment.account_id,
+    reference: payment.reference
   }, 'Paiement salarial saisi.');
   if (saved) {
     payment.amount = '';
@@ -1075,7 +1081,7 @@ onMounted(() => reload());
             <label v-if="payment.beneficiary_type === 'employe'">Employé<select v-model.number="payment.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label>
             <label>Date<input v-model="payment.date" type="date" required></label>
             <label>Montant<input v-model="payment.amount" inputmode="decimal" required></label>
-            <label>Compte de trésorerie<AccountCombobox v-model="payment.account_id" :options="workspace.catalog.treasury_accounts" required /></label>
+            <label>Compte de trésorerie<AccountCombobox v-model="payment.account_id" :options="workspace.catalog.treasury_accounts" label-key="libelle" required /></label>
             <label>Référence<input v-model="payment.reference" placeholder="Référence facultative"></label>
             <button class="button primary" :disabled="store.saving">Saisir le paiement</button>
           </form>

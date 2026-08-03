@@ -206,7 +206,9 @@ final class TreasuryApiController
                 $userId,
                 $data['bank_line_id'],
                 $data['currency'],
-                $data['exchange_rate_id']
+                $data['exchange_rate_id'],
+                $data['collective_account_id'],
+                treasuryOperationalAccountId: $data['treasury_account_id']
             ),
         ], 201);
     }

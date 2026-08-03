@@ -153,8 +153,15 @@ final class TreasuryInputValidator
         if ($rateId !== null && (!is_int($rateId) || $rateId < 1)) {
             $errors['exchange_rate_id'][] = 'Identifiant de taux positif requis.';
         }
+        $contactId = $data['contact_id'] ?? null;
+        if (
+            $contactId !== null
+            && (!is_int($contactId) || $contactId < 1)
+        ) {
+            $errors['contact_id'][] = 'Identifiant de contact positif requis.';
+        }
         $result = [
-            'contact_id' => $this->positiveInt($data, 'contact_id', $errors),
+            'contact_id' => $contactId,
             'direction' => $direction,
             'date' => $date,
             'amount_cents' => $this->positiveInt($data, 'amount_cents', $errors),
@@ -162,6 +169,16 @@ final class TreasuryInputValidator
             'ledger_account_id' => $this->positiveInt(
                 $data,
                 'ledger_account_id',
+                $errors
+            ),
+            'treasury_account_id' => $this->positiveInt(
+                $data,
+                'treasury_account_id',
+                $errors
+            ),
+            'collective_account_id' => $this->positiveInt(
+                $data,
+                'collective_account_id',
                 $errors
             ),
             'bank_line_id' => $bankLineId,

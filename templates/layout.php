@@ -6,7 +6,17 @@ use Compta\Core\Support\Html;
 $ui = is_array($ui_context ?? null) ? $ui_context : [];
 $authenticated = ($ui['authenticated'] ?? false) === true;
 $path = (string) ($ui['path'] ?? '');
-$loginPage = !$authenticated && $path === '/login';
+$accountAccessPage = !$authenticated && in_array(
+    $path,
+    ['/login', '/mot-de-passe-oublie', '/reinitialiser-mot-de-passe'],
+    true
+);
+$accountAccessTarget = $path === '/login'
+    ? '#login-form'
+    : '#password-reset-form';
+$accountAccessLabel = $path === '/login'
+    ? 'Connexion'
+    : 'Récupération du mot de passe';
 ?>
 <!doctype html>
 <html lang="fr">
@@ -15,7 +25,7 @@ $loginPage = !$authenticated && $path === '/login';
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title><?= Html::escape($title) ?> — Compta</title>
-  <?php if ($loginPage): ?>
+  <?php if ($accountAccessPage): ?>
     <link rel="preload"
       href="<?= Html::escape($config->url('/assets/fonts/montserrat/Montserrat-Variable.ttf')) ?>"
       as="font" type="font/ttf" crossorigin>
@@ -27,16 +37,17 @@ $loginPage = !$authenticated && $path === '/login';
     href="<?= Html::escape($config->url('/assets/vendor/bootstrap/bootstrap.min.css')) ?>">
   <link rel="stylesheet" href="<?= Html::escape($config->url('/assets/app.css')) ?>">
 </head>
-<body class="<?= $loginPage ? 'login-page' : 'bg-body-tertiary' ?>">
+<body class="<?= $accountAccessPage ? 'login-page' : 'bg-body-tertiary' ?>">
   <a class="skip-link" href="#contenu">Aller au contenu</a>
-  <?php if ($loginPage): ?>
+  <?php if ($accountAccessPage): ?>
     <header class="login-header no-print">
       <div class="container-fluid login-header-inner">
         <a class="login-brand" href="<?= Html::escape($config->url('/')) ?>">
           WebeLi <strong>Compta</strong>
         </a>
-        <a class="login-shortcut" href="#login-form" aria-label="Connexion"
-          title="Connexion">
+        <a class="login-shortcut" href="<?= $accountAccessTarget ?>"
+          aria-label="<?= $accountAccessLabel ?>"
+          title="<?= $accountAccessLabel ?>">
           <svg class="login-shortcut-icon" viewBox="0 0 16 16"
             aria-hidden="true" focusable="false">
             <path d="M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6m2-3a2 2 0 1 1-4 0 2 2 0 0 1 4 0m4 8c0 1-1 1-1 1H3s-1 0-1-1 1-4 6-4 6 3 6 4m-1-.004c-.001-.246-.154-.986-.832-1.664C11.516 10.68 10.289 10 8 10s-3.516.68-4.168 1.332c-.678.678-.83 1.418-.832 1.664z"/>
@@ -77,7 +88,7 @@ $loginPage = !$authenticated && $path === '/login';
     </section>
   <?php endif; ?>
 
-  <div class="<?= $authenticated ? 'app-shell' : ($loginPage ? 'login-shell' : 'container-xl py-4') ?>">
+  <div class="<?= $authenticated ? 'app-shell' : ($accountAccessPage ? 'login-shell' : 'container-xl py-4') ?>">
     <?php if ($authenticated): ?>
       <aside class="app-sidebar no-print" aria-label="Navigation principale">
         <details class="app-menu">
@@ -106,7 +117,7 @@ $loginPage = !$authenticated && $path === '/login';
       </aside>
     <?php endif; ?>
     <main id="contenu"
-      class="<?= $authenticated ? 'app-main' : ($loginPage ? 'login-main' : '') ?>"
+      class="<?= $authenticated ? 'app-main' : ($accountAccessPage ? 'login-main' : '') ?>"
       tabindex="-1">
       <?= $content ?>
     </main>

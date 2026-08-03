@@ -110,18 +110,35 @@ final class EntryService
         $journals->execute([$organisationId, $dossierId]);
 
         $accounts = $this->pdo->prepare(
-            'SELECT id, numero, libelle, sens_normal
-             FROM comptes
-             WHERE organisation_id = ? AND dossier_id = ?
-               AND actif = 1 AND imputable = 1
-             ORDER BY length(numero), numero COLLATE NOCASE'
+            "SELECT c.id, c.numero, c.libelle, c.type, c.sens_normal, c.marque,
+                    CASE WHEN c.marque IN ('client_collectif', 'fournisseur_collectif')
+                           OR EXISTS (
+                             SELECT 1 FROM documents_financiers d
+                             WHERE d.organisation_id = c.organisation_id
+                               AND d.dossier_id = c.dossier_id
+                               AND d.compte_collectif_id = c.id
+                           )
+                         THEN 1 ELSE 0 END AS lettrable
+             FROM comptes c
+             WHERE c.organisation_id = ? AND c.dossier_id = ?
+               AND c.actif = 1 AND c.imputable = 1
+             ORDER BY length(c.numero), c.numero COLLATE NOCASE"
         );
         $accounts->execute([$organisationId, $dossierId]);
+
+        $treasuryAccounts = $this->pdo->prepare(
+            'SELECT id, compte_comptable_id, libelle, type, monnaie
+             FROM comptes_tresorerie
+             WHERE organisation_id = ? AND dossier_id = ? AND actif = 1
+             ORDER BY libelle COLLATE NOCASE, id'
+        );
+        $treasuryAccounts->execute([$organisationId, $dossierId]);
 
         return [
             'exercises' => $exercises->fetchAll(),
             'journals' => $journals->fetchAll(),
             'accounts' => $accounts->fetchAll(),
+            'treasury_accounts' => $treasuryAccounts->fetchAll(),
         ];
     }
 
@@ -156,7 +173,8 @@ final class EntryService
         }
 
         $lines = $this->pdo->prepare(
-            'SELECT l.compte_id, l.libelle, l.debit_centimes, l.credit_centimes
+            'SELECT l.compte_id, l.compte_tresorerie_operationnel_id,
+                    l.libelle, l.debit_centimes, l.credit_centimes
              FROM lignes_ecriture l
              JOIN comptes c ON c.id = l.compte_id
              WHERE l.ecriture_id = ?
@@ -177,6 +195,8 @@ final class EntryService
             'lines' => array_map(
                 static fn (array $line): array => [
                     'account_id' => (int) $line['compte_id'],
+                    'treasury_account_id' => $line['compte_tresorerie_operationnel_id'] === null
+                        ? 0 : (int) $line['compte_tresorerie_operationnel_id'],
                     'label' => (string) $line['libelle'],
                     'debit_cents' => (int) $line['debit_centimes'],
                     'credit_cents' => (int) $line['credit_centimes'],
@@ -446,7 +466,8 @@ final class EntryService
                 );
             }
             $lines = $this->pdo->prepare(
-                'SELECT compte_id, libelle, debit_centimes, credit_centimes,
+                'SELECT compte_id, compte_tresorerie_operationnel_id,
+                        libelle, debit_centimes, credit_centimes,
                         devise_origine, montant_origine_centimes, devise_base,
                         taux_change_numerateur, taux_change_denominateur,
                         taux_change_date, taux_change_source,
@@ -458,6 +479,9 @@ final class EntryService
             foreach ($lines->fetchAll() as $line) {
                 $reversedLines[] = [
                     'compte_id' => (int) $line['compte_id'],
+                    'compte_tresorerie_operationnel_id' =>
+                        $line['compte_tresorerie_operationnel_id'] === null
+                            ? null : (int) $line['compte_tresorerie_operationnel_id'],
                     'libelle' => (string) $line['libelle'],
                     'debit_centimes' => (int) $line['credit_centimes'],
                     'credit_centimes' => (int) $line['debit_centimes'],
@@ -561,7 +585,8 @@ final class EntryService
      *
      * @return array{
      *   id:int,status:string,numero:string,version:int,
-     *   soldes:array<int,int>,total_debit_centimes:int,total_credit_centimes:int
+     *   soldes:array<int,int>,soldes_tresorerie:array<int,int>,
+     *   total_debit_centimes:int,total_credit_centimes:int
      * }
      */
     public function openingState(
@@ -586,12 +611,14 @@ final class EntryService
                 'numero' => '',
                 'version' => 0,
                 'soldes' => [],
+                'soldes_tresorerie' => [],
                 'total_debit_centimes' => 0,
                 'total_credit_centimes' => 0,
             ];
         }
         $lines = $this->pdo->prepare(
-            "SELECT l.compte_id, l.debit_centimes, l.credit_centimes,
+            "SELECT l.compte_id, l.compte_tresorerie_operationnel_id,
+                    l.debit_centimes, l.credit_centimes,
                     CASE c.sens_normal
                       WHEN 'debit' THEN l.debit_centimes - l.credit_centimes
                       ELSE l.credit_centimes - l.debit_centimes
@@ -603,10 +630,18 @@ final class EntryService
         );
         $lines->execute([(int) $entry['id']]);
         $balances = [];
+        $treasuryBalances = [];
         $debit = 0;
         $credit = 0;
         foreach ($lines->fetchAll() as $line) {
-            $balances[(int) $line['compte_id']] = (int) $line['solde_naturel_centimes'];
+            $accountId = (int) $line['compte_id'];
+            $balance = (int) $line['solde_naturel_centimes'];
+            $balances[$accountId] = ($balances[$accountId] ?? 0) + $balance;
+            if ($line['compte_tresorerie_operationnel_id'] !== null) {
+                $treasuryAccountId = (int) $line['compte_tresorerie_operationnel_id'];
+                $treasuryBalances[$treasuryAccountId]
+                    = ($treasuryBalances[$treasuryAccountId] ?? 0) + $balance;
+            }
             $debit += (int) $line['debit_centimes'];
             $credit += (int) $line['credit_centimes'];
         }
@@ -616,6 +651,7 @@ final class EntryService
             'numero' => (string) $entry['numero'],
             'version' => (int) $entry['version'],
             'soldes' => $balances,
+            'soldes_tresorerie' => $treasuryBalances,
             'total_debit_centimes' => $debit,
             'total_credit_centimes' => $credit,
         ];
@@ -623,6 +659,7 @@ final class EntryService
 
     /**
      * @param array<int,int> $balancesCents compte_id => solde naturel signé
+     * @param array<int,int> $treasuryBalancesCents compte_tresorerie_id => solde naturel signé
      */
     public function saveOpeningDraft(
         int $organisationId,
@@ -631,6 +668,7 @@ final class EntryService
         int $journalId,
         array $balancesCents,
         ?int $actorId = null,
+        array $treasuryBalancesCents = [],
     ): int {
         return $this->transaction(function () use (
             $organisationId,
@@ -638,7 +676,8 @@ final class EntryService
             $exerciseId,
             $journalId,
             $balancesCents,
-            $actorId
+            $actorId,
+            $treasuryBalancesCents
         ): int {
             $exercise = $this->pdo->prepare(
                 'SELECT x.date_debut
@@ -701,11 +740,56 @@ final class EntryService
                    AND type IN (\'actif\', \'passif\')'
             );
             $lines = [];
+            $treasuryLedgerAccounts = [];
+            if ($treasuryBalancesCents !== []) {
+                $treasuryAccount = $this->pdo->prepare(
+                    'SELECT t.compte_comptable_id, c.sens_normal
+                     FROM comptes_tresorerie t
+                     JOIN comptes c ON c.id = t.compte_comptable_id
+                     WHERE t.id = ? AND t.organisation_id = ? AND t.dossier_id = ?
+                       AND t.actif = 1 AND c.actif = 1 AND c.imputable = 1
+                       AND c.type IN (\'actif\', \'passif\')'
+                );
+                foreach ($treasuryBalancesCents as $treasuryAccountId => $balance) {
+                    $treasuryAccountId = (int) $treasuryAccountId;
+                    $balance = (int) $balance;
+                    $treasuryAccount->execute([
+                        $treasuryAccountId,
+                        $organisationId,
+                        $dossierId,
+                    ]);
+                    $mapped = $treasuryAccount->fetch();
+                    if ($mapped === false) {
+                        throw new AccountingException(
+                            "Le compte de trésorerie {$treasuryAccountId} est invalide."
+                        );
+                    }
+                    $ledgerAccountId = (int) $mapped['compte_comptable_id'];
+                    $treasuryLedgerAccounts[$ledgerAccountId] = true;
+                    if ($balance === 0) {
+                        continue;
+                    }
+                    $normalDebit = $mapped['sens_normal'] === 'debit';
+                    $onDebit = ($balance > 0) === $normalDebit;
+                    $lines[] = [
+                        'compte_id' => $ledgerAccountId,
+                        'compte_tresorerie_operationnel_id' => $treasuryAccountId,
+                        'libelle' => 'Solde d’ouverture',
+                        'debit_centimes' => $onDebit ? abs($balance) : 0,
+                        'credit_centimes' => $onDebit ? 0 : abs($balance),
+                    ];
+                }
+            }
             foreach ($balancesCents as $accountId => $balance) {
                 $accountId = (int) $accountId;
                 $balance = (int) $balance;
                 if ($balance === 0) {
                     continue;
+                }
+                if (isset($treasuryLedgerAccounts[$accountId])) {
+                    throw new AccountingException(
+                        "Le compte {$accountId} est déjà détaillé par compte de trésorerie."
+                    );
                 }
                 $account->execute([$accountId, $organisationId, $dossierId]);
                 $side = $account->fetchColumn();
@@ -836,12 +920,13 @@ final class EntryService
     {
         $stmt = $this->pdo->prepare(
             'INSERT INTO lignes_ecriture
-                (ecriture_id, compte_id, libelle, debit_centimes, credit_centimes,
+                (ecriture_id, compte_id, compte_tresorerie_operationnel_id,
+                 libelle, debit_centimes, credit_centimes,
                  devise_origine, montant_origine_centimes, devise_base,
                  taux_change_numerateur, taux_change_denominateur,
                  taux_change_date, taux_change_source, montant_base_centimes,
                  ecart_arrondi_centimes, ordre)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         foreach (array_values($lines) as $position => $line) {
             $accountId = (int) ($line['compte_id'] ?? 0);
@@ -860,6 +945,13 @@ final class EntryService
             $stmt->execute([
                 $entryId,
                 $accountId,
+                $this->resolveTreasuryAccount(
+                    $entryId,
+                    $accountId,
+                    isset($line['compte_tresorerie_operationnel_id'])
+                        ? (int) $line['compte_tresorerie_operationnel_id']
+                        : null
+                ),
                 trim((string) ($line['libelle'] ?? '')),
                 $debit,
                 $credit,
@@ -883,6 +975,30 @@ final class EntryService
                 $position + 1,
             ]);
         }
+    }
+
+    private function resolveTreasuryAccount(
+        int $entryId,
+        int $ledgerAccountId,
+        ?int $requestedId,
+    ): ?int {
+        if ($requestedId !== null && $requestedId > 0) {
+            return $requestedId;
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT t.id
+             FROM ecritures e
+             JOIN comptes_tresorerie t
+               ON t.organisation_id = e.organisation_id
+              AND t.dossier_id = e.dossier_id
+              AND t.compte_comptable_id = ?
+              AND t.actif = 1
+             WHERE e.id = ?
+             ORDER BY t.id'
+        );
+        $stmt->execute([$ledgerAccountId, $entryId]);
+        $ids = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+        return count($ids) === 1 ? $ids[0] : null;
     }
 
     private function validateInside(
@@ -958,6 +1074,24 @@ final class EntryService
         if ((int) $sum['invalides'] !== 0) {
             throw new AccountingException('Compte inactif, non imputable ou hors dossier.');
         }
+        $unallocatedTreasury = $this->pdo->prepare(
+            'SELECT COUNT(*)
+             FROM lignes_ecriture l
+             WHERE l.ecriture_id = ?
+               AND l.compte_tresorerie_operationnel_id IS NULL
+               AND EXISTS (
+                 SELECT 1 FROM comptes_tresorerie t
+                 WHERE t.organisation_id = ? AND t.dossier_id = ?
+                   AND t.compte_comptable_id = l.compte_id
+                   AND t.actif = 1
+               )'
+        );
+        $unallocatedTreasury->execute([$entryId, $organisationId, $dossierId]);
+        if ((int) $unallocatedTreasury->fetchColumn() > 0) {
+            throw new AccountingException(
+                'Précisez le compte de trésorerie pour chaque ligne concernée.'
+            );
+        }
         if ((int) $sum['debit'] < 1 || (int) $sum['debit'] !== (int) $sum['credit']) {
             $difference = (int) $sum['debit'] - (int) $sum['credit'];
             throw new AccountingException(
@@ -996,6 +1130,14 @@ final class EntryService
         if ($update->rowCount() !== 1) {
             throw new AccountingException('Validation concurrente détectée.');
         }
+        $this->materializeJournalPayment(
+            $organisationId,
+            $dossierId,
+            $entryId,
+            $entry,
+            $number,
+            $actorId
+        );
         $this->audit->log(
             'compta.ecriture_validee',
             $actorId,
@@ -1006,6 +1148,153 @@ final class EntryService
             ['numero' => $number, 'total_centimes' => (int) $sum['debit']]
         );
         return $number;
+    }
+
+    /**
+     * Une écriture manuelle ou importée devient un paiement à lettrer lorsqu’elle
+     * oppose exactement un compte de trésorerie à un véritable compte collectif.
+     * Le contact appartient aux allocations et reste donc volontairement absent
+     * du paiement créé depuis le journal.
+     *
+     * @param array<string,mixed> $entry
+     */
+    private function materializeJournalPayment(
+        int $organisationId,
+        int $dossierId,
+        int $entryId,
+        array $entry,
+        string $number,
+        ?int $actorId,
+    ): void {
+        if (!in_array((string) $entry['source_type'], ['manuel', 'import_journal'], true)) {
+            return;
+        }
+        $existing = $this->pdo->prepare(
+            'SELECT 1 FROM paiements WHERE ecriture_id = ?'
+        );
+        $existing->execute([$entryId]);
+        if ($existing->fetchColumn() !== false) {
+            return;
+        }
+        $lines = $this->pdo->prepare(
+            "SELECT l.compte_id, l.debit_centimes, l.credit_centimes,
+                    c.type AS compte_type, c.marque AS compte_marque,
+                    t.id AS compte_tresorerie_reference,
+                    COALESCE(t.multiplicateur_comptable, 1) AS multiplicateur
+             FROM lignes_ecriture l
+             JOIN comptes c ON c.id = l.compte_id
+             LEFT JOIN comptes_tresorerie t
+               ON t.id = l.compte_tresorerie_operationnel_id
+              AND t.organisation_id = ? AND t.dossier_id = ?
+             WHERE l.ecriture_id = ?
+             ORDER BY l.ordre, l.id"
+        );
+        $lines->execute([$organisationId, $dossierId, $entryId]);
+        $rows = $lines->fetchAll();
+        if (count($rows) !== 2) {
+            return;
+        }
+        $treasury = array_values(array_filter(
+            $rows,
+            static fn (array $line): bool =>
+                $line['compte_tresorerie_reference'] !== null
+        ));
+        if (count($treasury) !== 1) {
+            return;
+        }
+        $treasuryLine = $treasury[0];
+        $counterpart = $rows[0]['compte_id'] === $treasuryLine['compte_id']
+            ? $rows[1] : $rows[0];
+        $signedTreasury = (
+            (int) $treasuryLine['debit_centimes']
+            - (int) $treasuryLine['credit_centimes']
+        ) * (int) $treasuryLine['multiplicateur'];
+        $amount = abs($signedTreasury);
+        if ($amount < 1) {
+            return;
+        }
+        $expectedType = $signedTreasury > 0 ? 'actif' : 'passif';
+        $expectedTag = $signedTreasury > 0
+            ? 'client_collectif' : 'fournisseur_collectif';
+        if (
+            $counterpart['compte_tresorerie_reference'] !== null
+            || (string) $counterpart['compte_type'] !== $expectedType
+            || (
+                (string) $counterpart['compte_marque'] !== $expectedTag
+                && !$this->accountUsedAsCollective(
+                    $organisationId,
+                    $dossierId,
+                    (int) $counterpart['compte_id'],
+                    $signedTreasury > 0 ? 'facture_client' : 'facture_fournisseur'
+                )
+            )
+        ) {
+            return;
+        }
+        $currency = $this->pdo->prepare(
+            'SELECT monnaie FROM dossiers WHERE id = ? AND organisation_id = ?'
+        );
+        $currency->execute([$dossierId, $organisationId]);
+        $baseCurrency = strtoupper((string) $currency->fetchColumn());
+        if (preg_match('/^[A-Z]{3}$/', $baseCurrency) !== 1) {
+            throw new AccountingException('Devise de base du dossier invalide.');
+        }
+        $insert = $this->pdo->prepare(
+            'INSERT INTO paiements
+             (organisation_id, dossier_id, contact_id, sens, date_paiement,
+              montant_centimes, monnaie, devise_base, montant_base_centimes,
+              reference, compte_tresorerie_id,
+              compte_tresorerie_operationnel_id, compte_collectif_id,
+              ecriture_id, origine, cree_par)
+             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $insert->execute([
+            $organisationId,
+            $dossierId,
+            $signedTreasury > 0 ? 'encaissement' : 'decaissement',
+            (string) $entry['date_comptable'],
+            $amount,
+            $baseCurrency,
+            $baseCurrency,
+            $amount,
+            trim((string) $entry['reference']) ?: $number,
+            (int) $treasuryLine['compte_id'],
+            (int) $treasuryLine['compte_tresorerie_reference'],
+            (int) $counterpart['compte_id'],
+            $entryId,
+            'journal',
+            $actorId,
+        ]);
+        $paymentId = (int) $this->pdo->lastInsertId();
+        $this->audit->log(
+            'facturation.paiement_detecte_journal',
+            $actorId,
+            $organisationId,
+            $dossierId,
+            'paiement',
+            (string) $paymentId,
+            [
+                'ecriture_id' => $entryId,
+                'compte_tresorerie_id' => (int) $treasuryLine['compte_id'],
+                'compte_collectif_id' => (int) $counterpart['compte_id'],
+                'montant_centimes' => $amount,
+            ]
+        );
+    }
+
+    private function accountUsedAsCollective(
+        int $organisationId,
+        int $dossierId,
+        int $accountId,
+        string $documentType,
+    ): bool {
+        $stmt = $this->pdo->prepare(
+            'SELECT 1 FROM documents_financiers
+             WHERE organisation_id = ? AND dossier_id = ?
+               AND compte_collectif_id = ? AND type = ? LIMIT 1'
+        );
+        $stmt->execute([$organisationId, $dossierId, $accountId, $documentType]);
+        return $stmt->fetchColumn() !== false;
     }
 
     /** @param array<string,mixed> $command */
