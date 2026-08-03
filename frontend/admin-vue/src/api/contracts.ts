@@ -616,6 +616,7 @@ export type ExpensesPayload = {
 };
 
 export type TreasuryWorkspace = {
+  sources: { billing: boolean; payroll: boolean };
   treasury_accounts: Array<{
     id: number; label: string; type: string; iban: string; bic: string;
     currency: string; ledger_account_id: number; ledger_number: string;
@@ -653,9 +654,12 @@ export type TreasuryWorkspace = {
   }>;
   payments: Array<Record<string, unknown> & {
     id: number; contact_id: number | null; sens: 'encaissement' | 'decaissement';
+    payment_key: string; source_type: 'billing' | 'payroll'; source_id: number;
     date_paiement: string; montant_centimes: number; reference: string;
-    monnaie: string; contact: string; origine: 'liquidites' | 'journal' | 'lot';
+    monnaie: string; contact: string;
+    origine: 'liquidites' | 'journal' | 'lot' | 'salaires';
     ecriture_id: number | null; ligne_bancaire_id: number | null;
+    ecriture_numero?: string | null; dette_ecriture_numeros?: string | null;
     compte_tresorerie_numero: string; compte_tresorerie_libelle: string;
     compte_collectif_numero: string; compte_collectif_libelle: string;
     alloue_centimes: number; non_alloue_centimes: number; statut: string;
@@ -663,6 +667,8 @@ export type TreasuryWorkspace = {
   }>;
   allocations: Array<Record<string, unknown> & {
     id: number; paiement_id: number | null; document_id: number;
+    allocation_key: string; source_type: 'billing' | 'payroll';
+    target_label: string; beneficiary_label: string;
     montant_centimes: number; statut: 'valide' | 'annule';
     document_numero: string;
     document_type: 'facture_client' | 'facture_fournisseur';
@@ -673,6 +679,14 @@ export type TreasuryWorkspace = {
     workflow: string; status: 'comptabilise'; contact_id: number;
     collective_account_id: number; due_date: string; currency: string;
     gross_cents: number; allocated_cents: number; open_cents: number; contact: string;
+  }>;
+  open_salary_liabilities: Array<Record<string, unknown> & {
+    id: number; liability_key: string;
+    type: 'net' | 'ocas' | 'laa' | 'lpp' | 'impot_source';
+    beneficiaire_code: string; beneficiaire_libelle: string;
+    periode_libelle: string; currency: string;
+    montant_centimes: number; alloue_centimes: number;
+    solde_centimes: number; open_cents: number; target_label: string;
   }>;
   payable_debts: Array<{
     id: number; number: string; external_number: string; contact_id: number;
@@ -718,7 +732,7 @@ export type TreasuryWorkspace = {
   };
   capabilities: {
     import: boolean; reconcile: boolean; suggest: boolean;
-    accept_suggestion: boolean; match: boolean;
+    accept_suggestion: boolean; match: boolean; payroll_match: boolean;
     prepare_payments: boolean; export_payments: boolean; confirm_payments: boolean;
   };
   definitions: {

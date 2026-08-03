@@ -300,6 +300,7 @@ final class ManagedReferencesService
             'compte_decompte_tva_id' => $data['vat_settlement_account_id'],
             'compte_corrections_id' => $data['corrections_account_id'],
             'fermer_precedent' => true,
+            'remplacer_regime_initial' => true,
         ], $actorId);
     }
 

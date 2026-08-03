@@ -15,6 +15,20 @@ use Throwable;
 
 final class DossierRegistryService
 {
+    private const MODULE_CODES = [
+        'apprentissage',
+        'liquidites',
+        'facturation',
+        'comptabilite',
+        'salaires',
+    ];
+
+    private const PLAN_VARIANTS = [
+        'personne_morale',
+        'raison_individuelle',
+        'societe_personnes',
+    ];
+
     /** Tables créées par l'assistant et supprimables tant qu'aucune donnée métier n'existe. */
     private const TECHNICAL_TABLES = [
         'audit_events',
@@ -131,13 +145,38 @@ final class DossierRegistryService
         int $actorId,
         ?array $accessCopy = null,
     ): array {
+        $name = trim($name);
+        $slug = mb_strtolower(trim($slug));
         $currency = mb_strtoupper(trim($currency));
+        $journalCode = mb_strtoupper(trim($journalCode));
         $this->assertDates($exerciseStart, $exerciseEnd);
+        if ($name === '') {
+            throw new DossierRegistryException('Le nom du dossier est requis.');
+        }
+        if (preg_match('/^[a-z0-9][a-z0-9_-]{1,62}$/', $slug) !== 1) {
+            throw new DossierRegistryException(
+                'Le slug doit contenir de 2 à 63 lettres minuscules, chiffres, tirets ou tirets bas.'
+            );
+        }
+        if (!in_array($type, ['reel', 'demo', 'exercice'], true)) {
+            throw new DossierRegistryException('Le type de dossier est invalide.');
+        }
         if (preg_match('/^[A-Z]{3}$/', $currency) !== 1) {
             throw new DossierRegistryException('La devise doit être un code ISO à trois lettres.');
         }
+        if (array_diff($moduleCodes, self::MODULE_CODES) !== []) {
+            throw new DossierRegistryException('La sélection de modules est invalide.');
+        }
+        if (!in_array($planVariant, self::PLAN_VARIANTS, true)) {
+            throw new DossierRegistryException('La variante du plan comptable est invalide.');
+        }
         if (trim($exerciseLabel) === '' || trim($journalLabel) === '') {
             throw new DossierRegistryException('Exercice et journal initial requis.');
+        }
+        if (preg_match('/^[A-Z0-9_-]{1,12}$/', $journalCode) !== 1) {
+            throw new DossierRegistryException(
+                'Le code du journal doit contenir au maximum 12 lettres, chiffres, tirets ou tirets bas.'
+            );
         }
         return $this->transaction(function () use (
             $organisationId, $name, $slug, $type, $currency, $moduleCodes,

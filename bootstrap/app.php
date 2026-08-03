@@ -255,7 +255,7 @@ $apiRoutes = new ApiRouteRegistry(
         $session,
         $auth,
         $access,
-        new TreasuryWorkspaceService($pdo, $payments, $entries),
+        new TreasuryWorkspaceService($pdo, $payments, $entries, $payrollPayments),
         new BankImportService($pdo, $audit),
         $reconciliations,
         new SuggestionService($pdo, $audit, $entries),

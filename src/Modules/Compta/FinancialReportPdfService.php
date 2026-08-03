@@ -99,7 +99,7 @@ final class FinancialReportPdfService
     {
         $body = '';
         foreach ($rows as $row) {
-            $body .= '<tr><td width="11%">' . $this->e((string) ($row['date_comptable'] ?? '')) . '</td>'
+            $body .= '<tr><td width="11%">' . $this->date((string) ($row['date_comptable'] ?? '')) . '</td>'
                 . '<td width="11%">' . $this->e((string) ($row['numero'] ?? '')) . '</td>'
                 . '<td width="8%">' . $this->e((string) ($row['journal'] ?? '')) . '</td>'
                 . '<td width="31%">' . $this->e((string) ($row['libelle'] ?? '')) . '</td>'
@@ -326,7 +326,7 @@ final class FinancialReportPdfService
     private function date(string $date): string
     {
         $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
-        return $parsed === false ? $this->e($date) : $parsed->format('d.m.Y');
+        return $parsed === false ? $this->e($date) : $parsed->format('d-m-Y');
     }
 
     private function e(string $value): string

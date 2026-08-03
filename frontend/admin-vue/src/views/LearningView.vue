@@ -11,6 +11,7 @@ import { useToastFeedback } from '@/composables/toastFeedback';
 import { useContextStore } from '@/stores/context';
 import { usePedagogyStore } from '@/stores/pedagogy';
 import type { PedagogyAssignment, PedagogyCatalogItem } from '@/api/contracts';
+import { formatDate } from '@/utils/dateFormat';
 
 const route = useRoute();
 const context = useContextStore();
@@ -455,7 +456,7 @@ watch(
                 <select v-model.number="entryByStep[step.id]">
                   <option :value="0">Aucune écriture — tester le retour pédagogique</option>
                   <option v-for="entry in workspace.selected.entries" :key="entry.id" :value="entry.id">
-                    {{ entry.numero || `#${entry.id}` }} · {{ entry.date_comptable }} · {{ entry.libelle }} ({{ entry.statut }})
+                    {{ entry.numero || `#${entry.id}` }} · {{ formatDate(entry.date_comptable) }} · {{ entry.libelle }} ({{ entry.statut }})
                   </option>
                 </select>
               </label>

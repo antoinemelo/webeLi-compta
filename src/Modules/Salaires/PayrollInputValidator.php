@@ -177,6 +177,8 @@ final class PayrollInputValidator
         $this->rejectScope($d);
         return [
             'beneficiary_type' => (string) ($d['beneficiary_type'] ?? ''),
+            'liability_id' => ($d['liability_id'] ?? null) === null
+                ? null : $this->int($d['liability_id'], 'liability_id'),
             'employee_id' => ($d['employee_id'] ?? null) === null
                 ? null : $this->int($d['employee_id'], 'employee_id'),
             'date' => $this->text($d['date'] ?? '', 'date'),
@@ -200,6 +202,12 @@ final class PayrollInputValidator
             'liability_id' => $this->int($d['liability_id'] ?? null, 'liability_id'),
             'amount_cents' => $this->int($d['amount_cents'] ?? null, 'amount_cents'),
         ];
+    }
+
+    /** @return array{id:int,version:int} */
+    public function cancellation(Request $request): array
+    {
+        return $this->identity($request);
     }
 
     /** @return array<string,mixed> */

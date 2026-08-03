@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { formatDate, formatDateTime } from '@/utils/dateFormat';
 
 type TableColumn = {
   key: string;
@@ -34,6 +35,14 @@ function changeSort(column: TableColumn): void {
   }
   sortKey.value = key;
   sortDirection.value = 'asc';
+}
+
+function displayValue(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  if (!/^\d{4}-\d{2}-\d{2}(?=$|[T\s])/.test(value)) return value;
+  return /[T\s]\d{2}:\d{2}/.test(value)
+    ? formatDateTime(value)
+    : formatDate(value);
 }
 
 const sortedRows = computed(() => {
@@ -96,10 +105,10 @@ const sortedRows = computed(() => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(row, index) in sortedRows" :key="String(row.id ?? index)">
+        <tr v-for="(row, index) in sortedRows" :key="String(row._row_key ?? row.id ?? index)">
           <td v-for="column in columns" :key="column.key">
             <slot :name="`cell-${column.key}`" :row="row">
-              {{ row[column.key] }}
+              {{ displayValue(row[column.key]) }}
             </slot>
           </td>
         </tr>

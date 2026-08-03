@@ -499,6 +499,7 @@ final class OutgoingPaymentService
              FROM documents_financiers d
              JOIN contacts c ON c.id = d.contact_id
              JOIN contact_roles cr ON cr.contact_id = c.id AND cr.role = 'fournisseur'
+             JOIN comptes collectif ON collectif.id = d.compte_collectif_id
              LEFT JOIN adresses_contacts a ON a.id = (
                  SELECT a2.id FROM adresses_contacts a2
                  WHERE a2.contact_id = c.id AND a2.actif = 1
@@ -507,7 +508,8 @@ final class OutgoingPaymentService
              )
              WHERE d.id = ? AND d.organisation_id = ? AND d.dossier_id = ?
                AND d.type = 'facture_fournisseur'
-               AND d.workflow = 'depense' AND d.statut = 'comptabilise'"
+               AND d.workflow IN ('depense', 'facturation')
+               AND d.statut = 'comptabilise' AND collectif.type = 'passif'"
         );
         $stmt->execute([$documentId, $organisationId, $dossierId]);
         $row = $stmt->fetch();

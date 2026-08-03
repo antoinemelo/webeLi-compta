@@ -745,7 +745,7 @@ final class InvoicePdfService
     private function formatDate(string $date): string
     {
         $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
-        return $parsed === false ? $date : $parsed->format('d.m.Y');
+        return $parsed === false ? $date : $parsed->format('d-m-Y');
     }
 
     private function quantity(int $quantityMilli): string

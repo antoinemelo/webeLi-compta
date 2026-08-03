@@ -10,6 +10,7 @@ withDefaults(defineProps<{
 const open = ref(false);
 const trigger = ref<HTMLButtonElement | null>(null);
 const menu = ref<HTMLElement | null>(null);
+const keepInsideDialog = ref(false);
 const position = reactive({ top: '0px', left: '0px' });
 
 onMounted(() => {
@@ -27,9 +28,12 @@ onBeforeUnmount(() => {
 });
 
 async function toggle(): Promise<void> {
-  open.value = !open.value;
+  const nextOpen = !open.value;
+  if (nextOpen) keepInsideDialog.value = trigger.value?.closest('dialog') !== null;
+  open.value = nextOpen;
   if (!open.value) return;
   await nextTick();
+  menu.value?.showPopover?.();
   placeMenu();
 }
 
@@ -50,6 +54,7 @@ function placeMenu(): void {
 }
 
 function close(): void {
+  if (menu.value?.matches(':popover-open')) menu.value.hidePopover?.();
   open.value = false;
 }
 
@@ -79,12 +84,13 @@ function closeOnEscape(event: KeyboardEvent): void {
     >
       <span aria-hidden="true">⋮</span>
     </button>
-    <Teleport to="body">
+    <Teleport to="body" :disabled="keepInsideDialog">
       <div
         v-if="open"
         ref="menu"
         class="action-menu-popover"
         role="menu"
+        popover="manual"
         :aria-label="label"
         :style="position"
         @click="close"

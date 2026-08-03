@@ -511,7 +511,7 @@ final class Tests
         [$pdo, $runner, $databasePath] = $this->database();
         $applied = $runner->apply();
         $this->same(
-            ['001', '002', '003', '004', '005', '006', '007'],
+            ['001', '002', '003', '004', '005', '006', '007', '008'],
             $applied,
             'base initiale et migrations complémentaires appliquées'
         );
@@ -537,7 +537,7 @@ final class Tests
         $this->true(true, 'écriture concurrente possible après libération du verrou');
 
         $this->same(
-            7,
+            8,
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM schema_migrations"
             )->fetchColumn(),
@@ -1495,6 +1495,56 @@ final class Tests
             $seededVatRegimeId,
             'seed du régime TVA idempotent'
         );
+        $initialVatReplacement = (new VatConfigurationService($pdo, $audit))
+            ->addRegime([
+                'organisation_id' => $organisationId,
+                'dossier_id' => $firstId,
+                'statut' => 'assujetti',
+                'numero_tva' => 'CHE-123.456.789 TVA',
+                'methode' => 'effective',
+                'mode_decompte' => 'convenues',
+                'periodicite' => 'trimestrielle',
+                'date_debut' => '2026-01-01',
+                'compte_impot_prealable_materiel_id' =>
+                    $this->accountId($pdo, $firstId, '1170'),
+                'compte_impot_prealable_investissements_id' =>
+                    $this->accountId($pdo, $firstId, '1171'),
+                'compte_tva_due_id' => $this->accountId($pdo, $firstId, '2200'),
+                'compte_decompte_tva_id' =>
+                    $this->accountId($pdo, $firstId, '2201'),
+                'compte_corrections_id' =>
+                    $this->accountId($pdo, $firstId, '6500'),
+                'fermer_precedent' => true,
+                'remplacer_regime_initial' => true,
+            ], $actorId);
+        $this->same(
+            '1|assujetti|2026-01-01',
+            (int) $pdo->query(
+                "SELECT COUNT(*) FROM tva_regimes WHERE dossier_id = {$firstId}"
+            )->fetchColumn()
+                . '|' . (string) $pdo->query(
+                    "SELECT statut FROM tva_regimes WHERE id = {$initialVatReplacement}"
+                )->fetchColumn()
+                . '|' . (string) $pdo->query(
+                    "SELECT date_debut FROM tva_regimes
+                     WHERE id = {$initialVatReplacement}"
+                )->fetchColumn(),
+            'régime TVA technique remplaçable à la date initiale'
+        );
+        $this->throws(
+            fn () => (new VatConfigurationService($pdo, $audit))->addRegime([
+                'organisation_id' => $organisationId,
+                'dossier_id' => $firstId,
+                'statut' => 'volontaire',
+                'numero_tva' => 'CHE-123.456.789 TVA',
+                'methode' => 'effective',
+                'mode_decompte' => 'convenues',
+                'periodicite' => 'trimestrielle',
+                'date_debut' => '2026-01-01',
+                'remplacer_regime_initial' => true,
+            ], $actorId),
+            'régime TVA configuré conservé contre un remplacement à date identique'
+        );
         $this->same(
             ['facturation', 'comptabilite'],
             $first['summary']['modules'],
@@ -1521,7 +1571,7 @@ final class Tests
         $second = $registry->createInitialized(
             $organisationId,
             'Succursale',
-            'succursale',
+            'succursale_2026',
             'reel',
             'EUR',
             ['comptabilite'],
@@ -1568,6 +1618,31 @@ final class Tests
         );
 
         $beforeFailure = count($registry->listForOrganisation($organisationId));
+        $this->throws(
+            fn () => $registry->createInitialized(
+                $organisationId,
+                'Journal invalide',
+                'journal-invalide',
+                'reel',
+                'CHF',
+                ['comptabilite'],
+                'personne_morale',
+                false,
+                [],
+                'Exercice 2026',
+                '2026-01-01',
+                '2026-12-31',
+                'Journal général',
+                'Journal général',
+                $actorId
+            ),
+            'code de journal invalide refusé avant initialisation'
+        );
+        $this->same(
+            $beforeFailure,
+            count($registry->listForOrganisation($organisationId)),
+            'validation du journal sans dossier partiel'
+        );
         $failing = $factory(static function (string $step): void {
             if ($step === 'plan') {
                 throw new RuntimeException('Panne simulée après le plan.');
@@ -2257,6 +2332,25 @@ final class Tests
         ]);
         $pdo->prepare(
             "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, workflow,
+              statut, numero, date_document, date_echeance,
+              adresse_snapshot_json, contact_snapshot_json,
+              compte_collectif_id, total_net_centimes,
+              total_tva_centimes, total_brut_centimes,
+              total_net_base_centimes, total_tva_base_centimes,
+              total_brut_base_centimes)
+             VALUES (?, ?, ?, 'facture_fournisseur', 'depense',
+                     'comptabilise', 'DEP-TDB-COMPTANT', '2026-03-01',
+                     '2026-03-01', '{}', '{}', ?, 12345, 0, 12345,
+                     12345, 0, 12345)"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $supplierId,
+            $bankAccount,
+        ]);
+        $pdo->prepare(
+            "INSERT INTO documents_financiers
              (organisation_id, dossier_id, contact_id, type, statut, numero,
               date_document, date_echeance, adresse_snapshot_json,
               contact_snapshot_json, total_net_centimes, total_tva_centimes,
@@ -2392,7 +2486,14 @@ final class Tests
         $this->same(
             30000,
             (int) $projection['open_items']['payables']['open_cents'],
-            'dette fournisseur ouverte issue des documents et allocations'
+            'dette fournisseur exclut la dépense réglée directement en trésorerie'
+        );
+        $this->same(
+            '1|0|0',
+            (int) $projection['open_items']['payables']['open_count']
+                . '|' . (int) $projection['open_items']['payables']['overdue_count']
+                . '|' . (int) $projection['open_items']['payables']['overdue_cents'],
+            'dépense comptant échue absente du nombre et du montant des dettes'
         );
         $this->same(
             1,
@@ -3824,6 +3925,7 @@ final class Tests
         );
         $this->same(
             [
+                'sources',
                 'treasury_accounts',
                 'imports',
                 'bank_lines',
@@ -3833,6 +3935,7 @@ final class Tests
                 'payments',
                 'allocations',
                 'open_documents',
+                'open_salary_liabilities',
                 'payable_debts',
                 'outgoing_batches',
                 'catalog',
@@ -9965,7 +10068,8 @@ final class Tests
             '2026-06-01',
             (int) $netDebt['montant_centimes'],
             $account('1020'),
-            'NET-MAI'
+            'NET-MAI',
+            liabilityId: (int) $netDebt['id']
         );
         $paymentService->allocate(
             $organisationId,
@@ -9995,36 +10099,130 @@ final class Tests
             $liabilities,
             static fn (array $row): bool => $row['type'] !== 'net'
         ));
-        $organismTotal = array_sum(array_map(
-            static fn (array $row): int => (int) $row['montant_centimes'],
-            $organismDebts
-        ));
-        $organismPayment = $paymentService->create(
-            $organisationId,
-            $dossierId,
-            'organisme',
-            null,
-            '2026-06-05',
-            $organismTotal,
-            $account('1020'),
-            'CHARGES-MAI'
-        );
-        foreach ($organismDebts as $debt) {
-            $paymentService->allocate(
+        foreach ($organismDebts as $index => $debt) {
+            $organismPayment = $paymentService->create(
+                $organisationId,
+                $dossierId,
+                'organisme',
+                null,
+                '2026-06-05',
+                (int) $debt['montant_centimes'],
+                $account('1020'),
+                'CHARGES-' . strtoupper((string) $debt['type']),
+                liabilityId: (int) $debt['id']
+            );
+            if ($index === 0 && isset($organismDebts[1])) {
+                $this->throws(
+                    fn () => $paymentService->allocate(
+                        $organisationId,
+                        $dossierId,
+                        $organismPayment,
+                        (int) $organismDebts[1]['id'],
+                        1
+                    ),
+                    'un paiement OCAS ne règle pas une dette LAA ou LPP'
+                );
+            }
+            $allocationId = $paymentService->allocate(
                 $organisationId,
                 $dossierId,
                 $organismPayment,
                 (int) $debt['id'],
                 (int) $debt['montant_centimes']
             );
+            if ($index === 0) {
+                $paymentService->unallocate(
+                    $organisationId,
+                    $dossierId,
+                    $allocationId
+                );
+                $paymentService->allocate(
+                    $organisationId,
+                    $dossierId,
+                    $organismPayment,
+                    (int) $debt['id'],
+                    (int) $debt['montant_centimes']
+                );
+            }
+            $paymentService->post(
+                $organisationId,
+                $dossierId,
+                $organismPayment,
+                $exercise,
+                $journal
+            );
         }
-        $paymentService->post(
+        $cancelledPayment = $paymentService->create(
             $organisationId,
             $dossierId,
-            $organismPayment,
-            $exercise,
-            $journal
+            'organisme',
+            null,
+            '2026-06-06',
+            1,
+            $account('1020'),
+            'A-ANNULER',
+            liabilityId: (int) $organismDebts[0]['id']
         );
+        $paymentService->cancel(
+            $organisationId,
+            $dossierId,
+            $cancelledPayment
+        );
+        $preciseBeneficiaries = array_column(
+            $paymentService->payments($organisationId, $dossierId),
+            'beneficiaire_libelle'
+        );
+        $this->true(
+            in_array('OCAS', $preciseBeneficiaries, true)
+            && in_array('Assureur LAA', $preciseBeneficiaries, true)
+            && in_array('Institution LPP', $preciseBeneficiaries, true),
+            'bénéficiaires institutionnels précis dans l’historique'
+        );
+        $treasuryPayroll = (new TreasuryWorkspaceService(
+            $pdo,
+            new PaymentService($pdo, $audit, new EntryService($pdo, $audit)),
+            new EntryService($pdo, $audit),
+            $paymentService
+        ))->read($organisationId, $dossierId, true, true);
+        $this->true(
+            (bool) $treasuryPayroll['sources']['payroll']
+            && array_filter(
+                $treasuryPayroll['payments'],
+                static fn (array $row): bool => $row['source_type'] === 'payroll'
+            ) !== [],
+            'paiements et dettes salariales projetés dans les liquidités'
+        );
+        $projectedNetPayment = array_values(array_filter(
+            $treasuryPayroll['payments'],
+            static fn (array $row): bool =>
+                $row['source_type'] === 'payroll'
+                && (int) $row['id'] === $netPayment
+        ))[0];
+        $this->true(
+            (string) $projectedNetPayment['dette_ecriture_numeros'] !== ''
+            && (string) $projectedNetPayment['ecriture_numero'] !== '',
+            'liquidités distingue écriture de paie et écriture de décaissement'
+        );
+        $pdo->prepare(
+            "UPDATE modules_dossier SET actif = 0
+             WHERE dossier_id = ? AND module_code = 'facturation'"
+        )->execute([$dossierId]);
+        $salaryOnlyTreasury = (new TreasuryWorkspaceService(
+            $pdo,
+            new PaymentService($pdo, $audit, new EntryService($pdo, $audit)),
+            new EntryService($pdo, $audit),
+            $paymentService
+        ))->read($organisationId, $dossierId, true, false);
+        $this->true(
+            !(bool) $salaryOnlyTreasury['sources']['billing']
+            && (bool) $salaryOnlyTreasury['sources']['payroll']
+            && $salaryOnlyTreasury['open_documents'] === [],
+            'projection liquidités adaptée au module Salaires activé seul'
+        );
+        $pdo->prepare(
+            "UPDATE modules_dossier SET actif = 1
+             WHERE dossier_id = ? AND module_code = 'facturation'"
+        )->execute([$dossierId]);
         $this->same(
             'payee',
             (string) $payrolls->payroll(
@@ -14610,6 +14808,22 @@ CSV;
             $expenseAccount,
         ]);
         $nonLiabilityDocument = (int) $pdo->lastInsertId();
+        $pdo->prepare(
+            "INSERT INTO documents_financiers
+             (organisation_id, dossier_id, contact_id, type, statut, numero,
+              date_document, date_echeance, adresse_snapshot_json,
+              contact_snapshot_json, compte_collectif_id, workflow,
+              total_net_centimes, total_tva_centimes, total_brut_centimes)
+             VALUES (?, ?, ?, 'facture_fournisseur', 'comptabilise',
+                     'FA-PAY-001', '2026-03-01', '2026-03-31',
+                     '{}', '{}', ?, 'facturation', 2500, 0, 2500)"
+        )->execute([
+            $organisationId,
+            $dossierId,
+            $supplier,
+            $payable,
+        ]);
+        $billingInvoice = (int) $pdo->lastInsertId();
         $treasuryProjection = (new TreasuryWorkspaceService(
             $pdo,
             $payments,
@@ -14625,6 +14839,7 @@ CSV;
         $this->true(
             in_array($expenseId, $payableDebtIds, true)
             && in_array($secondExpenseId, $payableDebtIds, true)
+            && in_array($billingInvoice, $payableDebtIds, true)
             && !in_array($nonLiabilityDocument, $payableDebtIds, true),
             'paiements sortants limités aux passifs fournisseurs en suspens'
         );
@@ -14659,6 +14874,22 @@ CSV;
             $payments,
             $reconciliations,
             new Pain001Generator()
+        );
+        $billingBatchId = $outgoing->prepare(
+            $organisationId,
+            $dossierId,
+            $treasuryId,
+            '2026-03-20',
+            [['document_id' => $billingInvoice, 'amount_cents' => 2500]],
+            'lot-facturation-001'
+        );
+        $this->same(
+            $billingInvoice,
+            (int) $pdo->query(
+                "SELECT document_id FROM ordres_paiement_sortants
+                 WHERE lot_id = {$billingBatchId}"
+            )->fetchColumn(),
+            'facture d’achat du module Facturation admise dans un lot sortant'
         );
         $batchId = $outgoing->prepare(
             $organisationId,

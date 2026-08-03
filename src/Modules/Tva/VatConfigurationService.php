@@ -64,6 +64,19 @@ final class VatConfigurationService
             $this->pdo->beginTransaction();
         }
         try {
+            $replacedInitialRegimeId = null;
+            if (($data['remplacer_regime_initial'] ?? false) === true) {
+                $replacedInitialRegimeId = $this->replaceableInitialRegime(
+                    $organisationId,
+                    $dossierId,
+                    $start
+                );
+                if ($replacedInitialRegimeId !== null) {
+                    $this->pdo->prepare(
+                        'DELETE FROM tva_regimes WHERE id = ?'
+                    )->execute([$replacedInitialRegimeId]);
+                }
+            }
             if (($data['fermer_precedent'] ?? false) === true) {
                 $previousDay = (new DateTimeImmutable($start))->modify('-1 day')->format('Y-m-d');
                 $close = $this->pdo->prepare(
@@ -101,7 +114,12 @@ final class VatConfigurationService
                 $dossierId,
                 'regime_tva',
                 (string) $id,
-                ['statut' => $status, 'methode' => $method, 'date_debut' => $start]
+                [
+                    'statut' => $status,
+                    'methode' => $method,
+                    'date_debut' => $start,
+                    'regime_initial_remplace_id' => $replacedInitialRegimeId,
+                ]
             );
             if ($ownsTransaction) {
                 $this->pdo->commit();
@@ -113,6 +131,44 @@ final class VatConfigurationService
             }
             throw $exception;
         }
+    }
+
+    private function replaceableInitialRegime(
+        int $organisationId,
+        int $dossierId,
+        string $start,
+    ): ?int {
+        $stmt = $this->pdo->prepare(
+            "SELECT r.id
+             FROM tva_regimes r
+             WHERE r.organisation_id = ? AND r.dossier_id = ?
+               AND r.date_debut = ? AND r.date_fin IS NULL
+               AND r.statut = 'non_assujetti' AND r.numero_tva = ''
+               AND r.methode = 'effective'
+               AND r.mode_decompte = 'convenues'
+               AND r.periodicite = 'annuelle'
+               AND (SELECT COUNT(*) FROM tva_regimes all_r
+                    WHERE all_r.organisation_id = r.organisation_id
+                      AND all_r.dossier_id = r.dossier_id) = 1
+               AND NOT EXISTS (
+                    SELECT 1 FROM tva_periodes p
+                    WHERE p.regime_tva_id = r.id
+               )
+               AND NOT EXISTS (
+                    SELECT 1 FROM documents_financiers d
+                    WHERE d.organisation_id = r.organisation_id
+                      AND d.dossier_id = r.dossier_id
+               )
+               AND NOT EXISTS (
+                    SELECT 1 FROM parametres_dossier p
+                    WHERE p.dossier_id = r.dossier_id
+                      AND p.cle IN ('setup_guide.vat', 'setup_guide.finished')
+               )
+             LIMIT 1"
+        );
+        $stmt->execute([$organisationId, $dossierId, $start]);
+        $id = $stmt->fetchColumn();
+        return $id === false ? null : (int) $id;
     }
 
     /** @param array<string,mixed> $data */

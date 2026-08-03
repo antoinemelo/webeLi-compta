@@ -352,13 +352,21 @@ test('connexion, changement de dossier, route profonde et déconnexion', async (
   ).toHaveCount(0);
   await expect(page.getByText('Chiffre d’affaires', { exact: true })).toBeVisible();
   await expect(page.getByText('Produits comptabilisés', { exact: true }).locator('..')).toContainText(
-    /CHF\s+1.*200\.00/
+    /1.*200\.00/
   );
+  await expect(page.getByText('Produits comptabilisés', { exact: true }).locator('..'))
+    .not.toContainText('CHF');
   await expect(page.getByRole('heading', { name: 'Trésorerie par compte' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Ouvrir le lettrage' })).toHaveAttribute(
     'href',
     '/e2e/app/liquidites/lettrage'
   );
+  const payableSummary = page.locator('article.panel').filter({
+    has: page.getByRole('heading', { name: 'Dettes ouvertes' })
+  });
+  await expect(payableSummary).toContainText(/\d+ documents?,\s+dont \d+ échus?\./);
+  await expect(payableSummary).not.toContainText('0 échus pour');
+  await expect(payableSummary).not.toContainText('(s)');
   const dashboardScope = page.getByLabel('Périmètre du calcul');
   await expect(dashboardScope.locator('.dashboard-scope-summary small').allTextContents())
     .resolves.toEqual(['Période', 'Devise de base']);
@@ -709,6 +717,7 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await page.getByRole('link', { name: 'TVA', exact: true }).click();
   await expect(page.getByText('Valeurs datées', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Avec ou sans TVA' })).toBeVisible();
+  await expect(page.getByText('01-01-2026', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Modifier le régime TVA' }).click();
   const vatRegimeDialog = page.getByRole('dialog', { name: 'Configurer le régime TVA' });
   await expect(vatRegimeDialog.getByLabel('Traitement du dossier')).toBeVisible();
@@ -719,16 +728,21 @@ test('configuration des modules et référentiels', async ({ page }) => {
   await newVatDialog.getByRole('button', { name: 'Fermer' }).click();
   await expect(page.getByRole('heading', { name: 'Taux TVA suisses' })).toBeVisible();
   const vatRow = page.getByRole('row').filter({ hasText: 'VE81' });
-  await vatRow.getByRole('button', { name: 'Modifier' }).click();
+  const vatActions = vatRow.getByRole('button', { name: 'Actions pour le code TVA VE81' });
+  await vatActions.click();
+  await page.getByRole('menu', { name: 'Actions pour le code TVA VE81' }).getByRole('button', { name: 'Modifier' }).click();
   await expect(page.getByRole('heading', { name: 'Modifier le code TVA' })).toBeVisible();
   await page.getByLabel('Libellé').fill('Ventes E2E modifiées');
   await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
   await expect(vatRow).toContainText('Ventes E2E modifiées');
-  await vatRow.getByRole('button', { name: 'Désactiver' }).click();
+  await vatActions.click();
+  await page.getByRole('menu', { name: 'Actions pour le code TVA VE81' }).getByRole('button', { name: 'Désactiver' }).click();
   await expect(vatRow).toContainText('Inactif');
-  await vatRow.getByRole('button', { name: 'Réactiver' }).click();
+  await vatActions.click();
+  await page.getByRole('menu', { name: 'Actions pour le code TVA VE81' }).getByRole('button', { name: 'Réactiver' }).click();
   await expect(vatRow).toContainText('Actif');
-  await vatRow.getByRole('button', { name: 'Modifier' }).click();
+  await vatActions.click();
+  await page.getByRole('menu', { name: 'Actions pour le code TVA VE81' }).getByRole('button', { name: 'Modifier' }).click();
   await page.getByLabel('Libellé').fill('Ventes 8,1 %');
   await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
 
@@ -742,7 +756,9 @@ test('configuration des modules et référentiels', async ({ page }) => {
     name: 'Taux annuels des charges sociales'
   });
   await expect(payrollRatesDialog).toBeVisible();
-  await expect(payrollRatesDialog.getByText(/Salaires → Annuels/)).toBeVisible();
+  await expect(payrollRatesDialog.getByText(/Salaires → Annuels/)).toHaveCount(0);
+  await expect(payrollRatesDialog.getByLabel('LPP employeur (%)', { exact: true }))
+    .toHaveValue('9');
   const downloadPromise = page.waitForEvent('download');
   await payrollRatesDialog.getByRole('button', { name: 'Exporter les taux CSV' }).click();
   expect((await downloadPromise).suggestedFilename()).toMatch(
@@ -753,7 +769,7 @@ test('configuration des modules et référentiels', async ({ page }) => {
     mimeType: 'text/csv',
     buffer: Buffer.from([
       'annee;source;verifie_le;avs_pct;ac_pct;amat_pct;laa_reduit_pct;laa_plein_pct;lpp_pct;emp_avs_pct;emp_ac_pct;emp_amat_pct;emp_af_pct;emp_laa_reduit_pct;emp_laa_plein_pct;emp_frais_pct;emp_cpe_pct;emp_lfp_pct;emp_lpp_pct',
-      '2027;Référence E2E;2026-07-28;5,3;1,1;0,041;0,5;1;3,5;5,3;1,1;0,041;2,25;0,5;1;0,1;0,07;0,14;3,5'
+      '2027;Référence E2E;2026-07-28;5,3;1,1;0,041;0,5;1;3,5;5,3;1,1;0,041;2,25;0,5;1;0,1;0,07;0,14;9'
     ].join('\n'))
   });
   await expect(page.getByText(
@@ -970,6 +986,9 @@ test('deux dossiers réels sont créés, sélectionnés et archivés depuis Vue'
     const wizard = page.locator('form').filter({
       has: page.getByRole('heading', { name: 'Initialiser un dossier' })
     });
+    await expect(wizard.getByLabel('Variante du plan comptable')).toBeVisible();
+    await expect(wizard.getByText('Variante du plan VEB')).toHaveCount(0);
+    await expect(wizard.locator('.choice-option').first()).toHaveCSS('display', 'flex');
     await wizard.getByLabel('Nom').fill(name);
     await wizard.getByLabel('Slug unique').fill(slug);
     await wizard.getByLabel('Devise de base').fill(currency);
@@ -979,7 +998,7 @@ test('deux dossiers réels sont créés, sélectionnés et archivés depuis Vue'
     await expect(page.getByRole('heading', { name, exact: true })).toBeVisible();
   };
 
-  await createDossier('Comptabilité A E2E', 'comptabilite-a-e2e', 'CHF', 'ODA');
+  await createDossier('Comptabilité A E2E', 'test_a-2026', 'CHF', 'ODA');
   await expect(page.getByText(/comptes/).last()).toBeVisible();
   await openScopeMenu(page);
   await page.getByLabel('Organisation', { exact: true }).selectOption({
@@ -2354,9 +2373,10 @@ test('offre acceptée, commande reliée et création directe restent facultative
   await expect(page.getByRole('dialog', { name: 'Commande client' })).toBeVisible();
 });
 
-test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS contrôlé', async ({
+test('salaires horaires et mensuels utilisent le parcours Vue complet', async ({
   page
 }) => {
+  test.setTimeout(60_000);
   await loginAsAdministrator(page);
   await selectDossier(page, 'Comptabilité principale');
   await page.getByRole('link', { name: 'Salaires', exact: true }).click();
@@ -2377,20 +2397,25 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
     has: page.getByRole('heading', { name: 'Employés', exact: true })
   });
   const adaEmployee = employeesPanel.getByRole('row').filter({ hasText: 'Ada Martin' });
-  await adaEmployee.getByRole('button', { name: 'Modifier' }).click();
+  await expect(adaEmployee.getByRole('button', { name: 'Actions pour Ada Martin' })).toBeVisible();
+  await clickRowAction(page, adaEmployee, 'Modifier');
   await expect(page.getByRole('heading', { name: 'Modifier l’employé' })).toBeVisible();
+  const employeeDialog = page.getByRole('dialog', { name: 'Modifier l’employé' });
+  await expect(employeeDialog.getByRole('heading', { name: 'Identité' })).toBeVisible();
+  await expect(employeeDialog.getByRole('heading', { name: 'Adresse' })).toBeVisible();
+  await expect(employeeDialog.getByRole('heading', { name: 'Paramètres salariaux' })).toBeVisible();
   await page.getByLabel('E-mail', { exact: true }).fill('ada.modifiee@example.test');
   await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
   await expect(page.getByText('Données de l’employé mises à jour.')).toBeVisible();
   await expect(employeesPanel.getByText('ada.modifiee@example.test')).toBeVisible();
 
-  await adaEmployee.getByRole('button', { name: 'Contrats' }).click();
+  await clickRowAction(page, adaEmployee, 'Historique des contrats');
   const adaContracts = page.getByRole('dialog', {
     name: 'Historique des contrats · Ada Martin'
   });
   await expect(adaContracts).toBeVisible();
   const adaContract = adaContracts.getByRole('row').filter({ hasText: 'mensuel' });
-  await adaContract.getByRole('button', { name: 'Modifier' }).click();
+  await clickRowAction(page, adaContract, 'Modifier');
   await expect(page.getByRole('heading', { name: 'Modifier le contrat' })).toBeVisible();
   await page.getByLabel('Source', { exact: true }).fill('Contrat mensuel E2E corrigé');
   await page.getByRole('button', { name: 'Enregistrer les modifications' }).click();
@@ -2400,20 +2425,20 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   const temporaryEmployee = employeesPanel.getByRole('row').filter({
     hasText: 'Jean Temporaire'
   });
-  await temporaryEmployee.getByRole('button', { name: 'Contrats' }).click();
+  await clickRowAction(page, temporaryEmployee, 'Historique des contrats');
   const temporaryContracts = page.getByRole('dialog', {
     name: 'Historique des contrats · Jean Temporaire'
   });
   const temporaryContract = temporaryContracts.getByRole('row').filter({
-    hasText: /horaire|mensuel/
+    hasText: /horaire|mensuel/i
   });
   page.once('dialog', (dialog) => dialog.accept());
-  await temporaryContract.getByRole('button', { name: 'Supprimer' }).click();
+  await clickRowAction(page, temporaryContract, 'Supprimer');
   await expect(page.getByText('Contrat non utilisé supprimé.')).toBeVisible();
   await expect(temporaryContract).toHaveCount(0);
   await temporaryContracts.getByRole('button', { name: 'Fermer' }).click();
   page.once('dialog', (dialog) => dialog.accept());
-  await temporaryEmployee.getByRole('button', { name: 'Supprimer' }).click();
+  await clickRowAction(page, temporaryEmployee, 'Supprimer');
   await expect(page.getByText('Employé et contrats non utilisés supprimés.')).toBeVisible();
   await expect(temporaryEmployee).toHaveCount(0);
 
@@ -2423,62 +2448,112 @@ test('salaires horaires et mensuels utilisent le parcours Vue et l’import OCAS
   await expect(page.getByRole('group', {
     name: /Contrat appliqué automatiquement/
   })).toBeVisible();
+  await expect(page.locator('.payroll-step legend span').first()).toHaveCSS('align-items', 'center');
+  await expect(page.locator('.payroll-step legend span').first()).toHaveCSS('justify-content', 'center');
   await expect(page.getByRole('heading', { name: 'Brouillons et calculs 2026' })).toBeVisible();
   await expect(page.getByRole('button', {
     name: 'Calculer et créer le brouillon'
   })).toBeEnabled();
-  await page.getByRole('button', { name: 'Aperçu', exact: true }).click();
+  const calculationRow = page.locator('.payroll-calculation-table tbody tr').first();
+  await clickRowAction(page, calculationRow, 'Aperçu');
   const preview = page.getByRole('dialog', { name: 'Fiche de salaire 07/2026' });
   await expect(preview).toBeVisible();
   await expect(preview.getByText('BROUILLON — À CONTRÔLER')).toBeVisible();
   await expect(preview.getByRole('heading', { name: 'Base salariale' })).toBeVisible();
+  await expect(preview.locator('.payroll-slip-table')).toContainText('CHF');
   await expect(preview.getByText('Prime exceptionnelle')).toBeVisible();
-  await expect(preview.getByText('Salaire net à verser')).toBeVisible();
+  const salarySection = preview.getByRole('heading', { name: 'Salaire', exact: true }).locator('..');
+  await expect(salarySection).toContainText('Salaire de base');
+  await expect(salarySection).not.toContainText('CHF');
+  const deductionsSection = preview.getByRole('heading', { name: 'Retenues employé' }).locator('..');
+  await expect(deductionsSection).not.toContainText('−');
+  await expect(deductionsSection).not.toContainText('CHF');
+  const employerCharges = preview.locator('details.payroll-slip-employer');
+  await expect(employerCharges.locator('.payroll-details-chevron')).toBeVisible();
+  await employerCharges.locator('summary').click();
+  await expect(employerCharges.locator('dt').first()).toHaveText('Salaire brut');
+  await expect(employerCharges).not.toContainText('CHF');
+  const netSalary = preview.locator('.payroll-slip-net');
+  await expect(netSalary).toContainText('Salaire net à verser');
+  await expect(netSalary).not.toContainText('CHF');
   await expect(preview.getByRole('button', { name: 'Valider cette fiche' })).toBeEnabled();
-  await preview.getByRole('button', { name: 'Fermer' }).click();
+  await preview.getByRole('button', { name: 'Valider cette fiche' }).click();
+  await expect(page.getByText('Fiche validée et figée.')).toBeVisible();
+  await expect(preview).not.toBeVisible();
 
   await page.getByRole('link', { name: 'Fiches', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Fiches de salaire' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Voir et valider' })).toBeVisible();
+  const salarySlipRow = page.locator('.payroll-slips-table tbody tr').first();
+  await expect(salarySlipRow.getByRole('button', { name: /Actions pour la fiche/ })).toBeVisible();
+  await clickRowAction(page, salarySlipRow, 'Comptabiliser');
+  await expect(page.getByText('Fiche comptabilisée.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Paiements et lettrage' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Paiements et lettrage' }).click();
   const payrollPayments = page.getByRole('dialog', { name: 'Paiements et lettrage' });
   await expect(payrollPayments).toBeVisible();
   await expect(payrollPayments.getByRole('heading', { name: 'Saisir le paiement' })).toBeVisible();
   await expect(payrollPayments.getByRole('heading', { name: 'Allouer à une dette' })).toBeVisible();
+  await expect(payrollPayments.locator('.payroll-payments-table')).toBeVisible();
+  const referenceDebt = payrollPayments.getByLabel('Dette de référence');
+  const ocasDebtValue = await referenceDebt.locator('option').filter({ hasText: 'OCAS' })
+    .first().getAttribute('value');
+  expect(ocasDebtValue).toBeTruthy();
+  await referenceDebt.selectOption(String(ocasDebtValue));
+  await expect(payrollPayments.getByText('Bénéficiaire déterminé :')).toContainText('OCAS');
+  await payrollPayments.getByRole('button', { name: 'Saisir le paiement' }).click();
+  await expect(page.getByText('Paiement salarial saisi.')).toBeVisible();
+  await expect(payrollPayments.locator('.payroll-payments-table tbody tr').filter({
+    hasText: 'OCAS'
+  })).toBeVisible();
   await payrollPayments.getByRole('button', { name: 'Fermer' }).click();
-  await page.getByRole('link', { name: 'Annuels', exact: true }).click();
+
+  await page.goto('/e2e/app/liquidites/paiements');
+  const centralPayrollPayment = page.locator('table tbody tr').filter({ hasText: 'OCAS' });
+  await expect(centralPayrollPayment).toContainText('Salaires');
+  await page.goto('/e2e/app/liquidites/lettrage');
+  await expect(page.getByLabel('Dette ouverte compatible')).toBeVisible();
+  const centralPaymentSelect = page.getByLabel('Paiement', { exact: true });
+  const salaryPaymentValue = await centralPaymentSelect.locator('option')
+    .filter({ hasText: /Salaires.*OCAS/ }).first().getAttribute('value');
+  expect(salaryPaymentValue).toBeTruthy();
+  await centralPaymentSelect.selectOption(String(salaryPaymentValue));
+  await expect(page.getByLabel('Dette ouverte compatible')).toContainText('OCAS');
+  await page.getByLabel('Dette ouverte compatible').selectOption(`payroll:${ocasDebtValue}`);
+  await expect(page.getByLabel('Montant alloué')).not.toHaveValue('');
+  await page.getByRole('button', { name: 'Lettrer', exact: true }).click();
+  await expect(page.getByText('Paiement lettré.')).toBeVisible();
+
+  await page.goto('/e2e/app/liquidites/paiements');
+  await page.getByLabel('Afficher').selectOption('allocated');
+  const allocatedPayrollPayment = page.locator('table tbody tr').filter({ hasText: 'OCAS' });
+  await expect(allocatedPayrollPayment).toContainText(/Dette comptabilisée · [A-Z0-9]+-/);
+  await expect(allocatedPayrollPayment).toContainText('Décaissement à comptabiliser');
+  await clickRowAction(page, allocatedPayrollPayment, 'Comptabiliser');
+  await expect(page.getByText('Décaissement salarial comptabilisé.')).toBeVisible();
+  await expect(allocatedPayrollPayment).toContainText('Comptabilisé');
+  await expect(allocatedPayrollPayment).not.toContainText('Dette comptabilisée');
+
+  await page.goto('/e2e/app/configuration/modules');
+  const billingModule = page.locator('.module-card').filter({
+    has: page.getByRole('heading', { name: 'Facturation', exact: true })
+  });
+  await billingModule.getByRole('button', { name: 'Désactiver' }).click();
+  await expect(billingModule).toContainText('Inactif');
+  await page.goto('/e2e/app/liquidites/lettrage');
+  await expect(page.getByLabel('Dette salariale compatible')).toBeVisible();
+  await expect(page.getByLabel('Facture compatible')).toHaveCount(0);
+  await page.goto('/e2e/app/configuration/modules');
+  await billingModule.getByRole('button', { name: 'Réactiver' }).click();
+  await expect(billingModule).toContainText('Actif');
+
+  await page.goto('/e2e/app/salaires/annuels');
   await expect(page.getByRole('heading', { name: 'Récapitulatifs et certificats' })).toBeVisible();
+  const annualRow = page.locator('.payroll-annual-table tbody tr').first();
+  await expect(annualRow.getByRole('button', { name: /Actions du certificat/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Import annuel OCAS' })).toHaveCount(0);
   await expect(page.getByRole('heading', {
     name: 'Paramétrage employeur et comptes'
   })).toHaveCount(0);
-
-  const ocasRows = [
-    ['taux_avs', '0.053'],
-    ['taux_ac', '0.011'],
-    ['taux_amat', '0.00041'],
-    ['taux_laa_reduit', '0.005'],
-    ['taux_laa_plein', '0.01'],
-    ['taux_lpp', '0.035'],
-    ['emp_taux_avs', '0.053'],
-    ['emp_taux_ac', '0.011'],
-    ['emp_taux_amat', '0.00041'],
-    ['emp_taux_af', '0.0225'],
-    ['emp_taux_laa_reduit', '0.005'],
-    ['emp_taux_laa_plein', '0.01'],
-    ['emp_taux_frais', '0.001'],
-    ['emp_taux_cpe', '0.0007'],
-    ['emp_taux_lfp', '0.0014'],
-    ['emp_taux_lpp', '0.035']
-  ];
-  await page.getByLabel('Fichier OCAS').setInputFiles({
-    name: 'ocas-2026.csv',
-    mimeType: 'text/csv',
-    buffer: Buffer.from(`cle;valeur\n${ocasRows.map((row) => row.join(';')).join('\n')}`)
-  });
-  await page.getByRole('button', { name: 'Prévisualiser sans écrire' }).click();
-  await expect(page.getByText('Prévisualisation sans écriture.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Confirmer l’import' })).toBeEnabled();
 
   const legacy = await page.request.get('/e2e/salaires', { maxRedirects: 0 });
   expect(legacy.status()).toBe(303);

@@ -82,8 +82,16 @@ final class PayrollWorkspaceService
                 $dossierId,
                 $revealPii
             ),
-            'payments' => $this->payments->payments($organisationId, $dossierId),
-            'liabilities' => $this->payments->liabilities($organisationId, $dossierId),
+            'payments' => $this->payments->payments(
+                $organisationId,
+                $dossierId,
+                $revealPii
+            ),
+            'liabilities' => $this->payments->liabilities(
+                $organisationId,
+                $dossierId,
+                $revealPii
+            ),
             'catalog' => $catalog,
             'annual' => [
                 'employees' => $summary,

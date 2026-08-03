@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
+import ActionMenu from '@/components/ui/ActionMenu.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import DataTable from '@/components/ui/DataTable.vue';
@@ -18,6 +19,7 @@ import { useConfigurationStore } from '@/stores/configuration';
 import { useContextStore } from '@/stores/context';
 import { useNotificationStore } from '@/stores/notifications';
 import { exerciseStatusLabel, periodStatusLabel } from '@/utils/statusLabels';
+import { formatDate, formatDateTime } from '@/utils/dateFormat';
 
 const route = useRoute();
 const context = useContextStore();
@@ -193,6 +195,7 @@ const payrollCsvColumns = [
   }))
 ] as const;
 payrollRateFields.forEach(({ key }) => { payrollDraft[key] = ''; });
+payrollDraft.emp_lpp_ppm = '9';
 const payrollSettings = reactive({
   weekly_hours: '40',
   mapping: {} as Record<string, number>
@@ -275,8 +278,8 @@ const paymentRows = computed<Array<Record<string, unknown>>>(() =>
       .filter((entry) => entry.condition_id === item.id)
       .map((entry) => (
         `${entry.direction === 'client' ? 'Clients' : 'Fournisseurs'}`
-        + ` dès le ${entry.valid_from}`
-        + `${entry.valid_until ? ` jusqu’au ${entry.valid_until}` : ''}`
+        + ` dès le ${formatDate(entry.valid_from)}`
+        + `${entry.valid_until ? ` jusqu’au ${formatDate(entry.valid_until)}` : ''}`
         + `${entry.current ? ' · actuel' : ''}`
       ))
       .join(' ; ') || 'Aucun',
@@ -285,13 +288,13 @@ const paymentRows = computed<Array<Record<string, unknown>>>(() =>
     label: item.label,
     direction: directionLabel(item.direction),
     calculation: `${item.days} jour(s)${item.end_of_month ? ', fin de mois' : ''}`,
-    validity: `${item.valid_from} — ${item.valid_until || 'sans fin'}`,
+    validity: `${formatDate(item.valid_from)} — ${formatDate(item.valid_until, 'sans fin')}`,
   }))
 );
 const auditRows = computed<Array<Record<string, unknown>>>(() =>
   (configuration.value?.audit ?? []).map((item) => ({
     id: item.id,
-    created_at: item.created_at,
+    created_at: formatDateTime(item.created_at),
     actor: item.actor,
     action: item.action,
     target: `${item.target_type}${item.target_id ? ` #${item.target_id}` : ''}`
@@ -706,7 +709,7 @@ async function saveVatRegime(): Promise<void> {
       ? vatRegimeDraft.corrections_account_id : null
   });
   vatRegimeDialog.value?.close();
-  notifications.push('Nouveau régime TVA daté enregistré.', 'success');
+  notifications.push('Régime TVA enregistré.', 'success');
 }
 
 function resetVatCode(): void {
@@ -1745,10 +1748,10 @@ async function clearAudit(): Promise<void> {
                 <thead><tr><th>Date</th><th>Paire</th><th>Ratio exact</th><th>Source</th></tr></thead>
                 <tbody>
                   <tr v-for="rate in managedReferences.currencies.rates" :key="rate.id">
-                    <td>{{ rate.rate_date }}</td>
+                    <td>{{ formatDate(rate.rate_date) }}</td>
                     <td>{{ rate.source_currency }}/{{ rate.target_currency }}</td>
                     <td>{{ rate.numerator }}/{{ rate.denominator }}</td>
-                    <td>{{ rate.source }}<br><small>Vérifié le {{ rate.verified_on }}</small></td>
+                    <td>{{ rate.source }}<br><small>Vérifié le {{ formatDate(rate.verified_on) }}</small></td>
                   </tr>
                 </tbody>
               </table>
@@ -1992,7 +1995,7 @@ async function clearAudit(): Promise<void> {
               </div>
               <div>
                 <span>Applicable dès le</span>
-                <strong>{{ managedReferences.vat.regimes[0].valid_from }}</strong>
+                <strong>{{ formatDate(managedReferences.vat.regimes[0].valid_from) }}</strong>
               </div>
               <div>
                 <span>N° TVA</span>
@@ -2178,8 +2181,8 @@ async function clearAudit(): Promise<void> {
                   <tr v-for="rate in managedReferences.vat.legal_rates" :key="rate.id">
                     <td>{{ rate.label }}</td>
                     <td>{{ percentFromBasisPoints(rate.rate_bp) }} %</td>
-                    <td>{{ rate.valid_from }} — {{ rate.valid_until || 'sans fin' }}</td>
-                    <td>{{ rate.verified_on }}</td>
+                    <td>{{ formatDate(rate.valid_from) }} — {{ formatDate(rate.valid_until, 'sans fin') }}</td>
+                    <td>{{ formatDate(rate.verified_on) }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -2199,27 +2202,25 @@ async function clearAudit(): Promise<void> {
                     <td>{{ code.treatment }} · {{ code.nature }}</td>
                     <td>{{ code.rate_bp === null ? '—' : `${percentFromBasisPoints(code.rate_bp)} %` }}</td>
                     <td>{{ code.account || '—' }}</td>
-                    <td>{{ code.valid_from }} — {{ code.valid_until || 'sans fin' }}</td>
+                    <td>{{ formatDate(code.valid_from) }} — {{ formatDate(code.valid_until, 'sans fin') }}</td>
                     <td>
                       <span class="status-badge" :class="code.active ? 'status-ouverte' : 'status-fermee'">
                         {{ code.active ? 'Actif' : 'Inactif' }}
                       </span>
                     </td>
-                    <td>
-                      <div class="table-actions">
-                        <button class="button secondary compact" type="button" @click="editVatCode(code)">
-                          Modifier
-                        </button>
-                        <button class="button secondary compact" type="button" @click="toggleVatCode(code)">
+                    <td class="table-action-cell">
+                      <ActionMenu :label="`Actions pour le code TVA ${code.code}`">
+                        <button type="button" @click="editVatCode(code)">Modifier</button>
+                        <button type="button" @click="toggleVatCode(code)">
                           {{ code.active ? 'Désactiver' : 'Réactiver' }}
                         </button>
                         <button
                           v-if="!code.used"
-                          class="button danger compact"
+                          class="danger"
                           type="button"
                           @click="deleteVatCode(code)"
                         >Supprimer</button>
-                      </div>
+                      </ActionMenu>
                     </td>
                   </tr>
                 </tbody>
@@ -2250,8 +2251,7 @@ async function clearAudit(): Promise<void> {
           >
             <form class="configuration-form" @submit.prevent="savePayrollRates">
             <p class="field-hint">
-              Saisissez ici un millésime contrôlé manuellement ou utilisez
-              Salaires → Annuels pour prévisualiser les taux OCAS sans écriture.
+              Saisissez ici un millésime contrôlé ou importez les taux annuels par CSV.
             </p>
             <div class="csv-transfer">
               <div>
@@ -2308,7 +2308,7 @@ async function clearAudit(): Promise<void> {
           </ModalDialog>
           <article class="panel">
             <div class="panel-heading">
-              <div><p class="eyebrow">Historique immuable après usage</p><h2>Millésimes configurés</h2></div>
+              <h2>Historique immuable après usage</h2>
               <strong>{{ managedReferences.payroll.rates.length }}</strong>
             </div>
             <div class="table-wrap">
@@ -2320,7 +2320,7 @@ async function clearAudit(): Promise<void> {
                     <td>{{ percentFromPpm(Number(rate.avs_ppm)) }} %</td>
                     <td>{{ percentFromPpm(Number(rate.ac_ppm)) }} %</td>
                     <td>{{ percentFromPpm(Number(rate.lpp_ppm)) }} %</td>
-                    <td>{{ rate.source }}<br><small>Vérifié le {{ rate.verified_on }}</small></td>
+                    <td>{{ rate.source }}<br><small>Vérifié le {{ formatDate(String(rate.verified_on || '')) }}</small></td>
                     <td>
                       <button class="button secondary compact" type="button" @click="loadPayrollRates(rate)">
                         Reprendre
@@ -2456,8 +2456,8 @@ async function clearAudit(): Promise<void> {
                 <tbody>
                   <tr v-for="exercise in managedReferences.accounting_setup.exercises" :key="exercise.id">
                     <td><strong>{{ exercise.label }}</strong></td>
-                    <td>{{ exercise.start_date }}</td>
-                    <td>{{ exercise.end_date }}</td>
+                    <td>{{ formatDate(exercise.start_date) }}</td>
+                    <td>{{ formatDate(exercise.end_date) }}</td>
                     <td>
                       <span
                         class="status-badge"
@@ -2527,7 +2527,7 @@ async function clearAudit(): Promise<void> {
                   <tr v-for="period in managedReferences.accounting_setup.periods" :key="period.id">
                     <td><strong>{{ period.label }}</strong></td>
                     <td>{{ period.exercise }}</td>
-                    <td>{{ period.start_date }} — {{ period.end_date }}</td>
+                    <td>{{ formatDate(period.start_date) }} — {{ formatDate(period.end_date) }}</td>
                     <td>
                       <span
                         class="status-badge"

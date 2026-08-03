@@ -9,6 +9,7 @@ import { useToastFeedback } from '@/composables/toastFeedback';
 import { swissCantons } from '@/data/swissCantons';
 import { useConsolidationStore } from '@/stores/consolidation';
 import { useContextStore } from '@/stores/context';
+import { formatDate, formatDateTime } from '@/utils/dateFormat';
 
 const consolidation = useConsolidationStore();
 useToastFeedback(consolidation);
@@ -478,7 +479,7 @@ function organisationLabel(organisationId: number): string {
             <div class="section-heading">
               <div>
                 <h3>{{ selectedGroup?.mode === 'agregation_interne' ? 'Balance agrégée' : 'Balance consolidée' }}</h3>
-                <p>{{ selectedPeriod?.date_debut }} – {{ selectedPeriod?.date_fin }} · {{ workspace.balance.currency }}</p>
+                <p>{{ formatDate(selectedPeriod?.date_debut) }} – {{ formatDate(selectedPeriod?.date_fin) }} · {{ workspace.balance.currency }}</p>
               </div>
               <div class="button-row">
                 <span :class="['status-chip', workspace.balance.formula_verified ? 'ok' : 'warning']">
@@ -512,7 +513,7 @@ function organisationLabel(organisationId: number): string {
                           {{ source.source_account }} — {{ source.source_label }} ·
                           {{ formatMoney(source.converted_cents) }} ·
                           taux {{ source.conversion.numerator }}/{{ source.conversion.denominator }}
-                          ({{ source.conversion.source }}, {{ source.conversion.rate_date }})
+                          ({{ source.conversion.source }}, {{ formatDate(source.conversion.rate_date) }})
                         </p>
                       </details>
                     </td>
@@ -592,7 +593,7 @@ function organisationLabel(organisationId: number): string {
             <div class="table-scroll"><table><thead><tr><th>Membre</th><th>Devise</th><th>Appartenance</th><th>Action</th></tr></thead><tbody>
               <tr v-for="member in workspace.members" :key="member.id">
                 <td>{{ member.label }}</td><td>{{ member.currency }}</td>
-                <td>{{ member.valid_from }} – {{ member.valid_until || 'ouverte' }}</td>
+                <td>{{ formatDate(member.valid_from) }} – {{ formatDate(member.valid_until, 'ouverte') }}</td>
                 <td><button class="button danger" :disabled="!workspace.capabilities.setup" @click="removeMember(member.id, member.version)">Retirer</button></td>
               </tr>
             </tbody></table></div>
@@ -782,7 +783,7 @@ function organisationLabel(organisationId: number): string {
           <div class="table-scroll"><table><thead><tr><th>Compte</th><th>Libellé</th><th>Débit</th><th>Crédit</th></tr></thead><tbody>
             <tr v-for="line in elimination.lines" :key="line.position"><td>{{ line.target_account }}</td><td>{{ line.label }}</td><td>{{ formatMoney(line.debit_cents) }}</td><td>{{ formatMoney(line.credit_cents) }}</td></tr>
           </tbody></table></div>
-          <small>Validée le {{ elimination.validated_at }} · aucune écriture statutaire créée.</small>
+          <small>Validée le {{ formatDateTime(elimination.validated_at) }} · aucune écriture statutaire créée.</small>
         </section>
       </section>
 
@@ -816,7 +817,7 @@ function organisationLabel(organisationId: number): string {
           <h3>Historique des membres</h3>
           <div class="table-scroll"><table><thead><tr><th>Entité</th><th>Validité</th><th>Raison sociale</th><th>Forme / IDE</th><th>Source</th></tr></thead><tbody>
             <tr v-for="legal in workspace.legal_histories" :key="legal.id">
-              <td>{{ organisationLabel(legal.organisation_id) }}</td><td>{{ legal.valid_from }} – {{ legal.valid_until || 'ouverte' }}</td>
+              <td>{{ organisationLabel(legal.organisation_id) }}</td><td>{{ formatDate(legal.valid_from) }} – {{ formatDate(legal.valid_until, 'ouverte') }}</td>
               <td>{{ legal.legal_name }}</td><td>{{ legal.legal_form }} · {{ legal.uid }}</td><td>{{ legal.source }}</td>
             </tr>
             <tr v-if="!workspace.legal_histories.length"><td colspan="5">Aucun attribut juridique daté.</td></tr>

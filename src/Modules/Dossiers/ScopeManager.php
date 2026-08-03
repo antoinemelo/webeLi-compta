@@ -52,7 +52,7 @@ final class ScopeManager
         if (
             $organisationId < 1
             || $name === ''
-            || !preg_match('/^[a-z0-9][a-z0-9-]{1,62}$/', $slug)
+            || !preg_match('/^[a-z0-9][a-z0-9_-]{1,62}$/', $slug)
             || !in_array($type, ['reel', 'demo', 'exercice'], true)
         ) {
             throw new RuntimeException('Paramètres de dossier invalides.');

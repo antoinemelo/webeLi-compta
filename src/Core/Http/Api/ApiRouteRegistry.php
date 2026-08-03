@@ -491,6 +491,8 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/salaires/fiches/annuler', $this->payroll->cancel(...));
             $this->add($router, 'POST', '/api/v1/salaires/paiements', $this->payroll->createPayment(...));
             $this->add($router, 'POST', '/api/v1/salaires/allocations', $this->payroll->allocate(...));
+            $this->add($router, 'POST', '/api/v1/salaires/allocations/annuler', $this->payroll->unallocate(...));
+            $this->add($router, 'POST', '/api/v1/salaires/paiements/annuler', $this->payroll->cancelPayment(...));
             $this->add($router, 'POST', '/api/v1/salaires/paiements/comptabiliser', $this->payroll->postPayment(...));
             $this->add($router, 'POST', '/api/v1/salaires/taux-ocas/previsualiser', $this->payroll->previewOcas(...));
             $this->add($router, 'POST', '/api/v1/salaires/taux-ocas/confirmer', $this->payroll->confirmOcas(...));

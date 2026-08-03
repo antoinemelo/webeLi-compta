@@ -19,6 +19,7 @@ import { referenceNavigation, subNavigation } from '@/router/navigation';
 import { useAccountingStore } from '@/stores/accounting';
 import { useContextStore } from '@/stores/context';
 import { exerciseStatusLabel, periodStatusLabel } from '@/utils/statusLabels';
+import { formatDate, formatDateTime } from '@/utils/dateFormat';
 
 type EntryLine = {
   account_id: number;
@@ -353,16 +354,10 @@ const reportEntityName = computed(() =>
   context.selection?.organization.name || 'Organisation'
 );
 const reportDateLabel = computed(() => {
-  if (!reportEnd.value) return '';
-  return new Intl.DateTimeFormat('fr-CH').format(
-    new Date(`${reportEnd.value}T00:00:00`)
-  );
+  return formatDate(reportEnd.value, '');
 });
 const reportStartLabel = computed(() => {
-  if (!reportStart.value) return '';
-  return new Intl.DateTimeFormat('fr-CH').format(
-    new Date(`${reportStart.value}T00:00:00`)
-  );
+  return formatDate(reportStart.value, '');
 });
 const hasPreviousBalance = computed(() =>
   Boolean(workspace.value?.reports.balance_sheet.previous_label)
@@ -1902,7 +1897,7 @@ async function deleteFinancialArchive(): Promise<void> {
               </thead>
               <tbody>
                 <tr v-for="row in sortedJournalItems" :key="row.id">
-                  <td>{{ row.date_comptable }}</td>
+                  <td>{{ formatDate(row.date_comptable) }}</td>
                   <td>
                     <button
                       class="table-primary-link"
@@ -1993,7 +1988,7 @@ async function deleteFinancialArchive(): Promise<void> {
                 </thead>
                 <tbody>
                   <tr v-for="line in sortedJournalDetailItems" :key="`${line.entry_id}-${line.line_order}`">
-                    <td>{{ line.date_comptable }}</td>
+                    <td>{{ formatDate(line.date_comptable) }}</td>
                     <td>{{ line.numero || `#${line.entry_id}` }}</td>
                     <td>
                       <button
@@ -2078,7 +2073,7 @@ async function deleteFinancialArchive(): Promise<void> {
           <div v-if="ledgerMode === 'list'" class="table-scroll">
             <table class="accounting-document-table"><thead><tr><th>Date</th><th>Libellé</th><th class="amount">Débit ({{ ledgerDebitSign }})</th><th class="amount">Crédit ({{ ledgerCreditSign }})</th><th class="amount">Solde</th></tr></thead>
               <tbody><tr v-for="row in workspace.ledger.items" :key="`${row.ecriture_id}-${row.date_comptable}-${row.libelle}`">
-                <td>{{ row.date_comptable }}</td><td>{{ row.numero }} · {{ row.libelle || '—' }}</td>
+                <td>{{ formatDate(row.date_comptable) }}</td><td>{{ row.numero }} · {{ row.libelle || '—' }}</td>
                 <td class="amount">{{ row.debit_centimes ? formatStatementAmount(row.debit_centimes) : '—' }}</td>
                 <td class="amount">{{ row.credit_centimes ? formatStatementAmount(row.credit_centimes) : '—' }}</td>
                 <td class="amount">{{ formatStatementAmount(row.solde_centimes) }}</td>
@@ -2086,8 +2081,8 @@ async function deleteFinancialArchive(): Promise<void> {
             </table>
           </div>
           <div v-else class="t-account">
-            <div><section><h4>Débit ({{ ledgerDebitSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.debit_centimes)" :key="`d-${row.ecriture_id}`"><span>{{ row.date_comptable }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.debit_centimes) }}</strong></p><p v-if="workspace.ledger.total_credit_centimes > workspace.ledger.total_debit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_credit_centimes - workspace.ledger.total_debit_centimes) }}</strong></p></section>
-              <section><h4>Crédit ({{ ledgerCreditSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.credit_centimes)" :key="`c-${row.ecriture_id}`"><span>{{ row.date_comptable }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.credit_centimes) }}</strong></p><p v-if="workspace.ledger.total_debit_centimes > workspace.ledger.total_credit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_debit_centimes - workspace.ledger.total_credit_centimes) }}</strong></p></section></div>
+            <div><section><h4>Débit ({{ ledgerDebitSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.debit_centimes)" :key="`d-${row.ecriture_id}`"><span>{{ formatDate(row.date_comptable) }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.debit_centimes) }}</strong></p><p v-if="workspace.ledger.total_credit_centimes > workspace.ledger.total_debit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_credit_centimes - workspace.ledger.total_debit_centimes) }}</strong></p></section>
+              <section><h4>Crédit ({{ ledgerCreditSign }})</h4><p v-for="row in workspace.ledger.items.filter((item) => item.credit_centimes)" :key="`c-${row.ecriture_id}`"><span>{{ formatDate(row.date_comptable) }} · {{ row.numero }}</span><strong>{{ formatStatementAmount(row.credit_centimes) }}</strong></p><p v-if="workspace.ledger.total_debit_centimes > workspace.ledger.total_credit_centimes" class="t-account-balance"><span>Solde</span><strong>{{ formatStatementAmount(workspace.ledger.total_debit_centimes - workspace.ledger.total_credit_centimes) }}</strong></p></section></div>
             <footer>
               <span>
                 <strong>TOTAUX</strong>
@@ -2447,7 +2442,7 @@ async function deleteFinancialArchive(): Promise<void> {
             <tbody>
               <template v-for="category in cashFlowCategories" :key="category.key">
                 <tr v-if="cashFlowItems(category.key).length" class="statement-section"><th colspan="2">{{ category.label.toLocaleUpperCase('fr-CH') }}</th></tr>
-                <tr v-for="row in cashFlowItems(category.key)" :key="`${category.key}-${row.entry_id}`"><td><span v-if="row.number" class="account-code">{{ row.number }}</span>{{ row.label }}<small v-if="row.date">{{ row.date }}</small></td><td class="amount">{{ formatStatementAmount(row.amount_cents) }}</td></tr>
+                <tr v-for="row in cashFlowItems(category.key)" :key="`${category.key}-${row.entry_id}`"><td><span v-if="row.number" class="account-code">{{ row.number }}</span>{{ row.label }}<small v-if="row.date">{{ formatDate(row.date) }}</small></td><td class="amount">{{ formatStatementAmount(row.amount_cents) }}</td></tr>
                 <tr v-if="cashFlowItems(category.key).length" class="statement-subtotal"><th>{{ category.label }}</th><th class="amount">{{ formatStatementAmount(cashFlowCategoryTotal(category.key)) }}</th></tr>
               </template>
               <tr v-if="!workspace.reports.cash_flow.statement_items.length"><td colspan="2">Aucun mouvement de liquidité sur la période.</td></tr>
@@ -2484,8 +2479,8 @@ async function deleteFinancialArchive(): Promise<void> {
           </p>
           <div class="archive-list">
             <article v-for="item in workspace.closing.archives" :key="item.id" class="archive-card">
-              <strong>{{ item.type === 'cloture' ? 'Clôture' : 'Dossier fiscal' }} · {{ item.start_date }} – {{ item.end_date }}</strong>
-              <small>Archivée le {{ item.created_at }} · Empreinte {{ item.hash.slice(0, 16) }}…</small>
+              <strong>{{ item.type === 'cloture' ? 'Clôture' : 'Dossier fiscal' }} · {{ formatDate(item.start_date) }} – {{ formatDate(item.end_date) }}</strong>
+              <small>Archivée le {{ formatDateTime(item.created_at) }} · Empreinte {{ item.hash.slice(0, 16) }}…</small>
               <div class="button-row archive-card-actions">
                 <button class="button primary small" type="button" @click="viewFinancialArchive(item)">
                   Consulter les états archivés
@@ -2523,14 +2518,14 @@ async function deleteFinancialArchive(): Promise<void> {
           <p class="notice warning">L’application prépare et valide le fichier XML. La vérification puis la transmission à l’AFC restent manuelles.</p>
           <EmptyState v-if="!workspace.vat.regime" title="Aucun régime TVA actif" description="Configurez d’abord le régime, la méthode et les comptes TVA dans Configuration > Référentiels." />
           <template v-else>
-            <div class="metric-strip"><span><small>N° TVA</small><strong>{{ workspace.vat.regime.vat_number }}</strong></span><span><small>Méthode</small><strong>{{ workspace.vat.regime.method }}</strong></span><span><small>Mode</small><strong>{{ workspace.vat.regime.reporting_mode }}</strong></span><span><small>Vérifié le</small><strong>{{ workspace.vat.regime.verified_on }}</strong></span></div>
+            <div class="metric-strip"><span><small>N° TVA</small><strong>{{ workspace.vat.regime.vat_number }}</strong></span><span><small>Méthode</small><strong>{{ workspace.vat.regime.method }}</strong></span><span><small>Mode</small><strong>{{ workspace.vat.regime.reporting_mode }}</strong></span><span><small>Vérifié le</small><strong>{{ formatDate(workspace.vat.regime.verified_on) }}</strong></span></div>
             <form class="form-grid three" @submit.prevent="createVatPeriod"><label>Début<input v-model="vatPeriod.start" type="date" required></label><label>Fin<input v-model="vatPeriod.end" type="date" required></label><button class="button primary" :disabled="!workspace.capabilities.vat_setup">Créer la période</button></form>
           </template>
         </section>
         <section v-if="workspace.vat.regime" class="panel">
-          <div class="section-heading"><h3>Périodes et décomptes</h3><label class="compact-control">Décompte<select v-model.number="selectedVatStatementId" @change="selectVatStatement"><option :value="0">Aucun</option><option v-for="statement in workspace.vat.statements" :key="statement.id" :value="statement.id">{{ statement.start_date }} – {{ statement.end_date }} · {{ statement.status }}</option></select></label></div>
+          <div class="section-heading"><h3>Périodes et décomptes</h3><label class="compact-control">Décompte<select v-model.number="selectedVatStatementId" @change="selectVatStatement"><option :value="0">Aucun</option><option v-for="statement in workspace.vat.statements" :key="statement.id" :value="statement.id">{{ formatDate(statement.start_date) }} – {{ formatDate(statement.end_date) }} · {{ statement.status }}</option></select></label></div>
           <div class="table-scroll"><table class="closure-table"><thead><tr><th>Période</th><th>Statut</th><th>Action</th></tr></thead><tbody>
-            <tr v-for="period in workspace.vat.periods" :key="period.id"><td>{{ period.start_date }} – {{ period.end_date }}</td><td><span class="status-chip">{{ period.status }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.vat_prepare || !['ouverte', 'preparee'].includes(period.status)" @click="prepareVatStatement(period.id)">Préparer</button></td></tr>
+            <tr v-for="period in workspace.vat.periods" :key="period.id"><td>{{ formatDate(period.start_date) }} – {{ formatDate(period.end_date) }}</td><td><span class="status-chip">{{ period.status }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.vat_prepare || !['ouverte', 'preparee'].includes(period.status)" @click="prepareVatStatement(period.id)">Préparer</button></td></tr>
             <tr v-if="!workspace.vat.periods.length"><td colspan="3">Aucune période TVA.</td></tr>
           </tbody></table></div>
         </section>
@@ -2540,7 +2535,7 @@ async function deleteFinancialArchive(): Promise<void> {
           <div class="button-row"><button class="button" :disabled="!workspace.capabilities.vat_control || workspace.vat.selected_statement.summary.status !== 'prepare'" @click="runVatAction('control', workspace.vat.selected_statement.summary.id)">Contrôler</button><button class="button" :disabled="!workspace.capabilities.vat_export || workspace.vat.selected_statement.summary.status !== 'controle'" @click="runVatAction('export', workspace.vat.selected_statement.summary.id)">Générer eCH-0217</button><button class="button primary" :disabled="!workspace.capabilities.vat_declare || workspace.vat.selected_statement.summary.status !== 'exporte'" @click="runVatAction('declare', workspace.vat.selected_statement.summary.id)">Marquer transmis</button></div>
           <div class="table-scroll"><table><thead><tr><th>Case AFC</th><th>Libellé</th><th>Montant</th></tr></thead><tbody><tr v-for="box in workspace.vat.selected_statement.boxes" :key="box.code"><td>{{ box.code }}</td><td>{{ box.label }}</td><td>{{ formatMoney(box.amount_cents) }}</td></tr></tbody></table></div>
           <h4>Sources</h4>
-          <div class="table-scroll"><table><thead><tr><th>Date</th><th>Écriture</th><th>Case</th><th>Base</th><th>TVA</th></tr></thead><tbody><tr v-for="source in workspace.vat.selected_statement.sources" :key="source.vat_line_id"><td>{{ source.date }}</td><td>{{ source.entry_number }} — {{ source.label }}</td><td>{{ source.box }}</td><td>{{ formatMoney(source.base_cents) }}</td><td>{{ formatMoney(source.vat_cents - source.input_tax_cents) }}</td></tr><tr v-if="!workspace.vat.selected_statement.sources.length"><td colspan="5">Aucune ligne TVA dans ce décompte.</td></tr></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>Date</th><th>Écriture</th><th>Case</th><th>Base</th><th>TVA</th></tr></thead><tbody><tr v-for="source in workspace.vat.selected_statement.sources" :key="source.vat_line_id"><td>{{ formatDate(source.date) }}</td><td>{{ source.entry_number }} — {{ source.label }}</td><td>{{ source.box }}</td><td>{{ formatMoney(source.base_cents) }}</td><td>{{ formatMoney(source.vat_cents - source.input_tax_cents) }}</td></tr><tr v-if="!workspace.vat.selected_statement.sources.length"><td colspan="5">Aucune ligne TVA dans ce décompte.</td></tr></tbody></table></div>
           <div v-if="workspace.vat.selected_statement.exports.length" class="archive-list"><a v-for="item in workspace.vat.selected_statement.exports" :key="item.id" class="button secondary small" :href="`${runtimeConfig.apiBaseUrl}/accounting/vat/exports/download?export_id=${item.id}`">XML {{ item.schema_version }} · {{ item.hash.slice(0, 12) }}…</a></div>
         </section>
       </section>
@@ -2578,7 +2573,7 @@ async function deleteFinancialArchive(): Promise<void> {
               <thead><tr><th>Date</th><th>Écriture</th><th>Postes</th><th>Écart net</th><th>Statut</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="item in workspace.exchange_revaluations" :key="item.id">
-                  <td>{{ item.date }}</td><td>{{ item.entry_number }}</td><td>{{ item.item_count }}</td>
+                  <td>{{ formatDate(item.date) }}</td><td>{{ item.entry_number }}</td><td>{{ item.item_count }}</td>
                   <td>{{ formatMoney(item.net_difference_cents) }}</td><td>{{ item.status }}</td>
                   <td><button v-if="item.status === 'comptabilisee'" class="button small danger" type="button" :disabled="!workspace.capabilities.validate" @click="reverseExchangeRevaluation(item.id)">Contre-passer</button></td>
                 </tr>
@@ -2589,7 +2584,7 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
         <section class="panel">
           <div class="section-heading"><h3>Périodes</h3><button class="button secondary" :disabled="!workspace.capabilities.export" @click="createArchive('cloture')">Archiver la clôture</button></div>
-          <div class="table-scroll"><table class="closure-table"><thead><tr><th>Période</th><th>Dates</th><th>Statut</th><th>Action</th></tr></thead><tbody><tr v-for="period in workspace.closing.periods" :key="period.id"><td><strong>{{ period.label }}</strong></td><td>{{ period.start_date }} – {{ period.end_date }}</td><td><span :class="['status-chip', period.status === 'ouverte' ? 'ok' : 'warning']">{{ periodStatusLabel(period.status) }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.setup || (period.status === 'ouverte' && !workspace.closing.can_close)" @click="togglePeriod(period)">{{ period.status === 'ouverte' ? 'Fermer' : 'Rouvrir' }}</button></td></tr></tbody></table></div>
+          <div class="table-scroll"><table class="closure-table"><thead><tr><th>Période</th><th>Dates</th><th>Statut</th><th>Action</th></tr></thead><tbody><tr v-for="period in workspace.closing.periods" :key="period.id"><td><strong>{{ period.label }}</strong></td><td>{{ formatDate(period.start_date) }} – {{ formatDate(period.end_date) }}</td><td><span :class="['status-chip', period.status === 'ouverte' ? 'ok' : 'warning']">{{ periodStatusLabel(period.status) }}</span></td><td><button class="button small" :disabled="!workspace.capabilities.setup || (period.status === 'ouverte' && !workspace.closing.can_close)" @click="togglePeriod(period)">{{ period.status === 'ouverte' ? 'Fermer' : 'Rouvrir' }}</button></td></tr></tbody></table></div>
         </section>
       </section>
 
@@ -2607,7 +2602,7 @@ async function deleteFinancialArchive(): Promise<void> {
         </section>
         <section v-if="workspace.closing.archives.length" class="panel">
           <h3>Archives financières vérifiables</h3>
-          <div class="archive-list"><a v-for="item in workspace.closing.archives" :key="item.id" class="archive-card" :href="`${runtimeConfig.apiBaseUrl}/accounting/archives/download?archive_id=${item.id}`"><strong>{{ item.type.replace('_', ' ') }} · {{ item.created_at }}</strong><small>{{ item.hash }}</small><small>Grand livre {{ item.ledger_hash }}</small></a></div>
+          <div class="archive-list"><a v-for="item in workspace.closing.archives" :key="item.id" class="archive-card" :href="`${runtimeConfig.apiBaseUrl}/accounting/archives/download?archive_id=${item.id}`"><strong>{{ item.type.replace('_', ' ') }} · {{ formatDateTime(item.created_at) }}</strong><small>{{ item.hash }}</small><small>Grand livre {{ item.ledger_hash }}</small></a></div>
         </section>
       </section>
 
@@ -2622,7 +2617,7 @@ async function deleteFinancialArchive(): Promise<void> {
 
     <ModalDialog
       ref="archiveViewerDialog"
-      :title="`Archive financière${archiveViewerItem ? ` · ${archiveViewerItem.start_date} – ${archiveViewerItem.end_date}` : ''}`"
+      :title="`Archive financière${archiveViewerItem ? ` · ${formatDate(archiveViewerItem.start_date)} – ${formatDate(archiveViewerItem.end_date)}` : ''}`"
       description="Photographie immuable des états au moment de l’archivage."
       wide
       :extra-wide="archiveReportSection === 'journal'"
@@ -2668,7 +2663,7 @@ async function deleteFinancialArchive(): Promise<void> {
 
         <section v-if="archiveReportSection === 'bilan'" class="financial-report-panel">
           <div class="financial-statement-heading">
-            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BILAN ARCHIVÉ AU {{ archiveViewerItem.end_date }} — {{ statementUnitLabel }}</strong>
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BILAN ARCHIVÉ AU {{ formatDate(archiveViewerItem.end_date) }} — {{ statementUnitLabel }}</strong>
           </div>
           <div class="table-scroll">
             <table class="financial-statement-table">
@@ -2693,7 +2688,7 @@ async function deleteFinancialArchive(): Promise<void> {
 
         <section v-else-if="archiveReportSection === 'resultat'" class="financial-report-panel">
           <div class="financial-statement-heading">
-            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — RÉSULTAT ARCHIVÉ DU {{ archiveViewerItem.start_date }} AU {{ archiveViewerItem.end_date }} — {{ statementUnitLabel }}</strong>
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — RÉSULTAT ARCHIVÉ DU {{ formatDate(archiveViewerItem.start_date) }} AU {{ formatDate(archiveViewerItem.end_date) }} — {{ statementUnitLabel }}</strong>
           </div>
           <div class="table-scroll">
             <table class="financial-statement-table">
@@ -2719,7 +2714,7 @@ async function deleteFinancialArchive(): Promise<void> {
 
         <section v-else-if="archiveReportSection === 'grand_livre'" class="financial-report-panel">
           <div class="financial-statement-heading">
-            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCES DE VÉRIFICATION ARCHIVÉES AU {{ archiveViewerItem.end_date }} — {{ currency }}</strong>
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — BALANCES DE VÉRIFICATION ARCHIVÉES AU {{ formatDate(archiveViewerItem.end_date) }} — {{ currency }}</strong>
           </div>
           <div class="table-scroll">
             <table class="financial-statement-table financial-ledger-table">
@@ -2740,7 +2735,7 @@ async function deleteFinancialArchive(): Promise<void> {
 
         <section v-else class="financial-report-panel">
           <div class="financial-statement-heading">
-            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — JOURNAL COMPLET ARCHIVÉ DU {{ archiveViewerItem.start_date }} AU {{ archiveViewerItem.end_date }} — {{ currency }}</strong>
+            <strong>{{ reportEntityName.toLocaleUpperCase('fr-CH') }} — JOURNAL COMPLET ARCHIVÉ DU {{ formatDate(archiveViewerItem.start_date) }} AU {{ formatDate(archiveViewerItem.end_date) }} — {{ currency }}</strong>
           </div>
           <template v-if="archivedJournal">
             <div class="metric-strip">
@@ -2764,7 +2759,7 @@ async function deleteFinancialArchive(): Promise<void> {
                 </thead>
                 <tbody>
                   <tr v-for="line in sortedArchivedJournalItems" :key="`archive-journal-${line.entry_id}-${line.line_order}`">
-                    <td>{{ line.date_comptable }}</td>
+                    <td>{{ formatDate(line.date_comptable) }}</td>
                     <td>{{ line.numero || `#${line.entry_id}` }}</td>
                     <td>
                       <button v-if="line.account_id" class="account-number-link" type="button" :title="`Ouvrir l’extrait ${line.account_label}`" @click="openAccountExtract(line.account_id)">{{ line.account_number }}</button>
@@ -2809,8 +2804,8 @@ async function deleteFinancialArchive(): Promise<void> {
       @confirm="deleteFinancialArchive"
     >
       <p v-if="archivePendingDeletion">
-        L’archive du {{ archivePendingDeletion.start_date }} au
-        {{ archivePendingDeletion.end_date }} sera supprimée. Le grand livre et
+        L’archive du {{ formatDate(archivePendingDeletion.start_date) }} au
+        {{ formatDate(archivePendingDeletion.end_date) }} sera supprimée. Le grand livre et
         les états comptables d’origine ne seront pas modifiés.
       </p>
     </ConfirmDialog>

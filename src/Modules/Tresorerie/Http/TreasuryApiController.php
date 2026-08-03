@@ -47,13 +47,37 @@ final class TreasuryApiController
             $organisationId,
             $dossierId
         ): array {
-            $data = $this->workspace->read($organisationId, $dossierId);
+            $canPayrollMatch = $this->has(
+                $userId,
+                $organisationId,
+                $dossierId,
+                'salaires.pay'
+            );
+            $data = $this->workspace->read(
+                $organisationId,
+                $dossierId,
+                $canPayrollMatch,
+                $canPayrollMatch && $this->has(
+                    $userId,
+                    $organisationId,
+                    $dossierId,
+                    'salaires.pii'
+                )
+            );
             $data['capabilities'] = [
                 'import' => $this->has($userId, $organisationId, $dossierId, 'tresorerie.import'),
                 'reconcile' => $this->has($userId, $organisationId, $dossierId, 'tresorerie.reconcile'),
                 'suggest' => $this->has($userId, $organisationId, $dossierId, 'compta.edit'),
                 'accept_suggestion' => $this->has($userId, $organisationId, $dossierId, 'compta.validate'),
-                'match' => $this->has($userId, $organisationId, $dossierId, 'facturation.pay'),
+                'match' => (bool) $data['sources']['billing']
+                    && $this->has(
+                        $userId,
+                        $organisationId,
+                        $dossierId,
+                        'facturation.pay'
+                    ),
+                'payroll_match' => (bool) $data['sources']['payroll']
+                    && $canPayrollMatch,
                 'prepare_payments' => $this->has($userId, $organisationId, $dossierId, 'paiements.prepare'),
                 'export_payments' => $this->has($userId, $organisationId, $dossierId, 'paiements.export'),
                 'confirm_payments' => $this->has($userId, $organisationId, $dossierId, 'paiements.confirm'),

@@ -5,6 +5,7 @@ namespace Compta\Modules\Tresorerie;
 
 use Compta\Modules\Compta\EntryService;
 use Compta\Modules\Facturation\PaymentService;
+use Compta\Modules\Salaires\PayrollPaymentService;
 use PDO;
 
 final class TreasuryWorkspaceService
@@ -13,12 +14,23 @@ final class TreasuryWorkspaceService
         private readonly PDO $pdo,
         private readonly PaymentService $payments,
         private readonly EntryService $entries,
+        private readonly ?PayrollPaymentService $payrollPayments = null,
     ) {
     }
 
     /** @return array<string,mixed> */
-    public function read(int $organisationId, int $dossierId): array
+    public function read(
+        int $organisationId,
+        int $dossierId,
+        bool $includePayroll = false,
+        bool $revealPayrollPii = false,
+    ): array
     {
+        $modules = $this->enabledModules($organisationId, $dossierId);
+        $billingEnabled = in_array('facturation', $modules, true);
+        $payrollEnabled = $includePayroll
+            && in_array('salaires', $modules, true)
+            && $this->payrollPayments !== null;
         $accounts = $this->query(
             'SELECT t.id, t.libelle AS label, t.type, t.iban, t.bic, t.monnaie AS currency,
                     t.compte_comptable_id AS ledger_account_id,
@@ -116,7 +128,7 @@ final class TreasuryWorkspaceService
              ORDER BY s.id DESC LIMIT 200',
             [$organisationId, $dossierId]
         );
-        $documents = $this->query(
+        $documents = $billingEnabled ? $this->query(
             "SELECT d.id, d.numero AS number, d.type, d.workflow, d.statut AS status,
                     d.contact_id, d.compte_collectif_id AS collective_account_id,
                     d.date_echeance AS due_date,
@@ -140,7 +152,7 @@ final class TreasuryWorkspaceService
                )
              ORDER BY d.date_echeance, d.id",
             [$organisationId, $dossierId]
-        );
+        ) : [];
         foreach ($documents as &$document) {
             $document['open_cents'] = max(
                 0,
@@ -182,7 +194,7 @@ final class TreasuryWorkspaceService
             );
         }
         unset($batch);
-        $payableDebts = $this->query(
+        $payableDebts = $billingEnabled ? $this->query(
             "SELECT d.id, d.numero AS number, d.numero_externe AS external_number,
                     d.contact_id, d.date_echeance AS due_date, d.monnaie AS currency,
                     abs(d.total_brut_centimes) - COALESCE((
@@ -201,13 +213,13 @@ final class TreasuryWorkspaceService
                AND collectif.type = 'passif'
              ORDER BY d.date_echeance, d.id",
             [$organisationId, $dossierId]
-        );
+        ) : [];
         $payableDebts = array_values(array_filter(
             $payableDebts,
             static fn (array $debt): bool => (int) $debt['open_cents'] > 0
         ));
         $catalog = $this->entries->entryCatalog($organisationId, $dossierId);
-        $catalog['contacts'] = $this->query(
+        $catalog['contacts'] = $billingEnabled ? $this->query(
             "SELECT c.id, COALESCE(NULLIF(c.raison_sociale, ''),
                     trim(c.prenom || ' ' || c.nom)) AS label,
                     c.raison_sociale AS company,
@@ -221,24 +233,114 @@ final class TreasuryWorkspaceService
              WHERE c.organisation_id = ? AND c.dossier_id = ? AND c.actif = 1
              GROUP BY c.id ORDER BY label",
             [$organisationId, $dossierId]
-        );
+        ) : [];
         $catalog['treasury_accounts'] = $accounts;
+        $payments = $this->payments->payments($organisationId, $dossierId);
+        foreach ($payments as &$payment) {
+            $payment['payment_key'] = 'billing:' . (int) $payment['id'];
+            $payment['_row_key'] = $payment['payment_key'];
+            $payment['source_type'] = 'billing';
+            $payment['source_id'] = (int) $payment['id'];
+        }
+        unset($payment);
+        $allocations = $this->payments->allocations($organisationId, $dossierId);
+        foreach ($allocations as &$allocation) {
+            $allocation['allocation_key'] = 'billing:' . (int) $allocation['id'];
+            $allocation['_row_key'] = $allocation['allocation_key'];
+            $allocation['source_type'] = 'billing';
+            $allocation['target_label'] = (string) $allocation['document_numero'];
+            $allocation['beneficiary_label'] = (string) $allocation['contact'];
+        }
+        unset($allocation);
+        $salaryLiabilities = [];
+        if ($payrollEnabled) {
+            $salaryPayments = $this->payrollPayments->payments(
+                $organisationId,
+                $dossierId,
+                $revealPayrollPii
+            );
+            foreach ($salaryPayments as $salaryPayment) {
+                $payments[] = [
+                    ...$salaryPayment,
+                    'payment_key' => 'payroll:' . (int) $salaryPayment['id'],
+                    '_row_key' => 'payroll:' . (int) $salaryPayment['id'],
+                    'source_type' => 'payroll',
+                    'source_id' => (int) $salaryPayment['id'],
+                    'contact_id' => null,
+                    'contact' => (string) $salaryPayment['beneficiaire_libelle'],
+                    'sens' => 'decaissement',
+                    'origine' => 'salaires',
+                    'matching_eligible' => $salaryPayment['statut'] === 'valide',
+                    'ligne_bancaire_id' => null,
+                    'compte_collectif_numero' => '',
+                    'compte_collectif_libelle' => '',
+                ];
+            }
+            $salaryLiabilities = $this->payrollPayments->liabilities(
+                $organisationId,
+                $dossierId,
+                $revealPayrollPii
+            );
+            $salaryLiabilities = array_values(array_filter(
+                $salaryLiabilities,
+                static fn (array $liability): bool =>
+                    (int) $liability['solde_centimes'] > 0
+            ));
+            foreach ($salaryLiabilities as &$liability) {
+                $liability['liability_key'] = 'payroll:' . (int) $liability['id'];
+                $liability['currency'] = $this->dossierCurrency($dossierId);
+                $liability['open_cents'] = (int) $liability['solde_centimes'];
+                $liability['target_label'] = sprintf(
+                    '%s · %s',
+                    (string) $liability['beneficiaire_libelle'],
+                    (string) $liability['periode_libelle']
+                );
+            }
+            unset($liability);
+            foreach ($this->payrollPayments->allocations(
+                $organisationId,
+                $dossierId,
+                $revealPayrollPii
+            ) as $salaryAllocation) {
+                $allocations[] = [
+                    ...$salaryAllocation,
+                    'allocation_key' => 'payroll:' . (int) $salaryAllocation['id'],
+                    '_row_key' => 'payroll:' . (int) $salaryAllocation['id'],
+                    'source_type' => 'payroll',
+                    'target_label' => (string) $salaryAllocation['dette_libelle'],
+                    'beneficiary_label' => (string) $salaryAllocation['beneficiaire_libelle'],
+                ];
+            }
+        }
+        usort($payments, static fn (array $left, array $right): int =>
+            [(string) $right['date_paiement'], (int) $right['id']]
+            <=> [(string) $left['date_paiement'], (int) $left['id']]
+        );
         return [
+            'sources' => [
+                'billing' => $billingEnabled,
+                'payroll' => $payrollEnabled,
+            ],
             'treasury_accounts' => $accounts,
             'imports' => $imports,
             'bank_lines' => $bankLines,
             'accounting_lines' => $accountingLines,
             'reconciliations' => $reconciliations,
             'suggestions' => $suggestions,
-            'payments' => $this->payments->payments($organisationId, $dossierId),
-            'allocations' => $this->payments->allocations($organisationId, $dossierId),
+            'payments' => $payments,
+            'allocations' => $allocations,
             'open_documents' => $documents,
+            'open_salary_liabilities' => $salaryLiabilities,
             'payable_debts' => $payableDebts,
             'outgoing_batches' => $batches,
             'catalog' => $catalog,
             'definitions' => [
                 'banking' => 'Une ligne bancaire importée reste distincte du grand livre.',
-                'matching' => 'Le lettrage répartit un paiement sur des documents ouverts.',
+                'matching' => $billingEnabled && $payrollEnabled
+                    ? 'Le lettrage répartit un paiement sur des documents ou des dettes salariales ouverts.'
+                    : ($payrollEnabled
+                        ? 'Le lettrage répartit un paiement sur des dettes salariales ouvertes.'
+                        : 'Le lettrage répartit un paiement sur des documents ouverts.'),
                 'payment_accounting' => 'Le journal crée un paiement déjà comptabilisé uniquement entre un compte de trésorerie et un collectif clients ou fournisseurs. Les comptes banque, poste, caisse et carte sont exclus des comptes à lettrer.',
                 'pain001' => 'Un fichier exporté est préparé pour téléchargement, jamais déclaré transmis.',
             ],
@@ -251,5 +353,25 @@ final class TreasuryWorkspaceService
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($parameters);
         return $stmt->fetchAll();
+    }
+
+    /** @return list<string> */
+    private function enabledModules(int $organisationId, int $dossierId): array
+    {
+        return array_map(
+            'strval',
+            array_column($this->query(
+                'SELECT module_code FROM modules_dossier
+                 WHERE organisation_id = ? AND dossier_id = ? AND actif = 1',
+                [$organisationId, $dossierId]
+            ), 'module_code')
+        );
+    }
+
+    private function dossierCurrency(int $dossierId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT monnaie FROM dossiers WHERE id = ?');
+        $stmt->execute([$dossierId]);
+        return (string) ($stmt->fetchColumn() ?: 'CHF');
     }
 }

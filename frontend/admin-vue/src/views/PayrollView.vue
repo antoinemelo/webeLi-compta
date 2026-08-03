@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import PayrollSlipPreview from '@/components/payroll/PayrollSlipPreview.vue';
 import AccountCombobox from '@/components/ui/AccountCombobox.vue';
+import ActionMenu from '@/components/ui/ActionMenu.vue';
 import CompactTabs from '@/components/ui/CompactTabs.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import ErrorSummary from '@/components/ui/ErrorSummary.vue';
@@ -13,6 +14,7 @@ import { useToastFeedback } from '@/composables/toastFeedback';
 import { subNavigation } from '@/router/navigation';
 import { useContextStore } from '@/stores/context';
 import { usePayrollStore } from '@/stores/payroll';
+import { formatDate } from '@/utils/dateFormat';
 
 const route = useRoute();
 const context = useContextStore();
@@ -81,13 +83,29 @@ const contractHistoryEmployeeId = ref(0);
 const paymentsDialog = ref<InstanceType<typeof ModalDialog> | null>(null);
 const posting = reactive({ exercise_id: 0, journal_id: 0, date: today });
 const payment = reactive({
-  beneficiary_type: 'employe', employee_id: 0, date: today,
+  liability_id: 0, date: today,
   amount: '', account_id: 0, reference: ''
 });
 const allocation = reactive({ payment_id: 0, liability_id: 0, amount: '' });
-const ocasVerifiedOn = ref(today);
-const ocasSourceCsv = ref('');
-const ocasSourceName = ref('');
+const openPayrollLiabilities = computed(() => (
+  workspace.value?.liabilities.filter((row) => n(row, 'solde_centimes') > 0) || []
+));
+const selectedReferenceLiability = computed(() =>
+  openPayrollLiabilities.value.find((row) => n(row, 'id') === payment.liability_id) || null
+);
+const selectedPayrollPayment = computed(() =>
+  workspace.value?.payments.find((row) => n(row, 'id') === allocation.payment_id) || null
+);
+const compatiblePayrollLiabilities = computed(() => {
+  const selected = selectedPayrollPayment.value;
+  if (!selected) return [];
+  const code = s(selected, 'beneficiaire_code');
+  return openPayrollLiabilities.value.filter((row) =>
+    code === 'organisme'
+      ? s(row, 'type') !== 'net'
+      : s(row, 'beneficiaire_code') === code
+  );
+});
 const activeEmployees = computed(() => (
   workspace.value?.employees.filter((row) =>
     n(row, 'actif') === 1 && n(row, 'profil_incomplet') !== 1
@@ -174,6 +192,34 @@ function milli(value: string): number {
 function employeeName(id: number): string {
   const item = workspace.value?.employees.find((row) => n(row, 'id') === id);
   return item ? `${s(item, 'prenom')} ${s(item, 'nom')}` : `#${id}`;
+}
+function employeeInitials(row: Record<string, unknown>): string {
+  return `${s(row, 'prenom').charAt(0)}${s(row, 'nom').charAt(0)}`.toUpperCase() || '—';
+}
+function procedureLabel(value: string): string {
+  return ({
+    ordinaire: 'Ordinaire',
+    simplifiee: 'Simplifiée',
+    ordinaire_impot_source: 'Impôt à la source'
+  } as Record<string, string>)[value] || value;
+}
+function contractTypeLabel(value: string): string {
+  return value === 'mensuel' ? 'Mensuel' : value === 'horaire' ? 'Horaire' : value;
+}
+function payrollStatusLabel(value: string): string {
+  return ({
+    brouillon: 'Brouillon',
+    validee: 'Validée',
+    comptabilisee: 'Comptabilisée',
+    payee: 'Payée',
+    annulee: 'Annulée'
+  } as Record<string, string>)[value] || value;
+}
+function beneficiaryLabel(value: string): string {
+  return value === 'employe' ? 'Employé' : value === 'organisme' ? 'Organisme' : value;
+}
+function countLabel(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 function decimal(centsValue: number): string {
   return (centsValue / 100).toFixed(2);
@@ -267,7 +313,6 @@ async function reload(payrollId?: number): Promise<void> {
   if (!payment.account_id) payment.account_id = n(workspace.value.catalog.treasury_accounts[0] || {}, 'id');
   if (!draft.employee_id) draft.employee_id = n(activeEmployees.value[0] || {}, 'id');
   if (!contract.employee_id) contract.employee_id = draft.employee_id;
-  if (!payment.employee_id) payment.employee_id = draft.employee_id;
   if (!draft.id && draftElements.value.length === 0) resetDraftElements();
 }
 async function mutate(
@@ -375,9 +420,6 @@ async function deleteEmployee(row: Record<string, unknown>): Promise<void> {
     if (draft.employee_id === n(row, 'id')) {
       draft.employee_id = n(activeEmployees.value[0] || {}, 'id');
     }
-    if (payment.employee_id === n(row, 'id')) {
-      payment.employee_id = n(workspace.value?.employees[0] || {}, 'id');
-    }
   }
 }
 function resetContractEditor(): void {
@@ -464,7 +506,7 @@ async function saveContract(): Promise<void> {
 async function deleteContract(row: Record<string, unknown>): Promise<void> {
   if (!window.confirm(
     `Supprimer le contrat de ${employeeName(n(row, 'employe_id'))} `
-    + `débutant le ${s(row, 'date_debut')} ?`
+    + `débutant le ${formatDate(s(row, 'date_debut'))} ?`
   )) return;
   const deleted = await mutate('/salaires/contrats/supprimer', {
     id: n(row, 'id'),
@@ -558,14 +600,16 @@ async function createPayment(): Promise<void> {
   );
   if (!treasuryAccount) return;
   const saved = await mutate('/salaires/paiements', {
-    beneficiary_type: payment.beneficiary_type,
-    employee_id: payment.beneficiary_type === 'employe' ? payment.employee_id : null,
+    beneficiary_type: 'organisme',
+    liability_id: payment.liability_id,
+    employee_id: null,
     date: payment.date, amount_cents: cents(payment.amount),
     account_id: n(treasuryAccount, 'ledger_account_id'),
     treasury_account_id: payment.account_id,
     reference: payment.reference
   }, 'Paiement salarial saisi.');
   if (saved) {
+    payment.liability_id = 0;
     payment.amount = '';
     payment.reference = '';
   }
@@ -581,23 +625,11 @@ async function postPayment(row: Record<string, unknown>): Promise<void> {
     id: n(row, 'id'), version: 0, ...posting
   }, 'Paiement comptabilisé.');
 }
-async function confirmOcas(): Promise<void> {
-  if (!store.ocas) return;
-  await mutate('/salaires/taux-ocas/confirmer', {
-    year: store.ocas.year, fingerprint: store.ocas.fingerprint,
-    verified_on: ocasVerifiedOn.value,
-    source_csv: ocasSourceCsv.value
-  }, 'Taux OCAS contrôlés et importés.');
-}
-async function readOcasSource(event: Event): Promise<void> {
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-  ocasSourceCsv.value = await file.text();
-  ocasSourceName.value = file.name;
-  store.ocas = null;
-}
-async function previewOcas(): Promise<void> {
-  await store.previewOcas(year.value, ocasSourceCsv.value);
+async function cancelPayment(row: Record<string, unknown>): Promise<void> {
+  if (!window.confirm('Annuler ce paiement salarial non alloué ?')) return;
+  await mutate('/salaires/paiements/annuler', {
+    id: n(row, 'id'), version: 0
+  }, 'Paiement salarial annulé.');
 }
 async function certificate(action: 'preparer' | 'controler', employeeId: number): Promise<void> {
   await mutate(`/salaires/certificats/${action}`, {
@@ -612,6 +644,24 @@ watch(() => context.selection?.dossier.id, () => reload());
 watch(year, (value) => {
   if (!draft.id) draft.year = value;
   reload();
+});
+watch(() => payment.liability_id, () => {
+  const liability = selectedReferenceLiability.value;
+  payment.amount = liability ? decimal(n(liability, 'solde_centimes')) : '';
+});
+watch(() => allocation.payment_id, () => {
+  allocation.liability_id = 0;
+  allocation.amount = '';
+});
+watch(() => allocation.liability_id, () => {
+  const liability = compatiblePayrollLiabilities.value.find(
+    (row) => n(row, 'id') === allocation.liability_id
+  );
+  if (!liability || !selectedPayrollPayment.value) return;
+  allocation.amount = decimal(Math.min(
+    n(liability, 'solde_centimes'),
+    n(selectedPayrollPayment.value, 'non_alloue_centimes')
+  ));
 });
 watch(
   () => [draft.employee_id, draft.year, draft.month],
@@ -682,29 +732,62 @@ onMounted(() => reload());
         description="Identité, coordonnées et paramètres salariaux de la personne."
         wide
       >
-        <form class="form-grid three" @submit.prevent="saveEmployee">
-          <label>Prénom<input v-model="employee.first_name" required></label>
-          <label>Nom<input v-model="employee.last_name" required></label>
-          <label>AVS<input v-model="employee.avs" placeholder="756.1234.5678.90" required></label>
-          <label>E-mail<input v-model="employee.email" type="email"></label>
-          <label>Date de naissance<input v-model="employee.birth_date" type="date"></label>
-          <label>Adresse<input v-model="employee.address"></label>
-          <label>NPA<input v-model="employee.postal_code"></label>
-          <label>Localité<input v-model="employee.city"></label>
-          <label>Procédure<select v-model="employee.procedure"><option value="ordinaire">Ordinaire</option><option value="simplifiee">Simplifiée</option><option value="ordinaire_impot_source">Impôt à la source</option></select></label>
-          <label>Vacances (%)<input v-model="employee.vacation" inputmode="decimal"></label>
-          <label>Impôt source (%)<input v-model="employee.sourceTax" inputmode="decimal"></label>
-          <label>LPP employé particulière (%)
-            <input v-model="employee.lpp" inputmode="decimal" placeholder="Taux annuel par défaut">
-          </label>
-          <label>LPP employeur particulière (%)
-            <input v-model="employee.employerLpp" inputmode="decimal" placeholder="Taux annuel par défaut">
-          </label>
-          <label class="checkbox-field">
-            <input v-model="employee.active" type="checkbox">
-            Employé actif
-          </label>
-          <div class="button-row">
+        <form class="employee-editor" @submit.prevent="saveEmployee">
+          <section class="employee-editor-section" aria-labelledby="employee-identity-title">
+            <div class="employee-editor-heading">
+              <span class="employee-editor-icon" aria-hidden="true">ID</span>
+              <div>
+                <h3 id="employee-identity-title">Identité</h3>
+                <p>Données personnelles nécessaires à la fiche de salaire.</p>
+              </div>
+            </div>
+            <div class="form-grid three">
+              <label>Prénom<input v-model="employee.first_name" autocomplete="given-name" required></label>
+              <label>Nom<input v-model="employee.last_name" autocomplete="family-name" required></label>
+              <label>AVS<input v-model="employee.avs" placeholder="756.1234.5678.90" required></label>
+              <label>E-mail<input v-model="employee.email" type="email" autocomplete="email"></label>
+              <label>Date de naissance<input v-model="employee.birth_date" type="date"></label>
+            </div>
+          </section>
+          <section class="employee-editor-section" aria-labelledby="employee-address-title">
+            <div class="employee-editor-heading">
+              <span class="employee-editor-icon" aria-hidden="true">⌂</span>
+              <div>
+                <h3 id="employee-address-title">Adresse</h3>
+                <p>Coordonnées reprises dans les documents salariaux.</p>
+              </div>
+            </div>
+            <div class="form-grid employee-address-grid">
+              <label class="employee-address-line">Adresse<input v-model="employee.address" autocomplete="street-address"></label>
+              <label>NPA<input v-model="employee.postal_code" autocomplete="postal-code"></label>
+              <label>Localité<input v-model="employee.city" autocomplete="address-level2"></label>
+            </div>
+          </section>
+          <section class="employee-editor-section" aria-labelledby="employee-payroll-title">
+            <div class="employee-editor-heading">
+              <span class="employee-editor-icon" aria-hidden="true">%</span>
+              <div>
+                <h3 id="employee-payroll-title">Paramètres salariaux</h3>
+                <p>Les taux particuliers remplacent les valeurs annuelles lorsqu’ils sont renseignés.</p>
+              </div>
+            </div>
+            <div class="form-grid three">
+              <label>Procédure<select v-model="employee.procedure"><option value="ordinaire">Ordinaire</option><option value="simplifiee">Simplifiée</option><option value="ordinaire_impot_source">Impôt à la source</option></select></label>
+              <label>Vacances (%)<input v-model="employee.vacation" inputmode="decimal"></label>
+              <label>Impôt source (%)<input v-model="employee.sourceTax" inputmode="decimal"></label>
+              <label>LPP employé particulière (%)
+                <input v-model="employee.lpp" inputmode="decimal" placeholder="Taux annuel par défaut">
+              </label>
+              <label>LPP employeur particulière (%)
+                <input v-model="employee.employerLpp" inputmode="decimal" placeholder="Taux annuel par défaut">
+              </label>
+              <label class="employee-active-toggle">
+                <input v-model="employee.active" type="checkbox">
+                <span><strong>Employé actif</strong><small>Disponible pour les nouveaux contrats et calculs</small></span>
+              </label>
+            </div>
+          </section>
+          <div class="button-row employee-editor-actions">
             <button
               v-if="employee.id"
               type="button"
@@ -763,29 +846,36 @@ onMounted(() => reload());
           <h2>Employés</h2>
           <button class="button primary" type="button" :disabled="!workspace.capabilities.manage" @click="createEmployee">Nouvel employé</button>
         </div>
-        <div class="table-scroll">
-          <table>
+        <div class="table-scroll payroll-table-shell">
+          <table class="data-table payroll-table payroll-employee-table">
             <thead><tr><th>Employé</th><th>AVS</th><th>E-mail</th><th>Procédure</th><th>État</th><th>Actions</th></tr></thead>
             <tbody>
               <tr v-for="row in workspace.employees" :key="n(row,'id')">
-                <td>{{ employeeName(n(row,'id')) }}</td>
-                <td>{{ n(row,'profil_incomplet') === 1 ? 'À compléter' : s(row,'numero_avs') }}</td>
-                <td>{{ s(row,'email') || '—' }}</td>
-                <td>{{ s(row,'procedure') }}</td>
+                <td>
+                  <span class="payroll-person-cell">
+                    <span class="payroll-person-avatar" aria-hidden="true">{{ employeeInitials(row) }}</span>
+                    <span><strong>{{ employeeName(n(row,'id')) }}</strong><small>{{ n(row,'profil_incomplet') === 1 ? 'Profil à compléter' : 'Dossier salarial' }}</small></span>
+                  </span>
+                </td>
+                <td class="payroll-identifier">{{ n(row,'profil_incomplet') === 1 ? 'À compléter' : s(row,'numero_avs') }}</td>
+                <td><a v-if="s(row,'email')" :href="`mailto:${s(row,'email')}`">{{ s(row,'email') }}</a><span v-else class="muted">—</span></td>
+                <td>{{ procedureLabel(s(row,'procedure')) }}</td>
                 <td>
                   <span
                     :class="['status-chip', n(row,'profil_incomplet') === 1 || n(row,'actif') !== 1 ? 'warning' : 'ok']"
                   >{{ n(row,'profil_incomplet') === 1 ? 'À compléter' : (n(row,'actif') === 1 ? 'Actif' : 'Inactif') }}</span>
                 </td>
-                <td class="button-row">
-                  <button class="button secondary small" type="button" @click="openContractHistory(n(row,'id'))">Contrats</button>
-                  <button class="button small" :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving" @click="editEmployee(row)">Modifier</button>
-                  <button
-                    class="button danger small"
-                    :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving || n(row,'contact_id') > 0"
-                    :title="n(row,'contact_id') > 0 ? 'Retirez le rôle employé depuis Configuration → Débiteurs et créanciers.' : ''"
-                    @click="deleteEmployee(row)"
-                  >Supprimer</button>
+                <td class="payroll-actions-cell">
+                  <ActionMenu :label="`Actions pour ${employeeName(n(row,'id'))}`">
+                    <button type="button" @click="openContractHistory(n(row,'id'))">Historique des contrats</button>
+                    <button :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving" @click="editEmployee(row)">Modifier</button>
+                    <button
+                      class="danger"
+                      :disabled="!workspace.capabilities.manage || !workspace.capabilities.pii || store.saving || n(row,'contact_id') > 0"
+                      :title="n(row,'contact_id') > 0 ? 'Retirez le rôle employé depuis Configuration → Débiteurs et créanciers.' : ''"
+                      @click="deleteEmployee(row)"
+                    >Supprimer</button>
+                  </ActionMenu>
                 </td>
               </tr>
             </tbody>
@@ -803,20 +893,22 @@ onMounted(() => reload());
           <button class="button primary" type="button" :disabled="!workspace.capabilities.manage" @click="createContractForEmployee(contractHistoryEmployeeId)">Nouveau contrat</button>
         </div>
         <p>Les contrats utilisés par une fiche restent protégés ; ils peuvent être désactivés mais pas supprimés.</p>
-        <div class="table-scroll">
-          <table>
+        <div class="table-scroll payroll-table-shell">
+          <table class="data-table payroll-table payroll-contract-table">
             <thead><tr><th>Type</th><th>Début</th><th>Fin</th><th>Valeur</th><th>Activité</th><th>État</th><th>Actions</th></tr></thead>
             <tbody>
               <tr v-for="row in contractHistory" :key="n(row,'id')">
-                <td>{{ s(row,'type') }}</td>
-                <td>{{ s(row,'date_debut') }}</td>
-                <td>{{ s(row,'date_fin') || 'Sans fin' }}</td>
-                <td>{{ money(n(row, s(row,'type') === 'mensuel' ? 'salaire_mensuel_centimes' : 'taux_horaire_centimes')) }}</td>
-                <td>{{ percentage(n(row,'taux_activite_ppm')) }} %</td>
+                <td><strong>{{ contractTypeLabel(s(row,'type')) }}</strong><small>{{ s(row,'source') }}</small></td>
+                <td class="payroll-date">{{ formatDate(s(row,'date_debut')) }}</td>
+                <td class="payroll-date">{{ formatDate(s(row,'date_fin'), 'Sans fin') }}</td>
+                <td class="amount"><strong>{{ money(n(row, s(row,'type') === 'mensuel' ? 'salaire_mensuel_centimes' : 'taux_horaire_centimes')) }}</strong><small>{{ s(row,'type') === 'mensuel' ? 'par mois' : 'par heure' }}</small></td>
+                <td class="amount">{{ percentage(n(row,'taux_activite_ppm')) }} %</td>
                 <td><span :class="['status-chip', n(row,'actif') === 1 ? 'ok' : 'warning']">{{ n(row,'actif') === 1 ? 'Actif' : 'Inactif' }}</span></td>
-                <td class="button-row">
-                  <button class="button small" :disabled="!workspace.capabilities.manage || store.saving" @click="editContract(row)">Modifier</button>
-                  <button class="button danger small" :disabled="!workspace.capabilities.manage || store.saving" @click="deleteContract(row)">Supprimer</button>
+                <td class="payroll-actions-cell">
+                  <ActionMenu :label="`Actions pour le contrat du ${formatDate(s(row,'date_debut'))}`">
+                    <button :disabled="!workspace.capabilities.manage || store.saving" @click="editContract(row)">Modifier</button>
+                    <button class="danger" :disabled="!workspace.capabilities.manage || store.saving" @click="deleteContract(row)">Supprimer</button>
+                  </ActionMenu>
                 </td>
               </tr>
               <tr v-if="!contractHistory.length"><td colspan="7">Aucun contrat pour cet employé.</td></tr>
@@ -883,7 +975,7 @@ onMounted(() => reload());
               </div>
               <div>
                 <small>Validité</small>
-                <strong>{{ s(selectedContract,'date_debut') }} – {{ s(selectedContract,'date_fin') || 'sans fin' }}</strong>
+                <strong>{{ formatDate(s(selectedContract,'date_debut')) }} – {{ formatDate(s(selectedContract,'date_fin'), 'sans fin') }}</strong>
               </div>
             </div>
             <p v-else class="notice warning" role="alert">
@@ -984,45 +1076,26 @@ onMounted(() => reload());
             <p class="eyebrow">Fiches de travail</p>
             <h2>Brouillons et calculs {{ year }}</h2>
           </div>
-          <span class="status-chip">{{ periodPayrolls.length }} fiche(s)</span>
+          <span class="status-chip">{{ countLabel(periodPayrolls.length, 'fiche', 'fiches') }}</span>
         </div>
-        <div class="table-scroll">
-          <table>
+        <div class="table-scroll payroll-table-shell">
+          <table class="data-table payroll-table payroll-calculation-table">
             <thead><tr><th>Période</th><th>Employé</th><th>Base et variables</th><th>Brut</th><th>Retenues</th><th>Net</th><th>Statut</th><th>Actions</th></tr></thead>
             <tbody>
               <tr v-for="row in periodPayrolls" :key="n(row,'id')">
-                <td>{{ String(n(row,'mois')).padStart(2,'0') }}/{{ n(row,'annee') }}</td>
-                <td>{{ employeeName(n(row,'employe_id')) }}</td>
-                <td>{{ draftVariables(row) }}</td>
-                <td>{{ money(n(row,'brut_centimes')) }}</td>
-                <td>{{ money(n(row,'total_deductions_centimes')) }}</td>
-                <td><strong>{{ money(n(row,'net_centimes')) }}</strong></td>
-                <td><span class="status-chip">{{ s(row,'statut') }}</span></td>
-                <td class="button-row">
-                  <button
-                    class="button small"
-                    :disabled="store.loading || store.saving"
-                    @click="openPayrollPreview(row)"
-                  >
-                    Aperçu
-                  </button>
-                  <button
-                    v-if="s(row,'statut') === 'brouillon'"
-                    class="button small"
-                    :disabled="store.saving"
-                    @click="editDraft(row)"
-                  >
-                    Modifier
-                  </button>
-                  <button
-                    v-if="s(row,'statut') === 'brouillon'"
-                    class="button danger small"
-                    :disabled="store.saving"
-                    @click="deleteDraft(row)"
-                  >
-                    Supprimer
-                  </button>
-                  <span v-else>Fiche figée</span>
+                <td><span class="payroll-period">{{ String(n(row,'mois')).padStart(2,'0') }}<small>{{ n(row,'annee') }}</small></span></td>
+                <td><strong>{{ employeeName(n(row,'employe_id')) }}</strong></td>
+                <td><span class="payroll-variable-summary">{{ draftVariables(row) }}</span></td>
+                <td class="amount">{{ money(n(row,'brut_centimes')) }}</td>
+                <td class="amount">{{ money(n(row,'total_deductions_centimes')) }}</td>
+                <td class="amount payroll-net-amount"><strong>{{ money(n(row,'net_centimes')) }}</strong></td>
+                <td><span :class="['status-chip', s(row,'statut') === 'brouillon' ? 'warning' : 'ok']">{{ payrollStatusLabel(s(row,'statut')) }}</span></td>
+                <td class="payroll-actions-cell">
+                  <ActionMenu :label="`Actions pour la fiche ${String(n(row,'mois')).padStart(2,'0')}/${n(row,'annee')}`">
+                    <button :disabled="store.loading || store.saving" @click="openPayrollPreview(row)">Aperçu</button>
+                    <button v-if="s(row,'statut') === 'brouillon'" :disabled="store.saving" @click="editDraft(row)">Modifier</button>
+                    <button v-if="s(row,'statut') === 'brouillon'" class="danger" :disabled="store.saving" @click="deleteDraft(row)">Supprimer</button>
+                  </ActionMenu>
                 </td>
               </tr>
               <tr v-if="!periodPayrolls.length">
@@ -1042,28 +1115,27 @@ onMounted(() => reload());
           <button class="button primary" type="button" @click="paymentsDialog?.open()">Paiements et lettrage</button>
         </div>
         <p>Un brouillon doit être contrôlé dans son aperçu détaillé avant sa validation.</p>
-        <div class="table-scroll">
-          <table>
+        <div class="table-scroll payroll-table-shell">
+          <table class="data-table payroll-table payroll-slips-table">
             <thead><tr><th>Période</th><th>Employé</th><th>Net</th><th>Dette ouverte</th><th>Statut</th><th>Actions</th></tr></thead>
             <tbody>
               <tr v-for="row in workspace.payrolls" :key="n(row,'id')">
-                <td>{{ String(n(row,'mois')).padStart(2,'0') }}/{{ n(row,'annee') }}</td>
-                <td>{{ employeeName(n(row,'employe_id')) }}</td>
-                <td>{{ money(n(row,'net_centimes')) }}</td>
-                <td>{{ money(n(row,'solde_dettes_centimes')) }}</td>
-                <td><span class="status-chip">{{ s(row,'statut') }}</span></td>
-                <td class="button-row">
-                  <button
-                    class="button small"
-                    :disabled="store.loading || store.saving"
-                    @click="openPayrollPreview(row)"
-                  >
-                    {{ s(row,'statut') === 'brouillon' ? 'Voir et valider' : 'Voir' }}
-                  </button>
-                  <button v-if="s(row,'statut') === 'validee'" class="button small" :disabled="!workspace.capabilities.post || store.saving" @click="postPayroll(row)">Comptabiliser</button>
-                  <button v-if="['validee','comptabilisee'].includes(s(row,'statut'))" class="button danger small" :disabled="!workspace.capabilities.post || store.saving" @click="cancelPayroll(row)">Contre-passer</button>
+                <td><span class="payroll-period">{{ String(n(row,'mois')).padStart(2,'0') }}<small>{{ n(row,'annee') }}</small></span></td>
+                <td><strong>{{ employeeName(n(row,'employe_id')) }}</strong><small>Fiche #{{ n(row,'id') }}</small></td>
+                <td class="amount payroll-net-amount"><strong>{{ money(n(row,'net_centimes')) }}</strong></td>
+                <td class="amount"><span :class="['payroll-open-balance', { settled: n(row,'solde_dettes_centimes') === 0 }]">{{ money(n(row,'solde_dettes_centimes')) }}</span></td>
+                <td><span :class="['status-chip', s(row,'statut') === 'brouillon' ? 'warning' : 'ok']">{{ payrollStatusLabel(s(row,'statut')) }}</span></td>
+                <td class="payroll-actions-cell">
+                  <ActionMenu :label="`Actions pour la fiche ${String(n(row,'mois')).padStart(2,'0')}/${n(row,'annee')}`">
+                    <button :disabled="store.loading || store.saving" @click="openPayrollPreview(row)">
+                      {{ s(row,'statut') === 'brouillon' ? 'Voir et valider' : 'Voir la fiche' }}
+                    </button>
+                    <button v-if="s(row,'statut') === 'validee'" :disabled="!workspace.capabilities.post || store.saving" @click="postPayroll(row)">Comptabiliser</button>
+                    <button v-if="['validee','comptabilisee'].includes(s(row,'statut'))" class="danger" :disabled="!workspace.capabilities.post || store.saving" @click="cancelPayroll(row)">Contre-passer</button>
+                  </ActionMenu>
                 </td>
               </tr>
+              <tr v-if="!workspace.payrolls.length"><td colspan="6">Aucune fiche de salaire.</td></tr>
             </tbody>
           </table>
         </div>
@@ -1077,62 +1149,87 @@ onMounted(() => reload());
         <div class="payroll-payment-grid">
           <form class="payroll-payment-step" @submit.prevent="createPayment">
             <header><span>1</span><div><h3>Saisir le paiement</h3><p>Enregistrez le mouvement bancaire ou de caisse.</p></div></header>
-            <label>Bénéficiaire<select v-model="payment.beneficiary_type"><option value="employe">Employé</option><option value="organisme">Organisme</option></select></label>
-            <label v-if="payment.beneficiary_type === 'employe'">Employé<select v-model.number="payment.employee_id"><option v-for="row in workspace.employees" :key="n(row,'id')" :value="n(row,'id')">{{ employeeName(n(row,'id')) }}</option></select></label>
+            <label>Dette de référence
+              <select v-model.number="payment.liability_id" required>
+                <option :value="0" disabled>Sélectionner la dette réglée…</option>
+                <option v-for="row in openPayrollLiabilities" :key="n(row,'id')" :value="n(row,'id')">
+                  {{ s(row,'beneficiaire_libelle') }} · {{ s(row,'periode_libelle') }} · {{ money(n(row,'solde_centimes')) }}
+                </option>
+              </select>
+            </label>
+            <p v-if="selectedReferenceLiability" class="payroll-payment-beneficiary">
+              Bénéficiaire déterminé : <strong>{{ s(selectedReferenceLiability,'beneficiaire_libelle') }}</strong>
+            </p>
             <label>Date<input v-model="payment.date" type="date" required></label>
             <label>Montant<input v-model="payment.amount" inputmode="decimal" required></label>
             <label>Compte de trésorerie<AccountCombobox v-model="payment.account_id" :options="workspace.catalog.treasury_accounts" label-key="libelle" required /></label>
             <label>Référence<input v-model="payment.reference" placeholder="Référence facultative"></label>
-            <button class="button primary" :disabled="store.saving">Saisir le paiement</button>
+            <button class="button primary" :disabled="store.saving || !payment.liability_id">Saisir le paiement</button>
           </form>
           <form class="payroll-payment-step" @submit.prevent="allocatePayment">
             <header><span>2</span><div><h3>Allouer à une dette</h3><p>Choisissez le paiement disponible et la dette à régler.</p></div></header>
-            <label>Paiement disponible<select v-model.number="allocation.payment_id" required><option :value="0" disabled>Sélectionner…</option><option v-for="row in workspace.payments.filter((item) => n(item,'non_alloue_centimes') > 0)" :key="n(row,'id')" :value="n(row,'id')">#{{ n(row,'id') }} · {{ money(n(row,'non_alloue_centimes')) }}</option></select></label>
-            <label>Dette ouverte<select v-model.number="allocation.liability_id" required><option :value="0" disabled>Sélectionner…</option><option v-for="row in workspace.liabilities.filter((item) => n(item,'solde_centimes') > 0)" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'type') }} · {{ employeeName(n(row,'employe_id')) }} · {{ money(n(row,'solde_centimes')) }}</option></select></label>
+            <label>Paiement disponible<select v-model.number="allocation.payment_id" required><option :value="0" disabled>Sélectionner…</option><option v-for="row in workspace.payments.filter((item) => n(item,'non_alloue_centimes') > 0 && s(item,'statut') === 'valide')" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'beneficiaire_libelle') }} · {{ formatDate(s(row,'date_paiement')) }} · {{ money(n(row,'non_alloue_centimes')) }}</option></select></label>
+            <label>Dette ouverte<select v-model.number="allocation.liability_id" :disabled="!selectedPayrollPayment" required><option :value="0" disabled>{{ selectedPayrollPayment ? 'Sélectionner…' : 'Choisir d’abord un paiement' }}</option><option v-for="row in compatiblePayrollLiabilities" :key="n(row,'id')" :value="n(row,'id')">{{ s(row,'beneficiaire_libelle') }} · {{ s(row,'periode_libelle') }} · {{ money(n(row,'solde_centimes')) }}</option></select></label>
             <label>Montant à allouer<input v-model="allocation.amount" inputmode="decimal" required></label>
             <button class="button primary" :disabled="store.saving">Allouer le paiement</button>
           </form>
         </div>
         <section class="payroll-payment-history">
           <h3>Historique des paiements</h3>
-          <div class="table-scroll"><table><thead><tr><th>Date</th><th>Bénéficiaire</th><th>Montant</th><th>Disponible</th><th>Action</th></tr></thead><tbody><tr v-for="row in workspace.payments" :key="n(row,'id')"><td>{{ s(row,'date_paiement') }}</td><td>{{ s(row,'beneficiaire_type') }}</td><td>{{ money(n(row,'montant_centimes')) }}</td><td>{{ money(n(row,'non_alloue_centimes')) }}</td><td><button v-if="n(row,'non_alloue_centimes') === 0 && !row.ecriture_id" class="button small" @click="postPayment(row)">Comptabiliser</button><span v-else>—</span></td></tr><tr v-if="!workspace.payments.length"><td colspan="5">Aucun paiement saisi.</td></tr></tbody></table></div>
+          <div class="table-scroll payroll-table-shell">
+            <table class="data-table payroll-table payroll-payments-table">
+              <thead><tr><th>Date</th><th>Bénéficiaire</th><th>Montant</th><th>Disponible</th><th>Actions</th></tr></thead>
+              <tbody>
+                <tr v-for="row in workspace.payments" :key="n(row,'id')">
+                  <td class="payroll-date">{{ formatDate(s(row,'date_paiement')) }}</td>
+                  <td><strong>{{ s(row,'beneficiaire_libelle') || beneficiaryLabel(s(row,'beneficiaire_type')) }}</strong><small v-if="s(row,'reference')">{{ s(row,'reference') }}</small></td>
+                  <td class="amount"><strong>{{ money(n(row,'montant_centimes')) }}</strong></td>
+                  <td class="amount"><span :class="['payroll-open-balance', { settled: n(row,'non_alloue_centimes') === 0 }]">{{ money(n(row,'non_alloue_centimes')) }}</span></td>
+                  <td class="payroll-actions-cell">
+                    <ActionMenu v-if="s(row,'statut') === 'valide' && !row.ecriture_id" :label="`Actions pour le paiement du ${s(row,'date_paiement')}`">
+                      <button v-if="n(row,'non_alloue_centimes') === 0" :disabled="store.saving" @click="postPayment(row)">Comptabiliser</button>
+                      <button v-if="n(row,'alloue_centimes') === 0" class="danger" :disabled="store.saving" @click="cancelPayment(row)">Annuler</button>
+                    </ActionMenu>
+                    <span v-else :class="['status-chip', s(row,'statut') === 'annule' ? 'warning' : 'ok']">{{ s(row,'statut') === 'annule' ? 'Annulé' : row.ecriture_id ? 'Comptabilisé' : 'À allouer' }}</span>
+                  </td>
+                </tr>
+                <tr v-if="!workspace.payments.length"><td colspan="5">Aucun paiement saisi.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </section>
       </ModalDialog>
     </template>
 
     <template v-else>
       <section class="metric-strip"><span><small>Brut annuel</small><strong>{{ money(Number(workspace.annual.employer.gross_cents || 0)) }}</strong></span><span><small>Retenues</small><strong>{{ money(Number(workspace.annual.employer.deductions_cents || 0)) }}</strong></span><span><small>Charges employeur</small><strong>{{ money(Number(workspace.annual.employer.employer_charges_cents || 0)) }}</strong></span><span><small>Coût total</small><strong>{{ money(Number(workspace.annual.employer.total_cost_cents || 0)) }}</strong></span></section>
-      <section class="panel"><h2>Récapitulatifs et certificats</h2><div class="table-scroll"><table><thead><tr><th>Employé</th><th>Fiches</th><th>Brut</th><th>Net</th><th>Certificat</th></tr></thead><tbody><tr v-for="row in workspace.annual.employees" :key="n(row,'employe_id')"><td>{{ employeeName(n(row,'employe_id')) }}</td><td>{{ n(row,'fiches') }}</td><td>{{ money(n(row,'brut_centimes')) }}</td><td>{{ money(n(row,'net_centimes')) }}</td><td class="button-row"><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii || n(row,'fiches') === 0" @click="certificate('preparer',n(row,'employe_id'))">Préparer</button><button class="button small" :disabled="!workspace.capabilities.export || !workspace.capabilities.pii" @click="certificate('controler',n(row,'employe_id'))">Contrôler</button><a class="button small" :href="certificateUrl(n(row,'employe_id'))">Exporter</a></td></tr></tbody></table></div><p class="notice warning">{{ workspace.definitions.certificate }}</p></section>
       <section class="panel">
         <div class="section-heading">
-          <div><p class="eyebrow">Source contrôlée</p><h2>Import annuel OCAS</h2></div>
+          <h2>Récapitulatifs et certificats</h2>
+          <span class="status-chip">{{ countLabel(workspace.annual.employees.length, 'employé', 'employés') }}</span>
         </div>
-        <p>
-          Choisissez un CSV OCAS (<code>cle;valeur</code> ou
-          <code>annee;cle;valeur</code>). Sans fichier, la source serveur configurée
-          par <code>OCAS_DB_PATH</code> reste utilisée.
-        </p>
-        <div class="form-grid three">
-          <label>Fichier OCAS
-            <input type="file" accept=".csv,text/csv" @change="readOcasSource">
-            <small>{{ ocasSourceName || 'Source serveur configurée' }}</small>
-          </label>
-          <label>Contrôlé le<input v-model="ocasVerifiedOn" type="date"></label>
-          <button class="button" :disabled="store.saving" @click="previewOcas">
-            Prévisualiser sans écrire
-          </button>
+        <div class="table-scroll payroll-table-shell">
+          <table class="data-table payroll-table payroll-annual-table">
+            <thead><tr><th>Employé</th><th>Fiches</th><th>Brut</th><th>Net</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr v-for="row in workspace.annual.employees" :key="n(row,'employe_id')">
+                <td><strong>{{ employeeName(n(row,'employe_id')) }}</strong><small>Exercice {{ year }}</small></td>
+                <td><span class="payroll-count-badge">{{ n(row,'fiches') }}</span></td>
+                <td class="amount">{{ money(n(row,'brut_centimes')) }}</td>
+                <td class="amount payroll-net-amount"><strong>{{ money(n(row,'net_centimes')) }}</strong></td>
+                <td class="payroll-actions-cell">
+                  <ActionMenu :label="`Actions du certificat de ${employeeName(n(row,'employe_id'))}`">
+                    <button :disabled="!workspace.capabilities.export || !workspace.capabilities.pii || n(row,'fiches') === 0" @click="certificate('preparer',n(row,'employe_id'))">Préparer</button>
+                    <button :disabled="!workspace.capabilities.export || !workspace.capabilities.pii" @click="certificate('controler',n(row,'employe_id'))">Contrôler</button>
+                    <a :href="certificateUrl(n(row,'employe_id'))">Exporter</a>
+                  </ActionMenu>
+                </td>
+              </tr>
+              <tr v-if="!workspace.annual.employees.length"><td colspan="5">Aucun récapitulatif disponible pour {{ year }}.</td></tr>
+            </tbody>
+          </table>
         </div>
-        <div v-if="store.ocas" class="permission-preview">
-          <p>{{ store.ocas.message }}</p>
-          <p v-if="store.ocas.missing_keys.length">Clés manquantes : {{ store.ocas.missing_keys.join(', ') }}</p>
-          <button
-            v-if="store.ocas.available"
-            class="button primary"
-            :disabled="store.ocas.missing_keys.length > 0"
-            @click="confirmOcas"
-          >Confirmer l’import</button>
-        </div>
-        <div v-if="store.ocas?.rows.length" class="table-scroll"><table><thead><tr><th>Clé OCAS</th><th>Cible COMPTA</th><th>Valeur</th><th>Décision</th></tr></thead><tbody><tr v-for="row in store.ocas.rows" :key="s(row,'key')"><td>{{ s(row,'key') }}</td><td>{{ s(row,'target') || 'Non applicable' }}</td><td>{{ s(row,'value') }}</td><td>{{ s(row,'status') }} {{ s(row,'reason') }}</td></tr></tbody></table></div>
+        <p class="notice warning">{{ workspace.definitions.certificate }}</p>
       </section>
     </template>
   </template>

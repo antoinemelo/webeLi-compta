@@ -18,6 +18,7 @@ import { swissCantons } from '@/data/swissCantons';
 import { useContextStore } from '@/stores/context';
 import { useNotificationStore } from '@/stores/notifications';
 import { useOrganisationRegistryStore } from '@/stores/organisationRegistry';
+import { formatDate } from '@/utils/dateFormat';
 
 const context = useContextStore();
 const route = useRoute();
@@ -106,6 +107,33 @@ const dossierDraft = reactive({
   journal_code: 'OD',
   journal_label: 'Opérations diverses'
 });
+const dossierModuleChoices = [
+  {
+    code: 'comptabilite',
+    label: 'Comptabilité',
+    description: 'Plan comptable, journaux et états financiers.'
+  },
+  {
+    code: 'facturation',
+    label: 'Facturation',
+    description: 'Factures de vente, d’achat et contacts.'
+  },
+  {
+    code: 'liquidites',
+    label: 'Liquidités',
+    description: 'Trésorerie, paiements et lettrage.'
+  },
+  {
+    code: 'salaires',
+    label: 'Salaires',
+    description: 'Employés, calculs et fiches de salaire.'
+  },
+  {
+    code: 'apprentissage',
+    label: 'Apprentissage',
+    description: 'Fonctions pédagogiques du dossier.'
+  }
+] as const;
 const dossierEdit = reactive({
   name: '',
   type: 'reel' as 'reel' | 'demo' | 'exercice',
@@ -827,55 +855,111 @@ async function removeDossier(): Promise<void> {
 
         <form
           v-if="creatingDossier && canManageDossiers"
-          class="registry-form wizard"
+          class="registry-form wizard dossier-wizard"
           @submit.prevent="createDossier"
         >
-          <div><p class="eyebrow">Assistant transactionnel</p><h3>Initialiser un dossier</h3></div>
-          <div class="registry-grid">
-            <FormField id="dossier-create-name" label="Nom">
-              <template #default="{ describedBy }"><input id="dossier-create-name" v-model="dossierDraft.name" required :aria-describedby="describedBy"></template>
-            </FormField>
-            <FormField id="dossier-create-slug" label="Slug unique">
-              <template #default="{ describedBy }"><input id="dossier-create-slug" v-model="dossierDraft.slug" required pattern="[a-z0-9][a-z0-9-]{1,62}" placeholder="comptabilite-2026" :aria-describedby="describedBy"></template>
-            </FormField>
-            <FormField id="dossier-create-type" label="Type">
-              <template #default="{ describedBy }">
-                <select id="dossier-create-type" v-model="dossierDraft.type" :aria-describedby="describedBy">
-                  <option value="reel">Réel</option><option value="demo">Démonstration</option><option value="exercice">Exercice pédagogique</option>
-                </select>
-              </template>
-            </FormField>
-            <FormField id="dossier-create-currency" label="Devise de base">
-              <template #default="{ describedBy }"><input id="dossier-create-currency" v-model="dossierDraft.currency" required maxlength="3" pattern="[A-Za-z]{3}" :aria-describedby="describedBy"></template>
-            </FormField>
-            <FormField id="dossier-create-plan" label="Variante du plan VEB">
-              <template #default="{ describedBy }">
-                <select id="dossier-create-plan" v-model="dossierDraft.plan_variant" :aria-describedby="describedBy">
-                  <option value="personne_morale">Personne morale</option>
-                  <option value="raison_individuelle">Raison individuelle</option>
-                  <option value="societe_personnes">Société de personnes</option>
-                </select>
-              </template>
-            </FormField>
-            <fieldset class="choice-field">
-              <legend>Modules actifs</legend>
-              <label v-for="module in ['comptabilite', 'facturation', 'liquidites', 'salaires', 'apprentissage']" :key="module">
-                <input v-model="dossierDraft.modules" type="checkbox" :value="module"> {{ module }}
-              </label>
-            </fieldset>
-            <fieldset class="choice-field">
-              <legend>Fonctionnalités associatives</legend>
-              <label><input v-model="dossierDraft.association" type="checkbox"> Installer l’overlay association</label>
-              <label><input v-model="dossierDraft.projects" type="checkbox" :disabled="!dossierDraft.association"> Comptes de projets</label>
-              <label><input v-model="dossierDraft.restricted_funds" type="checkbox" :disabled="!dossierDraft.association"> Fonds affectés</label>
-            </fieldset>
+          <header class="dossier-wizard-header">
+            <span class="dossier-wizard-number" aria-hidden="true">01</span>
+            <div>
+              <p class="eyebrow">Assistant transactionnel</p>
+              <h3>Initialiser un dossier</h3>
+              <p>Définissez sa structure, ses modules et son premier exercice.</p>
+            </div>
+          </header>
+
+          <section class="dossier-wizard-section">
+            <div class="dossier-wizard-section-heading">
+              <h4>Identité et structure</h4>
+              <p>Les paramètres fondamentaux du nouveau dossier comptable.</p>
+            </div>
+            <div class="dossier-wizard-fields dossier-identity-fields">
+              <FormField id="dossier-create-name" label="Nom">
+                <template #default="{ describedBy }"><input id="dossier-create-name" v-model="dossierDraft.name" required :aria-describedby="describedBy"></template>
+              </FormField>
+              <FormField id="dossier-create-slug" label="Slug unique">
+                <template #default="{ describedBy }">
+                  <input
+                    id="dossier-create-slug"
+                    v-model="dossierDraft.slug"
+                    required
+                    pattern="[a-z0-9][a-z0-9_-]{1,62}"
+                    placeholder="comptabilite_2026"
+                    title="Lettres minuscules, chiffres, tirets ou tirets bas uniquement"
+                    :aria-describedby="describedBy"
+                  >
+                </template>
+              </FormField>
+              <FormField id="dossier-create-type" label="Type">
+                <template #default="{ describedBy }">
+                  <select id="dossier-create-type" v-model="dossierDraft.type" :aria-describedby="describedBy">
+                    <option value="reel">Réel</option><option value="demo">Démonstration</option><option value="exercice">Exercice pédagogique</option>
+                  </select>
+                </template>
+              </FormField>
+              <FormField id="dossier-create-currency" label="Devise de base">
+                <template #default="{ describedBy }"><input id="dossier-create-currency" v-model="dossierDraft.currency" required maxlength="3" pattern="[A-Za-z]{3}" :aria-describedby="describedBy"></template>
+              </FormField>
+              <FormField id="dossier-create-plan" label="Variante du plan comptable" class="dossier-plan-field">
+                <template #default="{ describedBy }">
+                  <select id="dossier-create-plan" v-model="dossierDraft.plan_variant" :aria-describedby="describedBy">
+                    <option value="personne_morale">Personne morale</option>
+                    <option value="raison_individuelle">Raison individuelle</option>
+                    <option value="societe_personnes">Société de personnes</option>
+                  </select>
+                </template>
+              </FormField>
+            </div>
+          </section>
+
+          <section class="dossier-wizard-section">
+            <div class="dossier-wizard-section-heading">
+              <h4>Périmètre fonctionnel</h4>
+              <p>Activez uniquement les fonctions utiles à ce dossier.</p>
+            </div>
+            <div class="dossier-wizard-choices">
+              <fieldset class="choice-field">
+                <legend>Modules actifs</legend>
+                <label v-for="module in dossierModuleChoices" :key="module.code" class="choice-option">
+                  <input v-model="dossierDraft.modules" type="checkbox" :value="module.code">
+                  <span>
+                    <strong>{{ module.label }}</strong>
+                    <small>{{ module.description }}</small>
+                  </span>
+                </label>
+              </fieldset>
+              <fieldset class="choice-field">
+                <legend>Fonctionnalités associatives</legend>
+                <label class="choice-option">
+                  <input v-model="dossierDraft.association" type="checkbox">
+                  <span><strong>Overlay association</strong><small>Active la structure propre aux associations.</small></span>
+                </label>
+                <label class="choice-option">
+                  <input v-model="dossierDraft.projects" type="checkbox" :disabled="!dossierDraft.association">
+                  <span><strong>Comptes de projets</strong><small>Suit les activités par projet.</small></span>
+                </label>
+                <label class="choice-option">
+                  <input v-model="dossierDraft.restricted_funds" type="checkbox" :disabled="!dossierDraft.association">
+                  <span><strong>Fonds affectés</strong><small>Distingue les ressources à affectation limitée.</small></span>
+                </label>
+              </fieldset>
+            </div>
+          </section>
+
+          <section class="dossier-wizard-section">
+            <div class="dossier-wizard-section-heading">
+              <h4>Accès initiaux</h4>
+              <p>Le nouveau dossier reste sans attribution automatique par défaut.</p>
+            </div>
             <fieldset class="choice-field access-copy-field">
-              <legend>Accès initiaux</legend>
-              <label>
+              <legend>Reprendre des accès existants</legend>
+              <label class="choice-option">
                 <input v-model="copyAccess" type="checkbox">
-                Copier explicitement la matrice d’un dossier frère
+                <span>
+                  <strong>Copier la matrice d’un dossier frère</strong>
+                  <small>La copie nécessite toujours un aperçu et une confirmation explicite.</small>
+                </span>
               </label>
-              <template v-if="copyAccess">
+              <div v-if="copyAccess" class="access-copy-controls">
                 <select v-model.number="copySourceDossierId" aria-label="Dossier source des accès">
                   <option :value="0">Choisir le dossier source…</option>
                   <option
@@ -894,49 +978,70 @@ async function removeDossier(): Promise<void> {
                 >
                   Prévisualiser la copie
                 </button>
-                <div v-if="store.copyPreview" class="copy-preview" role="status">
-                  <strong>{{ store.copyPreview.assignment_count }} attribution(s) directe(s)</strong>
-                  <ul>
-                    <li
-                      v-for="assignment in store.copyPreview.assignments"
-                      :key="`${assignment.user_id}-${assignment.role_id}`"
-                    >
-                      {{ assignment.user_name || assignment.user_email }}
-                      · {{ assignment.role_label }}
-                    </li>
-                  </ul>
-                  <label>
-                    <input v-model="copyConfirmed" type="checkbox">
-                    Je confirme exactement cette matrice
-                  </label>
-                </div>
-              </template>
-              <small>Aucun droit n’est copié sans aperçu et confirmation.</small>
+              </div>
+              <div v-if="store.copyPreview" class="copy-preview" role="status">
+                <strong>{{ store.copyPreview.assignment_count }} attribution(s) directe(s)</strong>
+                <ul>
+                  <li
+                    v-for="assignment in store.copyPreview.assignments"
+                    :key="`${assignment.user_id}-${assignment.role_id}`"
+                  >
+                    {{ assignment.user_name || assignment.user_email }}
+                    · {{ assignment.role_label }}
+                  </li>
+                </ul>
+                <label class="choice-option copy-confirmation">
+                  <input v-model="copyConfirmed" type="checkbox">
+                  <span><strong>Je confirme exactement cette matrice</strong></span>
+                </label>
+              </div>
             </fieldset>
-            <FormField id="dossier-exercise-label" label="Premier exercice">
-              <template #default="{ describedBy }"><input id="dossier-exercise-label" v-model="dossierDraft.exercise_label" required :aria-describedby="describedBy"></template>
-            </FormField>
-            <FormField id="dossier-exercise-start" label="Début">
-              <template #default="{ describedBy }"><input id="dossier-exercise-start" v-model="dossierDraft.exercise_start" type="date" required :aria-describedby="describedBy"></template>
-            </FormField>
-            <FormField id="dossier-exercise-end" label="Fin">
-              <template #default="{ describedBy }"><input id="dossier-exercise-end" v-model="dossierDraft.exercise_end" type="date" required :aria-describedby="describedBy"></template>
-            </FormField>
-            <FormField id="dossier-journal-code" label="Code du journal général">
-              <template #default="{ describedBy }"><input id="dossier-journal-code" v-model="dossierDraft.journal_code" required maxlength="12" :aria-describedby="describedBy"></template>
-            </FormField>
-            <FormField id="dossier-journal-label" label="Libellé du journal">
-              <template #default="{ describedBy }"><input id="dossier-journal-label" v-model="dossierDraft.journal_label" required :aria-describedby="describedBy"></template>
-            </FormField>
-          </div>
-          <p class="help-text">Le dossier, le plan, l’exercice, la période, le journal et les références sont créés dans une seule transaction.</p>
-          <button
-            type="submit"
-            class="button"
-            :disabled="store.saving || (copyAccess && (!store.copyPreview || !copyConfirmed))"
-          >
-            Créer et initialiser
-          </button>
+          </section>
+
+          <section class="dossier-wizard-section">
+            <div class="dossier-wizard-section-heading">
+              <h4>Premier exercice et journal</h4>
+              <p>Ces éléments seront immédiatement disponibles après l’initialisation.</p>
+            </div>
+            <div class="dossier-wizard-fields dossier-period-fields">
+              <FormField id="dossier-exercise-label" label="Premier exercice">
+                <template #default="{ describedBy }"><input id="dossier-exercise-label" v-model="dossierDraft.exercise_label" required :aria-describedby="describedBy"></template>
+              </FormField>
+              <FormField id="dossier-exercise-start" label="Début">
+                <template #default="{ describedBy }"><input id="dossier-exercise-start" v-model="dossierDraft.exercise_start" type="date" required :aria-describedby="describedBy"></template>
+              </FormField>
+              <FormField id="dossier-exercise-end" label="Fin">
+                <template #default="{ describedBy }"><input id="dossier-exercise-end" v-model="dossierDraft.exercise_end" type="date" required :aria-describedby="describedBy"></template>
+              </FormField>
+              <FormField id="dossier-journal-code" label="Code du journal général">
+                <template #default="{ describedBy }">
+                  <input
+                    id="dossier-journal-code"
+                    v-model="dossierDraft.journal_code"
+                    required
+                    maxlength="12"
+                    pattern="[A-Za-z0-9_-]{1,12}"
+                    title="Lettres, chiffres, tirets ou tirets bas uniquement"
+                    :aria-describedby="describedBy"
+                  >
+                </template>
+              </FormField>
+              <FormField id="dossier-journal-label" label="Libellé du journal" class="dossier-journal-label-field">
+                <template #default="{ describedBy }"><input id="dossier-journal-label" v-model="dossierDraft.journal_label" required :aria-describedby="describedBy"></template>
+              </FormField>
+            </div>
+          </section>
+
+          <footer class="dossier-wizard-footer">
+            <p>Le dossier, le plan, l’exercice, la période, le journal et les références seront créés dans une seule transaction.</p>
+            <button
+              type="submit"
+              class="button"
+              :disabled="store.saving || (copyAccess && (!store.copyPreview || !copyConfirmed))"
+            >
+              Créer et initialiser
+            </button>
+          </footer>
         </form>
 
         <div v-if="store.creationSummary" class="initialization-summary" role="status">
@@ -1371,7 +1476,7 @@ async function removeDossier(): Promise<void> {
                   <small>{{ identity.forme_juridique }} · {{ identity.numero_ide || 'sans IDE' }}</small>
                 </span>
                 <span>
-                  <strong>{{ identity.date_debut }} → {{ identity.date_fin || 'actuelle' }}</strong>
+                  <strong>{{ formatDate(identity.date_debut) }} → {{ formatDate(identity.date_fin, 'actuelle') }}</strong>
                   <small>Consulter les informations</small>
                 </span>
               </button>
@@ -1409,7 +1514,7 @@ async function removeDossier(): Promise<void> {
     >
       <div v-if="selectedLegalIdentity" class="legal-history-detail">
         <dl>
-          <div><dt>Période de validité</dt><dd>{{ selectedLegalIdentity.date_debut }} → {{ selectedLegalIdentity.date_fin || 'actuelle' }}</dd></div>
+          <div><dt>Période de validité</dt><dd>{{ formatDate(selectedLegalIdentity.date_debut) }} → {{ formatDate(selectedLegalIdentity.date_fin, 'actuelle') }}</dd></div>
           <div><dt>Forme juridique</dt><dd>{{ selectedLegalIdentity.forme_juridique || '—' }}</dd></div>
           <div><dt>IDE / UID</dt><dd>{{ selectedLegalIdentity.numero_ide || '—' }}</dd></div>
           <div><dt>Source</dt><dd>{{ selectedLegalIdentity.source }}</dd></div>
@@ -1609,12 +1714,158 @@ async function removeDossier(): Promise<void> {
 }
 .permission-preview > div { display: grid; gap: .25rem; }
 .permission-preview p, .copy-preview ul { margin: 0; }
-.access-copy-field { align-content: start; }
 .dossier-list { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
 .dossier-node { width: 100%; display: flex; gap: 1rem; align-items: center; justify-content: space-between; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; background: var(--surface); color: inherit; text-align: left; }
 .dossier-node[aria-current="true"] { border-color: var(--accent); box-shadow: inset .25rem 0 0 var(--accent); }
 .dossier-node span:first-child { display: grid; gap: .2rem; }
-.choice-field { display: grid; gap: .45rem; padding: .75rem; border: 1px solid var(--border); border-radius: .5rem; }
+.dossier-wizard {
+  gap: 0;
+  overflow: hidden;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: .85rem;
+  box-shadow: 0 14px 34px rgba(32, 33, 78, .08);
+}
+.dossier-wizard-header {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.35rem;
+  background: linear-gradient(135deg, #f0f1f8 0%, #fafafd 70%);
+}
+.dossier-wizard-header h3,
+.dossier-wizard-header p,
+.dossier-wizard-section-heading h4,
+.dossier-wizard-section-heading p,
+.dossier-wizard-footer p { margin: 0; }
+.dossier-wizard-header > div { display: grid; gap: .25rem; }
+.dossier-wizard-header > div > p:last-child,
+.dossier-wizard-section-heading p,
+.dossier-wizard-footer p { color: var(--muted); }
+.dossier-wizard-number {
+  display: grid;
+  flex: 0 0 2.7rem;
+  width: 2.7rem;
+  height: 2.7rem;
+  place-items: center;
+  color: white;
+  background: var(--ink);
+  border-radius: .75rem;
+  font-size: .82rem;
+  font-weight: 850;
+  letter-spacing: .05em;
+  box-shadow: 0 7px 16px rgba(32, 33, 78, .18);
+}
+.dossier-wizard-section {
+  padding: 1.35rem;
+  border-top: 1px solid var(--border);
+}
+.dossier-wizard-section-heading {
+  display: grid;
+  grid-template-columns: minmax(11rem, .45fr) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: baseline;
+  margin-bottom: 1rem;
+}
+.dossier-wizard-section-heading h4 { font-size: .95rem; }
+.dossier-wizard-section-heading p { font-size: .82rem; }
+.dossier-wizard-fields {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1rem;
+}
+.dossier-identity-fields > * { grid-column: span 3; }
+.dossier-identity-fields > :nth-child(n + 3) { grid-column: span 2; }
+.dossier-period-fields > :nth-child(-n + 3),
+.dossier-period-fields > :nth-child(4) { grid-column: span 2; }
+.dossier-period-fields > :nth-child(5) { grid-column: span 4; }
+.dossier-wizard :deep(.form-field input),
+.dossier-wizard :deep(.form-field select) { width: 100%; }
+.dossier-wizard-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.choice-field {
+  display: grid;
+  min-width: 0;
+  gap: .55rem;
+  padding: 1rem;
+  background: #f8f8fb;
+  border: 1px solid var(--border);
+  border-radius: .7rem;
+}
+.choice-field legend {
+  padding: 0 .35rem;
+  color: var(--ink);
+  font-size: .82rem;
+  font-weight: 800;
+}
+.choice-option {
+  display: flex;
+  gap: .7rem;
+  align-items: flex-start;
+  min-width: 0;
+  padding: .7rem .75rem;
+  background: white;
+  border: 1px solid #d9dce7;
+  border-radius: .55rem;
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+.choice-option:hover { border-color: #9da2b4; }
+.choice-option:has(input:checked) {
+  background: #f3f2ff;
+  border-color: var(--accent);
+  box-shadow: inset .2rem 0 0 var(--accent);
+}
+.choice-option:has(input:disabled) {
+  opacity: .52;
+  cursor: not-allowed;
+}
+.choice-option input {
+  flex: 0 0 auto;
+  width: 1.05rem;
+  height: 1.05rem;
+  min-height: 1.05rem;
+  margin: .12rem 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+.choice-option > span {
+  display: grid;
+  min-width: 0;
+  gap: .12rem;
+  line-height: 1.25;
+}
+.choice-option strong { font-size: .83rem; }
+.choice-option small { color: var(--muted); font-size: .75rem; }
+.access-copy-field { align-content: start; }
+.access-copy-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .65rem;
+  align-items: center;
+  padding-top: .25rem;
+}
+.access-copy-controls select { width: 100%; }
+.copy-preview { display: grid; gap: .65rem; }
+.copy-confirmation { margin-top: .15rem; }
+.dossier-wizard-footer {
+  display: flex;
+  gap: 1.25rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.35rem;
+  background: #f8f8fb;
+  border-top: 1px solid var(--border);
+}
+.dossier-wizard-footer p {
+  max-width: 42rem;
+  font-size: .78rem;
+}
+.dossier-wizard-footer .button { flex: 0 0 auto; }
 .initialization-summary { display: flex; flex-wrap: wrap; gap: .5rem 1rem; padding: .75rem; border-radius: .5rem; background: #f8f8fb; }
 @media (max-width: 1050px) {
   .registry-browser { grid-template-columns: 1fr; }
@@ -1632,5 +1883,18 @@ async function removeDossier(): Promise<void> {
   .history-entry-button { align-items: flex-start; flex-direction: column; }
   .history-entry-button > span:last-child { text-align: left; }
   .registry-section-nav button { flex-basis: auto; }
+  .dossier-wizard-header,
+  .dossier-wizard-section,
+  .dossier-wizard-footer { padding: 1rem; }
+  .dossier-wizard-section-heading,
+  .dossier-wizard-fields,
+  .dossier-wizard-choices,
+  .access-copy-controls { grid-template-columns: 1fr; }
+  .dossier-identity-fields > *,
+  .dossier-identity-fields > :nth-child(n + 3),
+  .dossier-period-fields > :nth-child(-n + 3),
+  .dossier-period-fields > :nth-child(4),
+  .dossier-period-fields > :nth-child(5) { grid-column: auto; }
+  .dossier-wizard-footer { align-items: stretch; flex-direction: column; }
 }
 </style>

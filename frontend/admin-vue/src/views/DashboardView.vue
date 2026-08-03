@@ -9,6 +9,7 @@ import type { Exercise } from '@/api/contracts';
 import { useToastFeedback } from '@/composables/toastFeedback';
 import { useContextStore } from '@/stores/context';
 import { useDashboardStore } from '@/stores/dashboard';
+import { formatDate } from '@/utils/dateFormat';
 
 const context = useContextStore();
 const dashboard = useDashboardStore();
@@ -30,14 +31,14 @@ const treasuryRows = computed<Array<Record<string, unknown>>>(() =>
   (projection.value?.treasury.accounts ?? []).map((account) => ({
     id: account.id,
     account: account.label,
-    accounting: formatMoney(account.accounting_balance_cents, currency.value),
+    accounting: formatMoney(account.accounting_balance_cents),
     bank: account.bank_balance_cents === null
       ? 'Non importé'
-      : formatMoney(account.bank_balance_cents, account.bank_balance_currency || account.currency),
-    bank_date: account.bank_balance_date || '—',
+      : formatMoney(account.bank_balance_cents),
+    bank_date: formatDate(account.bank_balance_date),
     difference: account.difference_cents === null
       ? 'Non comparable'
-      : formatMoney(account.difference_cents, currency.value)
+      : formatMoney(account.difference_cents)
   }))
 );
 watch(
@@ -61,12 +62,16 @@ watch(
   { immediate: true, deep: true }
 );
 
-function formatMoney(cents: number, code: string): string {
+function formatMoney(cents: number): string {
   const sign = cents < 0 ? '−' : '';
   const absolute = Math.abs(cents);
   const units = Math.floor(absolute / 100);
   const decimals = String(absolute % 100).padStart(2, '0');
-  return `${sign}${code} ${units.toLocaleString('fr-CH')}.${decimals}`;
+  return `${sign}${units.toLocaleString('fr-CH')}.${decimals}`;
+}
+
+function counted(count: number, singular: string, plural: string): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function clampDate(exercise: Exercise): string {
@@ -175,22 +180,22 @@ async function refresh(): Promise<void> {
       <section class="metric-grid" aria-label="Indicateurs principaux">
         <article class="metric-card">
           <span>Trésorerie comptable</span>
-          <strong>{{ formatMoney(projection.treasury.accounting_balance_cents, currency) }}</strong>
+          <strong>{{ formatMoney(projection.treasury.accounting_balance_cents) }}</strong>
           <small>Comptes de trésorerie configurés</small>
         </article>
         <article class="metric-card">
           <span>Chiffre d’affaires</span>
-          <strong>{{ formatMoney(projection.profit_and_loss.revenue_cents, currency) }}</strong>
+          <strong>{{ formatMoney(projection.profit_and_loss.revenue_cents) }}</strong>
           <small>Produits comptabilisés</small>
         </article>
         <article class="metric-card">
           <span>Charges</span>
-          <strong>{{ formatMoney(projection.profit_and_loss.expenses_cents, currency) }}</strong>
+          <strong>{{ formatMoney(projection.profit_and_loss.expenses_cents) }}</strong>
           <small>Charges comptabilisées</small>
         </article>
         <article class="metric-card">
           <span>Résultat courant</span>
-          <strong>{{ formatMoney(projection.profit_and_loss.result_cents, currency) }}</strong>
+          <strong>{{ formatMoney(projection.profit_and_loss.result_cents) }}</strong>
           <small>Avant clôture</small>
         </article>
       </section>
@@ -202,20 +207,21 @@ async function refresh(): Promise<void> {
               <p class="eyebrow">Clients</p>
               <h2>Créances ouvertes</h2>
             </div>
-            <strong>{{ formatMoney(projection.open_items.receivables.open_cents, currency) }}</strong>
+            <strong>{{ formatMoney(projection.open_items.receivables.open_cents) }}</strong>
           </div>
           <p>
-            {{ projection.open_items.receivables.open_count }} document(s),
-            dont {{ projection.open_items.receivables.overdue_count }} échu(s) pour
-            <strong>{{ formatMoney(projection.open_items.receivables.overdue_cents, currency) }}</strong>.
+            {{ counted(projection.open_items.receivables.open_count, 'document', 'documents') }},
+            dont {{ counted(projection.open_items.receivables.overdue_count, 'échu', 'échus') }}<template
+              v-if="projection.open_items.receivables.overdue_count > 0"
+            > pour <strong>{{ formatMoney(projection.open_items.receivables.overdue_cents) }}</strong></template>.
           </p>
           <small
             v-if="projection.open_items.receivables.draft_count
               || projection.open_items.receivables.unposted_count"
             class="pending-documents"
           >
-            {{ projection.open_items.receivables.draft_count }} brouillon(s) à émettre
-            · {{ projection.open_items.receivables.unposted_count }} document(s) à comptabiliser.
+            {{ counted(projection.open_items.receivables.draft_count, 'brouillon', 'brouillons') }} à émettre
+            · {{ counted(projection.open_items.receivables.unposted_count, 'document', 'documents') }} à comptabiliser.
             Montants exclus de la créance.
           </small>
         </article>
@@ -225,20 +231,21 @@ async function refresh(): Promise<void> {
               <p class="eyebrow">Fournisseurs</p>
               <h2>Dettes ouvertes</h2>
             </div>
-            <strong>{{ formatMoney(projection.open_items.payables.open_cents, currency) }}</strong>
+            <strong>{{ formatMoney(projection.open_items.payables.open_cents) }}</strong>
           </div>
           <p>
-            {{ projection.open_items.payables.open_count }} document(s),
-            dont {{ projection.open_items.payables.overdue_count }} échu(s) pour
-            <strong>{{ formatMoney(projection.open_items.payables.overdue_cents, currency) }}</strong>.
+            {{ counted(projection.open_items.payables.open_count, 'document', 'documents') }},
+            dont {{ counted(projection.open_items.payables.overdue_count, 'échu', 'échus') }}<template
+              v-if="projection.open_items.payables.overdue_count > 0"
+            > pour <strong>{{ formatMoney(projection.open_items.payables.overdue_cents) }}</strong></template>.
           </p>
           <small
             v-if="projection.open_items.payables.draft_count
               || projection.open_items.payables.unposted_count"
             class="pending-documents"
           >
-            {{ projection.open_items.payables.draft_count }} brouillon(s) à émettre
-            · {{ projection.open_items.payables.unposted_count }} document(s) à comptabiliser.
+            {{ counted(projection.open_items.payables.draft_count, 'brouillon', 'brouillons') }} à émettre
+            · {{ counted(projection.open_items.payables.unposted_count, 'document', 'documents') }} à comptabiliser.
             Montants exclus de la dette.
           </small>
         </article>
@@ -281,7 +288,7 @@ async function refresh(): Promise<void> {
           <strong>{{ projection.operations.unreconciled_bank_lines.count }}</strong>
           <small>
             Volume absolu :
-            {{ formatMoney(projection.operations.unreconciled_bank_lines.absolute_cents, currency) }}
+            {{ formatMoney(projection.operations.unreconciled_bank_lines.absolute_cents) }}
           </small>
           <RouterLink to="/liquidites/rapprochement">Ouvrir le rapprochement</RouterLink>
         </article>
@@ -290,7 +297,7 @@ async function refresh(): Promise<void> {
           <strong>{{ projection.operations.payments_to_process.count }}</strong>
           <small>
             Non alloué :
-            {{ formatMoney(projection.operations.payments_to_process.amount_cents, currency) }}
+            {{ formatMoney(projection.operations.payments_to_process.amount_cents) }}
           </small>
           <RouterLink to="/liquidites/lettrage">Ouvrir le lettrage</RouterLink>
         </article>

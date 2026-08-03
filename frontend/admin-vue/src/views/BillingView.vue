@@ -23,6 +23,7 @@ import { subNavigation } from '@/router/navigation';
 import { useBillingStore } from '@/stores/billing';
 import { useContextStore } from '@/stores/context';
 import { useNotificationStore } from '@/stores/notifications';
+import { formatDate } from '@/utils/dateFormat';
 
 type DraftLine = {
   label: string;
@@ -1614,7 +1615,7 @@ async function postPayment(
       v-if="workspace && ['sales', 'achats', 'echeancier'].includes(activeTab)"
       class="reference-note"
     >
-      Situation calculée au <strong>{{ workspace.reference_date }}</strong>.
+      Situation calculée au <strong>{{ formatDate(workspace.reference_date) }}</strong>.
       Les paiements non alloués sont présentés séparément des tranches d’âge.
     </p>
     <ErrorSummary v-if="store.error" :message="store.error" />
@@ -1709,7 +1710,7 @@ async function postPayment(
             <template #default="{ describedBy }">
               <select id="billing-rate" v-model.number="documentDraft.exchange_rate_id" :aria-describedby="describedBy" required>
                 <option :value="0" disabled>Sélectionner</option>
-                <option v-for="rate in documentExchangeRates" :key="rate.id" :value="rate.id">{{ rate.rate_date }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option>
+                <option v-for="rate in documentExchangeRates" :key="rate.id" :value="rate.id">{{ formatDate(rate.rate_date) }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option>
               </select>
             </template>
           </FormField>
@@ -1718,7 +1719,7 @@ async function postPayment(
           </FormField>
         </div>
         <div v-if="!documentPaymentDefault" class="notice warning" role="alert">
-          Aucune condition de paiement par défaut ne couvre le {{ documentDraft.document_date }}.
+          Aucune condition de paiement par défaut ne couvre le {{ formatDate(documentDraft.document_date) }}.
           L’échéance reste saisissable manuellement.
           <RouterLink to="/configuration/paiements">Créer ou définir une condition</RouterLink>.
         </div>
@@ -1801,6 +1802,8 @@ async function postPayment(
         ]"
         :rows="documentRows"
       >
+        <template #cell-document_date="{ row }">{{ formatDate(String(row.document_date)) }}</template>
+        <template #cell-due_date="{ row }">{{ formatDate(String(row.due_date)) }}</template>
         <template #cell-display_number="{ row }">
           <button
             class="table-primary-link"
@@ -1897,8 +1900,8 @@ async function postPayment(
 
           <div class="financial-document-overview">
             <dl class="financial-document-dates">
-              <div><dt>Date du document</dt><dd>{{ viewedDocument.document_date }}</dd></div>
-              <div><dt>Échéance</dt><dd>{{ viewedDocument.due_date }}</dd></div>
+              <div><dt>Date du document</dt><dd>{{ formatDate(viewedDocument.document_date) }}</dd></div>
+              <div><dt>Échéance</dt><dd>{{ formatDate(viewedDocument.due_date) }}</dd></div>
               <div><dt>État du paiement</dt><dd>{{ paymentLabel(viewedDocument.payment_state) }}</dd></div>
               <div><dt>Devise</dt><dd>{{ viewedDocument.currency }}</dd></div>
             </dl>
@@ -1973,7 +1976,7 @@ async function postPayment(
             <div v-if="viewedDocument.exchange_rate.source">
               <dt>Taux de change</dt>
               <dd>
-                {{ viewedDocument.exchange_rate.date }} ·
+                {{ formatDate(viewedDocument.exchange_rate.date) }} ·
                 {{ viewedDocument.exchange_rate.numerator }}/{{ viewedDocument.exchange_rate.denominator }} ·
                 {{ viewedDocument.exchange_rate.source }}
               </dd>
@@ -2079,6 +2082,7 @@ async function postPayment(
         ]"
         :rows="commercialRows"
       >
+        <template #cell-date_document="{ row }">{{ formatDate(String(row.date_document)) }}</template>
         <template #cell-display_number="{ row }">
           <button
             class="table-primary-link"
@@ -2137,7 +2141,7 @@ async function postPayment(
               >{{ viewedCommercial.contact }}</button>
             </div>
             <div>
-              <strong>{{ viewedCommercial.date_document }}</strong>
+              <strong>{{ formatDate(viewedCommercial.date_document) }}</strong>
               <span class="status-chip">{{ commercialStatusLabel(viewedCommercial) }}</span>
             </div>
           </header>
@@ -2232,6 +2236,7 @@ async function postPayment(
         :columns="[{ key: 'label', label: 'Modèle' }, { key: 'type_label', label: 'Parcours' }, { key: 'contact', label: 'Contact' }, { key: 'cadence', label: 'Cadence' }, { key: 'next_date', label: 'Prochaine' }, { key: 'generation_count', label: 'Brouillons' }, { key: 'status_label', label: 'Statut' }, { key: 'actions', label: 'Actions' }]"
         :rows="recurrenceRows"
       >
+        <template #cell-next_date="{ row }">{{ formatDate(String(row.next_date)) }}</template>
         <template #cell-actions="{ row }">
           <ActionMenu :label="`Actions pour ${row.label}`">
             <button v-if="row.status !== 'termine' && workspace.capabilities.manage" type="button" @click="toggleRecurrence(row as { id: number; version: number; status: string })">{{ row.status === 'actif' ? 'Mettre en pause' : 'Reprendre' }}</button>
@@ -2325,7 +2330,7 @@ async function postPayment(
       <ModalDialog
         ref="contact360Dialog"
         :title="selectedContact?.label || 'Vue 360°'"
-        :description="`Historique au ${workspace.reference_date}`"
+        :description="`Historique au ${formatDate(workspace.reference_date)}`"
         wide
         @closed="clearContact"
       >
@@ -2356,6 +2361,7 @@ async function postPayment(
               ]"
               :rows="contactCommercialRows"
             >
+              <template #cell-date_document="{ row }">{{ formatDate(String(row.date_document)) }}</template>
               <template #cell-display_number="{ row }">
                 <button
                   class="table-primary-link"
@@ -2383,6 +2389,8 @@ async function postPayment(
               ]"
               :rows="contactDocumentRows"
             >
+              <template #cell-document_date="{ row }">{{ formatDate(String(row.document_date)) }}</template>
+              <template #cell-due_date="{ row }">{{ formatDate(String(row.due_date)) }}</template>
               <template #cell-display_number="{ row }">
                 <button
                   class="table-primary-link"
@@ -2410,6 +2418,7 @@ async function postPayment(
               ]"
               :rows="contactPaymentRows"
             >
+              <template #cell-payment_date="{ row }">{{ formatDate(String(row.payment_date)) }}</template>
               <template #cell-reference="{ row }">
                 <button
                   class="table-primary-link"
@@ -2427,7 +2436,7 @@ async function postPayment(
 
     <template v-else-if="workspace && activeTab === 'echeancier'">
       <div class="toolbar">
-        <div><p>Créances et dettes ouvertes, calculées au {{ workspace.reference_date }}.</p></div>
+        <div><p>Créances et dettes ouvertes, calculées au {{ formatDate(workspace.reference_date) }}.</p></div>
         <div
           v-if="workspace.capabilities.pay || workspace.capabilities.remind"
           class="button-row"
@@ -2471,7 +2480,7 @@ async function postPayment(
           <FormField id="payment-amount" :label="`Montant ${paymentDraft.currency}`"><template #default="{ describedBy }"><input id="payment-amount" v-model="paymentDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
           <FormField id="payment-reference" label="Référence"><template #default="{ describedBy }"><input id="payment-reference" v-model="paymentDraft.reference" :aria-describedby="describedBy" placeholder="Communication ou référence bancaire"></template></FormField>
           <FormField id="payment-currency" label="Devise"><template #default="{ describedBy }"><select id="payment-currency" v-model="paymentDraft.currency" :aria-describedby="describedBy" required @change="paymentDraft.exchange_rate_id = 0"><option v-for="currencyItem in workspace.catalog.currencies" :key="currencyItem.code" :value="currencyItem.code">{{ currencyItem.code }}{{ currencyItem.is_base ? ' · base' : '' }}</option></select></template></FormField>
-          <FormField v-if="paymentDraft.currency !== context.context?.selection?.dossier.currency" id="payment-rate" label="Taux figé"><template #default="{ describedBy }"><select id="payment-rate" v-model.number="paymentDraft.exchange_rate_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="rate in paymentExchangeRates" :key="rate.id" :value="rate.id">{{ rate.rate_date }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option></select></template></FormField>
+          <FormField v-if="paymentDraft.currency !== context.context?.selection?.dossier.currency" id="payment-rate" label="Taux figé"><template #default="{ describedBy }"><select id="payment-rate" v-model.number="paymentDraft.exchange_rate_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="rate in paymentExchangeRates" :key="rate.id" :value="rate.id">{{ formatDate(rate.rate_date) }} · {{ rate.numerator }}/{{ rate.denominator }} · {{ rate.source }}</option></select></template></FormField>
           <FormField id="payment-account" label="Compte de trésorerie"><template #default="{ describedBy }"><AccountCombobox id="payment-account" v-model="paymentDraft.treasury_account_id" :options="workspace.catalog.treasury_accounts" number-key="ledger_number" label-key="label" :aria-describedby="describedBy" required /></template></FormField>
           <div class="dialog-actions full-row"><button class="button primary" :disabled="store.saving">Enregistrer</button></div>
         </form>

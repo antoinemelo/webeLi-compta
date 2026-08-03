@@ -34,6 +34,12 @@ function money(cents: number): string {
     currency: 'CHF'
   }).format(cents / 100);
 }
+function amount(cents: number): string {
+  return new Intl.NumberFormat('fr-CH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(cents / 100);
+}
 function quantity(milli: number): string {
   return new Intl.NumberFormat('fr-CH', {
     minimumFractionDigits: 0,
@@ -45,6 +51,9 @@ function rate(ppm: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 4
   }).format(ppm / 10000)} %`;
+}
+function salaryLabel(value: string): string {
+  return value === 'Salaire du travail' ? 'Salaire de base' : value;
 }
 
 const employer = computed(() => snapshot('employeur_snapshot_json'));
@@ -129,18 +138,18 @@ defineExpose({ open, close });
 
       <section class="payroll-slip-section">
         <h3>Base salariale</h3>
-        <div class="table-scroll">
-          <table>
+        <div class="table-scroll payroll-slip-table-shell">
+          <table class="data-table payroll-slip-table">
             <thead>
-              <tr><th>Libellé</th><th>Quantité</th><th>Unité</th><th>Taux</th><th>Montant</th></tr>
+              <tr><th>Libellé</th><th class="amount">Quantité</th><th>Unité</th><th class="amount">Taux (CHF)</th><th class="amount">Montant (CHF)</th></tr>
             </thead>
             <tbody>
               <tr v-for="row in lines" :key="n(row, 'id')">
-                <td>{{ s(row, 'libelle') }}</td>
-                <td>{{ quantity(n(row, 'quantite_milli')) }}</td>
+                <td><strong>{{ s(row, 'libelle') }}</strong></td>
+                <td class="amount">{{ quantity(n(row, 'quantite_milli')) }}</td>
                 <td>{{ s(row, 'unite_libelle_snapshot') }}</td>
-                <td>{{ money(n(row, 'taux_horaire_centimes')) }}</td>
-                <td>{{ money(n(row, 'montant_centimes')) }}</td>
+                <td class="amount">{{ money(n(row, 'taux_horaire_centimes')) }}</td>
+                <td class="amount"><strong>{{ money(n(row, 'montant_centimes')) }}</strong></td>
               </tr>
               <tr v-if="!lines.length"><td colspan="5">Aucune ligne salariale.</td></tr>
             </tbody>
@@ -168,16 +177,16 @@ defineExpose({ open, close });
 
       <section class="payroll-slip-calculation">
         <div>
-          <h3>Gains</h3>
+          <h3>Salaire</h3>
           <dl>
             <template v-for="row in gains" :key="n(row, 'id')">
-              <dt>{{ s(row, 'libelle') }}</dt>
-              <dd>{{ money(n(row, 'montant_centimes')) }}</dd>
+              <dt>{{ salaryLabel(s(row, 'libelle')) }}</dt>
+              <dd>{{ amount(n(row, 'montant_centimes')) }}</dd>
             </template>
           </dl>
           <div class="payroll-slip-subtotal">
             <strong>Salaire brut</strong>
-            <strong>{{ money(n(payroll, 'brut_centimes')) }}</strong>
+            <strong>{{ amount(n(payroll, 'brut_centimes')) }}</strong>
           </div>
         </div>
         <div>
@@ -185,32 +194,39 @@ defineExpose({ open, close });
           <dl>
             <template v-for="row in deductions" :key="n(row, 'id')">
               <dt>{{ s(row, 'libelle') }} <small>{{ rate(n(row, 'taux_ppm')) }}</small></dt>
-              <dd>− {{ money(n(row, 'montant_centimes')) }}</dd>
+              <dd>{{ amount(n(row, 'montant_centimes')) }}</dd>
             </template>
           </dl>
           <div class="payroll-slip-subtotal">
             <strong>Total des retenues</strong>
-            <strong>− {{ money(n(payroll, 'total_deductions_centimes')) }}</strong>
+            <strong>{{ amount(n(payroll, 'total_deductions_centimes')) }}</strong>
           </div>
         </div>
       </section>
 
       <section class="payroll-slip-net">
         <span>Salaire net à verser</span>
-        <strong>{{ money(n(payroll, 'net_centimes')) }}</strong>
+        <strong>{{ amount(n(payroll, 'net_centimes')) }}</strong>
       </section>
 
       <details class="payroll-slip-employer">
-        <summary>Charges employeur — information interne</summary>
+        <summary>
+          <span>Charges employeur — information interne</span>
+          <svg class="payroll-details-chevron" viewBox="0 0 20 20" aria-hidden="true">
+            <path d="m5 7.5 5 5 5-5" />
+          </svg>
+        </summary>
         <dl>
+          <dt class="payroll-employer-gross"><strong>Salaire brut</strong></dt>
+          <dd class="payroll-employer-gross"><strong>{{ amount(n(payroll, 'brut_centimes')) }}</strong></dd>
           <template v-for="row in employerCharges" :key="n(row, 'id')">
             <dt>{{ s(row, 'libelle') }} <small>{{ rate(n(row, 'taux_ppm')) }}</small></dt>
-            <dd>{{ money(n(row, 'montant_centimes')) }}</dd>
+            <dd>{{ amount(n(row, 'montant_centimes')) }}</dd>
           </template>
         </dl>
         <div class="payroll-slip-subtotal">
           <strong>Coût total employeur</strong>
-          <strong>{{ money(n(payroll, 'cout_total_centimes')) }}</strong>
+          <strong>{{ amount(n(payroll, 'cout_total_centimes')) }}</strong>
         </div>
       </details>
 

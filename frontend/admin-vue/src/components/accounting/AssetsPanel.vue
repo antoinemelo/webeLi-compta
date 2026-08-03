@@ -14,6 +14,7 @@ import SkeletonBlock from '@/components/ui/SkeletonBlock.vue';
 import { useToastFeedback } from '@/composables/toastFeedback';
 import { useAssetStore } from '@/stores/assets';
 import { useContextStore } from '@/stores/context';
+import { formatDate } from '@/utils/dateFormat';
 
 const props = defineProps<{ exerciseId: number; currency: string }>();
 const assets = useAssetStore();
@@ -554,7 +555,7 @@ async function reverseDisposal(): Promise<void> {
                 </td>
                 <td><span class="category-badge">{{ asset.category_code }}</span><small>{{ asset.category }}</small></td>
                 <td><span class="account-cell">{{ categoryForAsset(asset)?.accounts.asset }}</span></td>
-                <td>{{ asset.in_service_date }}</td>
+                <td>{{ formatDate(asset.in_service_date) }}</td>
                 <td class="amount">{{ formatMoney(asset.acquisition_value_cents) }}</td>
                 <td class="amount">{{ formatMoney(asset.posted_depreciation_cents) }}</td>
                 <td class="amount"><strong>{{ formatMoney(asset.net_book_value_cents) }}</strong></td>
@@ -632,10 +633,10 @@ async function reverseDisposal(): Promise<void> {
                   <thead><tr><th>Période</th><th>Actifs</th><th>Jours</th><th>Date comptable</th><th>Dotation totale</th><th>Statut</th><th aria-label="Actions"></th></tr></thead>
                   <tbody>
                     <tr v-for="period in schedulePeriodsForTab(group, scheduleTab)" :key="period.key">
-                      <td>{{ period.startDate }} – {{ period.endDate }}</td>
+                      <td>{{ formatDate(period.startDate) }} – {{ formatDate(period.endDate) }}</td>
                       <td><div class="asset-code-list"><button v-for="asset in period.assets" :key="asset.id" class="asset-code-link compact" type="button" :title="asset.label" @click="openAsset(asset.id)">{{ asset.code }}</button></div></td>
                       <td>{{ period.days ?? '—' }}</td>
-                      <td>{{ period.postingDate }}</td>
+                      <td>{{ formatDate(period.postingDate) }}</td>
                       <td class="amount"><strong>{{ formatMoney(period.amountCents) }}</strong></td>
                       <td><span :class="['status-chip', schedulePeriodStatus(period) === 'comptabilisee' ? 'ok' : '']">{{ statusLabel(schedulePeriodStatus(period)) }}</span></td>
                       <td class="table-action-cell">
@@ -666,7 +667,7 @@ async function reverseDisposal(): Promise<void> {
       <section v-else-if="section === 'reconciliation'" class="panel">
         <div class="section-heading">
           <div><h3>Réconciliation au grand livre</h3><p>{{ workspace.definitions.reconciliation }}</p></div>
-          <span class="status-chip">Au {{ workspace.exercise.end_date }}</span>
+          <span class="status-chip">Au {{ formatDate(workspace.exercise.end_date) }}</span>
         </div>
         <div v-if="workspace.reconciliation.length" class="table-scroll">
           <table class="closure-table reconciliation-table">
@@ -710,7 +711,7 @@ async function reverseDisposal(): Promise<void> {
                           <div class="table-scroll">
                             <table class="closure-table compact-detail-table">
                               <thead><tr><th>Actif</th><th>Référence</th><th>Acquisition</th><th>Mise en service</th><th>Valeur brute</th></tr></thead>
-                              <tbody><tr v-for="asset in row.assets" :key="asset.id"><td><button class="asset-code-link" type="button" @click="openAsset(asset.id)">{{ asset.code }}</button><small>{{ asset.label }}</small></td><td>{{ asset.acquisition_reference }}</td><td>{{ asset.acquisition_date }}</td><td>{{ asset.in_service_date }}</td><td class="amount"><strong>{{ formatMoney(asset.acquisition_value_cents) }}</strong></td></tr></tbody>
+                              <tbody><tr v-for="asset in row.assets" :key="asset.id"><td><button class="asset-code-link" type="button" @click="openAsset(asset.id)">{{ asset.code }}</button><small>{{ asset.label }}</small></td><td>{{ asset.acquisition_reference }}</td><td>{{ formatDate(asset.acquisition_date) }}</td><td>{{ formatDate(asset.in_service_date) }}</td><td class="amount"><strong>{{ formatMoney(asset.acquisition_value_cents) }}</strong></td></tr></tbody>
                               <tfoot><tr><th colspan="4">Total du registre</th><th class="amount">{{ formatMoney(row.register_gross_cents) }}</th></tr></tfoot>
                             </table>
                           </div>
@@ -720,7 +721,7 @@ async function reverseDisposal(): Promise<void> {
                           <div v-if="row.ledger_gross_movements.length" class="table-scroll">
                             <table class="closure-table compact-detail-table">
                               <thead><tr><th>Date</th><th>Journal / écriture</th><th>Référence</th><th>Libellé</th><th>Débit</th><th>Crédit</th><th>Net</th></tr></thead>
-                              <tbody><tr v-for="movement in row.ledger_gross_movements" :key="movement.entry_id"><td>{{ movement.date }}</td><td><strong>{{ movement.journal }}</strong><small>{{ movement.entry_number || `#${movement.entry_id}` }}</small></td><td>{{ movement.reference || '—' }}</td><td>{{ movement.label }}</td><td class="amount">{{ formatMoney(movement.debit_cents) }}</td><td class="amount">{{ formatMoney(movement.credit_cents) }}</td><td class="amount"><strong>{{ formatMoney(movement.net_cents) }}</strong></td></tr></tbody>
+                              <tbody><tr v-for="movement in row.ledger_gross_movements" :key="movement.entry_id"><td>{{ formatDate(movement.date) }}</td><td><strong>{{ movement.journal }}</strong><small>{{ movement.entry_number || `#${movement.entry_id}` }}</small></td><td>{{ movement.reference || '—' }}</td><td>{{ movement.label }}</td><td class="amount">{{ formatMoney(movement.debit_cents) }}</td><td class="amount">{{ formatMoney(movement.credit_cents) }}</td><td class="amount"><strong>{{ formatMoney(movement.net_cents) }}</strong></td></tr></tbody>
                               <tfoot><tr><th colspan="6">Solde du grand livre</th><th class="amount">{{ formatMoney(row.ledger_gross_cents) }}</th></tr></tfoot>
                             </table>
                           </div>
@@ -809,7 +810,7 @@ async function reverseDisposal(): Promise<void> {
           <label>Facture fournisseur
             <select v-model="assetDraft.acquisition_document_id">
               <option :value="null">Référence externe uniquement</option>
-              <option v-for="document in workspace.catalog.acquisition_documents" :key="document.id" :value="document.id">{{ document.date }} · {{ document.number || `#${document.id}` }} · {{ formatMoney(document.gross_cents) }}</option>
+              <option v-for="document in workspace.catalog.acquisition_documents" :key="document.id" :value="document.id">{{ formatDate(document.date) }} · {{ document.number || `#${document.id}` }} · {{ formatMoney(document.gross_cents) }}</option>
             </select>
           </label>
           <label>Date d’acquisition<input v-model="assetDraft.acquisition_date" type="date" required></label>
@@ -836,8 +837,8 @@ async function reverseDisposal(): Promise<void> {
           </div>
           <dl class="asset-detail-grid">
             <div><dt>Référence</dt><dd>{{ selected.acquisition_reference }}</dd></div>
-            <div><dt>Acquisition</dt><dd>{{ selected.acquisition_date }}</dd></div>
-            <div><dt>Mise en service</dt><dd>{{ selected.in_service_date }}</dd></div>
+            <div><dt>Acquisition</dt><dd>{{ formatDate(selected.acquisition_date) }}</dd></div>
+            <div><dt>Mise en service</dt><dd>{{ formatDate(selected.in_service_date) }}</dd></div>
             <div><dt>Durée utile</dt><dd>{{ selected.duration_months }} mois</dd></div>
             <div><dt>Valeur brute</dt><dd>{{ formatMoney(selected.acquisition_value_cents) }}</dd></div>
             <div><dt>Valeur résiduelle</dt><dd>{{ formatMoney(selected.residual_value_cents) }}</dd></div>
@@ -856,7 +857,7 @@ async function reverseDisposal(): Promise<void> {
             <div class="table-scroll">
               <table class="closure-table">
                 <thead><tr><th>Période</th><th>Date comptable</th><th>Dotation</th><th>Statut</th></tr></thead>
-                <tbody><tr v-for="row in selected.schedule" :key="row.id"><td>{{ row.start_date }} – {{ row.end_date }}</td><td>{{ row.posting_date }}</td><td class="amount">{{ formatMoney(row.amount_cents) }}</td><td><span class="status-chip">{{ statusLabel(row.status) }}</span></td></tr></tbody>
+                <tbody><tr v-for="row in selected.schedule" :key="row.id"><td>{{ formatDate(row.start_date) }} – {{ formatDate(row.end_date) }}</td><td>{{ formatDate(row.posting_date) }}</td><td class="amount">{{ formatMoney(row.amount_cents) }}</td><td><span class="status-chip">{{ statusLabel(row.status) }}</span></td></tr></tbody>
               </table>
             </div>
           </section>
@@ -870,7 +871,7 @@ async function reverseDisposal(): Promise<void> {
               <button class="button danger" :disabled="!workspace.capabilities.post || !journalId">Comptabiliser la sortie</button>
             </form>
             <div v-if="selected.exits.length" class="table-scroll">
-              <table class="closure-table"><thead><tr><th>Date</th><th>Type</th><th>VNC</th><th>Produit</th><th>Résultat</th><th>Statut</th></tr></thead><tbody><tr v-for="item in selected.exits" :key="item.id"><td>{{ item.date }}</td><td>{{ statusLabel(item.type) }}</td><td class="amount">{{ formatMoney(item.net_cents) }}</td><td class="amount">{{ formatMoney(item.proceeds_cents) }}</td><td class="amount">{{ formatMoney(item.result_cents) }}</td><td><span class="status-chip">{{ statusLabel(item.status) }}</span></td></tr></tbody></table>
+              <table class="closure-table"><thead><tr><th>Date</th><th>Type</th><th>VNC</th><th>Produit</th><th>Résultat</th><th>Statut</th></tr></thead><tbody><tr v-for="item in selected.exits" :key="item.id"><td>{{ formatDate(item.date) }}</td><td>{{ statusLabel(item.type) }}</td><td class="amount">{{ formatMoney(item.net_cents) }}</td><td class="amount">{{ formatMoney(item.proceeds_cents) }}</td><td class="amount">{{ formatMoney(item.result_cents) }}</td><td><span class="status-chip">{{ statusLabel(item.status) }}</span></td></tr></tbody></table>
             </div>
           </section>
         </template>

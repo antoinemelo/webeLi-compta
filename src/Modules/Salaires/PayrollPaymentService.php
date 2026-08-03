@@ -10,6 +10,15 @@ use Throwable;
 
 final class PayrollPaymentService
 {
+    public const BENEFICIARY_LABELS = [
+        'net' => 'Employé',
+        'ocas' => 'OCAS',
+        'laa' => 'Assureur LAA',
+        'lpp' => 'Institution LPP',
+        'impot_source' => 'Administration fiscale',
+        'organisme' => 'Organisme',
+    ];
+
     private bool $transactionActive = false;
 
     public function __construct(
@@ -30,9 +39,24 @@ final class PayrollPaymentService
         string $reference = '',
         ?int $actorId = null,
         ?int $treasuryOperationalAccountId = null,
+        ?int $liabilityId = null,
     ): int {
+        $beneficiaryCode = $beneficiaryType === 'employe' ? 'net' : 'organisme';
+        if ($liabilityId !== null) {
+            $referenceLiability = $this->liability(
+                $organisationId,
+                $dossierId,
+                $liabilityId
+            );
+            $beneficiaryCode = (string) $referenceLiability['type'];
+            $beneficiaryType = $beneficiaryCode === 'net' ? 'employe' : 'organisme';
+            $employeeId = $beneficiaryCode === 'net'
+                ? (int) $referenceLiability['employe_id']
+                : null;
+        }
         if (
             !in_array($beneficiaryType, ['employe', 'organisme'], true)
+            || !array_key_exists($beneficiaryCode, self::BENEFICIARY_LABELS)
             || !$this->validDate($date)
             || $amountCents <= 0
             || $treasuryAccountId <= 0
@@ -69,13 +93,13 @@ final class PayrollPaymentService
         }
         $stmt = $this->pdo->prepare(
             'INSERT INTO paiements_salaires
-             (organisation_id, dossier_id, beneficiaire_type, employe_id,
+             (organisation_id, dossier_id, beneficiaire_type, beneficiaire_code, employe_id,
               date_paiement, montant_centimes, reference,
               compte_tresorerie_id, compte_tresorerie_operationnel_id, cree_par)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
         $stmt->execute([
-            $organisationId, $dossierId, $beneficiaryType, $employeeId,
+            $organisationId, $dossierId, $beneficiaryType, $beneficiaryCode, $employeeId,
             $date, $amountCents, trim($reference), $treasuryAccountId,
             $treasuryOperationalAccountId, $actorId,
         ]);
@@ -87,7 +111,11 @@ final class PayrollPaymentService
             $dossierId,
             'paiement_salaire',
             (string) $id,
-            ['montant_centimes' => $amountCents]
+            [
+                'montant_centimes' => $amountCents,
+                'beneficiaire_code' => $beneficiaryCode,
+                'dette_reference_id' => $liabilityId,
+            ]
         );
         return $id;
     }
@@ -120,13 +148,22 @@ final class PayrollPaymentService
             if ($payment['statut'] !== 'valide') {
                 throw new PayrollException('Le paiement salarial est annulé.');
             }
-            $employeePayment = $payment['beneficiaire_type'] === 'employe';
+            $beneficiaryCode = (string) ($payment['beneficiaire_code'] ?? (
+                $payment['beneficiaire_type'] === 'employe' ? 'net' : 'organisme'
+            ));
+            $employeePayment = $beneficiaryCode === 'net';
             if (
                 ($employeePayment && (
                     $liability['type'] !== 'net'
                     || (int) $payment['employe_id'] !== (int) $liability['employe_id']
                 ))
-                || (!$employeePayment && $liability['type'] === 'net')
+                || (!$employeePayment && (
+                    $liability['type'] === 'net'
+                    || (
+                        $beneficiaryCode !== 'organisme'
+                        && $liability['type'] !== $beneficiaryCode
+                    )
+                ))
             ) {
                 throw new PayrollException('Paiement et dette salariale incompatibles.');
             }
@@ -196,6 +233,14 @@ final class PayrollPaymentService
                     'Le paiement doit être entièrement alloué avant comptabilisation.'
                 );
             }
+            if (array_filter(
+                $allocations,
+                static fn (array $row): bool => $row['fiche_ecriture_id'] === null
+            ) !== []) {
+                throw new PayrollException(
+                    'La fiche de salaire doit être comptabilisée avant son décaissement.'
+                );
+            }
             $lines = [];
             foreach ($allocations as $allocation) {
                 $lines[] = [
@@ -244,10 +289,29 @@ final class PayrollPaymentService
     }
 
     /** @return list<array<string,mixed>> */
-    public function payments(int $organisationId, int $dossierId): array
+    public function payments(
+        int $organisationId,
+        int $dossierId,
+        bool $revealPii = true,
+    ): array
     {
         $stmt = $this->pdo->prepare(
             "SELECT p.*, e.prenom, e.nom,
+                    c.numero AS compte_tresorerie_numero,
+                    c.libelle AS compte_tresorerie_libelle,
+                    pe.numero AS ecriture_numero,
+                    (
+                      SELECT GROUP_CONCAT(DISTINCT fe.numero)
+                      FROM allocations_salaires source_a
+                      JOIN dettes_salaires source_d
+                        ON source_d.id = source_a.dette_salaire_id
+                      JOIN fiches_salaires source_f
+                        ON source_f.id = source_d.fiche_salaire_id
+                      JOIN ecritures fe ON fe.id = source_f.ecriture_id
+                      WHERE source_a.paiement_salaire_id = p.id
+                        AND source_a.statut = 'valide'
+                    ) AS dette_ecriture_numeros,
+                    COALESCE(t.monnaie, d.monnaie) AS monnaie,
                     COALESCE((
                       SELECT SUM(a.montant_centimes)
                       FROM allocations_salaires a
@@ -255,6 +319,11 @@ final class PayrollPaymentService
                     ), 0) AS alloue_centimes
              FROM paiements_salaires p
              LEFT JOIN employes e ON e.id = p.employe_id
+             JOIN dossiers d ON d.id = p.dossier_id
+             LEFT JOIN comptes c ON c.id = p.compte_tresorerie_id
+             LEFT JOIN ecritures pe ON pe.id = p.ecriture_id
+             LEFT JOIN comptes_tresorerie t
+               ON t.id = p.compte_tresorerie_operationnel_id
              WHERE p.organisation_id = ? AND p.dossier_id = ?
              ORDER BY p.date_paiement DESC, p.id DESC"
         );
@@ -263,13 +332,27 @@ final class PayrollPaymentService
         foreach ($rows as &$row) {
             $row['non_alloue_centimes'] = (int) $row['montant_centimes']
                 - (int) $row['alloue_centimes'];
+            $code = (string) ($row['beneficiaire_code'] ?? (
+                $row['beneficiaire_type'] === 'employe' ? 'net' : 'organisme'
+            ));
+            $row['beneficiaire_code'] = $code;
+            $row['beneficiaire_libelle'] = $code === 'net' && $revealPii
+                ? trim((string) $row['prenom'] . ' ' . (string) $row['nom'])
+                : (self::BENEFICIARY_LABELS[$code] ?? $code);
+            if (!$revealPii) {
+                unset($row['prenom'], $row['nom'], $row['employe_id']);
+            }
         }
         unset($row);
         return $rows;
     }
 
     /** @return list<array<string,mixed>> */
-    public function liabilities(int $organisationId, int $dossierId): array
+    public function liabilities(
+        int $organisationId,
+        int $dossierId,
+        bool $revealPii = true,
+    ): array
     {
         $stmt = $this->pdo->prepare(
             "SELECT d.*, f.annee, f.mois, f.employe_id, e.prenom, e.nom,
@@ -290,9 +373,151 @@ final class PayrollPaymentService
         foreach ($rows as &$row) {
             $row['solde_centimes'] = (int) $row['montant_centimes']
                 - (int) $row['alloue_centimes'];
+            $code = (string) $row['type'];
+            $row['beneficiaire_code'] = $code;
+            $row['beneficiaire_libelle'] = $code === 'net' && $revealPii
+                ? trim((string) $row['prenom'] . ' ' . (string) $row['nom'])
+                : (self::BENEFICIARY_LABELS[$code] ?? $code);
+            $row['periode_libelle'] = sprintf(
+                '%02d/%04d',
+                (int) $row['mois'],
+                (int) $row['annee']
+            );
+            if (!$revealPii) {
+                unset($row['prenom'], $row['nom'], $row['employe_id']);
+            }
         }
         unset($row);
         return $rows;
+    }
+
+    /** @return list<array<string,mixed>> */
+    public function allocations(
+        int $organisationId,
+        int $dossierId,
+        bool $revealPii = true,
+    ): array {
+        $stmt = $this->pdo->prepare(
+            "SELECT a.*, p.reference AS paiement_reference, p.date_paiement,
+                    p.beneficiaire_code, d.type AS dette_type,
+                    f.annee, f.mois, f.employe_id, e.prenom, e.nom
+             FROM allocations_salaires a
+             JOIN paiements_salaires p ON p.id = a.paiement_salaire_id
+             JOIN dettes_salaires d ON d.id = a.dette_salaire_id
+             JOIN fiches_salaires f ON f.id = d.fiche_salaire_id
+             JOIN employes e ON e.id = f.employe_id
+             WHERE a.organisation_id = ? AND a.dossier_id = ?
+             ORDER BY a.cree_le DESC, a.id DESC"
+        );
+        $stmt->execute([$organisationId, $dossierId]);
+        $rows = $stmt->fetchAll();
+        foreach ($rows as &$row) {
+            $code = (string) $row['dette_type'];
+            $beneficiary = $code === 'net' && $revealPii
+                ? trim((string) $row['prenom'] . ' ' . (string) $row['nom'])
+                : (self::BENEFICIARY_LABELS[$code] ?? $code);
+            $row['beneficiaire_libelle'] = $beneficiary;
+            $row['dette_libelle'] = sprintf(
+                '%s · %02d/%04d',
+                $beneficiary,
+                (int) $row['mois'],
+                (int) $row['annee']
+            );
+            if (!$revealPii) {
+                unset($row['prenom'], $row['nom'], $row['employe_id']);
+            }
+        }
+        unset($row);
+        return $rows;
+    }
+
+    public function unallocate(
+        int $organisationId,
+        int $dossierId,
+        int $allocationId,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $allocationId,
+            $actorId
+        ): void {
+            $stmt = $this->pdo->prepare(
+                "SELECT a.*, p.ecriture_id, d.fiche_salaire_id
+                 FROM allocations_salaires a
+                 JOIN paiements_salaires p ON p.id = a.paiement_salaire_id
+                 JOIN dettes_salaires d ON d.id = a.dette_salaire_id
+                 WHERE a.id = ? AND a.organisation_id = ? AND a.dossier_id = ?"
+            );
+            $stmt->execute([$allocationId, $organisationId, $dossierId]);
+            $allocation = $stmt->fetch();
+            if ($allocation === false) {
+                throw new PayrollException('Allocation salariale absente du dossier.');
+            }
+            if ($allocation['statut'] === 'annule') {
+                return;
+            }
+            if ($allocation['ecriture_id'] !== null) {
+                throw new PayrollException(
+                    'Le paiement comptabilisé ne peut plus être délettré.'
+                );
+            }
+            $this->pdo->prepare(
+                "UPDATE allocations_salaires SET statut = 'annule'
+                 WHERE id = ? AND statut = 'valide'"
+            )->execute([$allocationId]);
+            $this->refreshPayrollStatus((int) $allocation['fiche_salaire_id']);
+            $this->audit->log(
+                'salaires.allocation_annulee',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'allocation_salaire',
+                (string) $allocationId
+            );
+        }, true);
+    }
+
+    public function cancel(
+        int $organisationId,
+        int $dossierId,
+        int $paymentId,
+        ?int $actorId = null,
+    ): void {
+        $this->transaction(function () use (
+            $organisationId,
+            $dossierId,
+            $paymentId,
+            $actorId
+        ): void {
+            $payment = $this->payment($organisationId, $dossierId, $paymentId);
+            if ($payment['statut'] === 'annule') {
+                return;
+            }
+            if ($payment['ecriture_id'] !== null) {
+                throw new PayrollException(
+                    'Un paiement comptabilisé doit être contre-passé avant annulation.'
+                );
+            }
+            if ($this->allocatedFor('paiement_salaire_id', $paymentId) > 0) {
+                throw new PayrollException(
+                    'Délettrez le paiement avant de l’annuler.'
+                );
+            }
+            $this->pdo->prepare(
+                "UPDATE paiements_salaires SET statut = 'annule'
+                 WHERE id = ? AND statut = 'valide'"
+            )->execute([$paymentId]);
+            $this->audit->log(
+                'salaires.paiement_annule',
+                $actorId,
+                $organisationId,
+                $dossierId,
+                'paiement_salaire',
+                (string) $paymentId
+            );
+        }, true);
     }
 
     /** @return array<string,mixed> */
@@ -343,9 +568,11 @@ final class PayrollPaymentService
     private function allocationRows(int $paymentId): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT a.montant_centimes, d.compte_dette_id, d.type
+            "SELECT a.montant_centimes, d.compte_dette_id, d.type,
+                    f.ecriture_id AS fiche_ecriture_id
              FROM allocations_salaires a
              JOIN dettes_salaires d ON d.id = a.dette_salaire_id
+             JOIN fiches_salaires f ON f.id = d.fiche_salaire_id
              WHERE a.paiement_salaire_id = ? AND a.statut = 'valide'
              ORDER BY a.id"
         );
@@ -370,15 +597,32 @@ final class PayrollPaymentService
         );
         $stmt->execute([$payrollId]);
         $row = $stmt->fetch();
+        if ($row === false || (int) $row['total'] <= 0) {
+            return;
+        }
         if (
-            $row !== false
-            && in_array($row['statut'], ['validee', 'comptabilisee'], true)
-            && (int) $row['total'] > 0
+            $row['statut'] === 'comptabilisee'
             && (int) $row['total'] === (int) $row['alloue']
         ) {
             $this->pdo->prepare(
                 "UPDATE fiches_salaires SET statut = 'payee',
                     payee_le = datetime('now'), version = version + 1 WHERE id = ?"
+            )->execute([$payrollId]);
+            return;
+        }
+        if (
+            $row['statut'] === 'payee'
+            && (int) $row['total'] !== (int) $row['alloue']
+        ) {
+            $this->pdo->prepare(
+                "UPDATE fiches_salaires
+                 SET statut = CASE
+                       WHEN ecriture_id IS NULL THEN 'validee'
+                       ELSE 'comptabilisee'
+                     END,
+                     payee_le = NULL,
+                     version = version + 1
+                 WHERE id = ?"
             )->execute([$payrollId]);
         }
     }

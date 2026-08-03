@@ -18,6 +18,7 @@ import { useExpensesStore } from '@/stores/expenses';
 import { useTreasuryStore } from '@/stores/treasury';
 import { useNotificationStore } from '@/stores/notifications';
 import type { ExpenseItem, PublicMarketSeries } from '@/api/contracts';
+import { formatDate, formatDateTime } from '@/utils/dateFormat';
 
 const route = useRoute();
 const router = useRouter();
@@ -66,7 +67,38 @@ const paymentDraft = reactive({
   collective_account_id: 0,
   bank_line_id: 0
 });
-const allocationDraft = reactive({ payment_id: 0, document_id: 0, amount: '' });
+const allocationDraft = reactive({ payment_key: '', target_key: '', amount: '' });
+const billingMatchingEnabled = computed(() =>
+  Boolean(treasury.workspace?.sources.billing && treasury.workspace.capabilities.match)
+);
+const payrollMatchingEnabled = computed(() =>
+  Boolean(treasury.workspace?.sources.payroll && treasury.workspace.capabilities.payroll_match)
+);
+const canMatchOpenItems = computed(() =>
+  billingMatchingEnabled.value || payrollMatchingEnabled.value
+);
+const matchingTargetLabel = computed(() => {
+  if (billingMatchingEnabled.value && payrollMatchingEnabled.value) {
+    return 'Dette ouverte compatible';
+  }
+  return payrollMatchingEnabled.value
+    ? 'Dette salariale compatible'
+    : 'Facture compatible';
+});
+const matchingIntro = computed(() => {
+  if (billingMatchingEnabled.value && payrollMatchingEnabled.value) {
+    return 'Un paiement reste indépendant et peut couvrir plusieurs dettes ouvertes compatibles.';
+  }
+  return payrollMatchingEnabled.value
+    ? 'Un paiement salarial peut couvrir plusieurs dettes salariales du même bénéficiaire.'
+    : 'Un paiement reste indépendant et peut couvrir plusieurs documents.';
+});
+const paymentPartyLabel = computed(() => {
+  if (treasury.workspace?.sources.billing && treasury.workspace.sources.payroll) {
+    return 'Contact / bénéficiaire';
+  }
+  return treasury.workspace?.sources.payroll ? 'Bénéficiaire' : 'Contact indicatif';
+});
 const collectiveAccountOptions = computed(() => {
   const treasuryAccountIds = new Set(
     (treasury.workspace?.treasury_accounts ?? [])
@@ -83,28 +115,53 @@ const collectiveAccountOptions = computed(() => {
 const availableAllocationPayments = computed(() =>
   (treasury.workspace?.payments ?? []).filter(
     (item) => item.matching_eligible
+      && (item.source_type === 'payroll'
+        ? payrollMatchingEnabled.value
+        : billingMatchingEnabled.value)
       && item.non_alloue_centimes > 0 && item.statut === 'valide'
   )
 );
 const selectedAllocationPayment = computed(() =>
   availableAllocationPayments.value.find(
-    (item) => item.id === Number(allocationDraft.payment_id)
+    (item) => item.payment_key === allocationDraft.payment_key
   ) ?? null
 );
-const compatibleAllocationDocuments = computed(() => {
+const compatibleAllocationTargets = computed(() => {
   const payment = selectedAllocationPayment.value;
   if (!payment) return [];
+  if (payment.source_type === 'payroll') {
+    const beneficiaryCode = String(payment.beneficiaire_code || 'organisme');
+    return (treasury.workspace?.open_salary_liabilities ?? [])
+      .filter((liability) => liability.open_cents > 0 && (
+        beneficiaryCode === 'organisme'
+          ? liability.type !== 'net'
+          : liability.beneficiaire_code === beneficiaryCode
+      ))
+      .map((liability) => ({
+        target_key: liability.liability_key,
+        label: liability.target_label,
+        open_cents: liability.open_cents,
+        currency: liability.currency
+      }));
+  }
   const expectedType = payment.sens === 'encaissement'
     ? 'facture_client'
     : 'facture_fournisseur';
-  return (treasury.workspace?.open_documents ?? []).filter((document) =>
-    document.type === expectedType
-    && document.currency === payment.monnaie
-    && (
-      !payment.compte_collectif_id
-      || document.collective_account_id === Number(payment.compte_collectif_id)
+  return (treasury.workspace?.open_documents ?? [])
+    .filter((document) =>
+      document.type === expectedType
+      && document.currency === payment.monnaie
+      && (
+        !payment.compte_collectif_id
+        || document.collective_account_id === Number(payment.compte_collectif_id)
+      )
     )
-  );
+    .map((document) => ({
+      target_key: `billing:${document.id}`,
+      label: `${document.number} · ${document.contact}`,
+      open_cents: document.open_cents,
+      currency: document.currency
+    }));
 });
 const paymentRows = computed(() => (
   (treasury.workspace?.payments ?? [])
@@ -124,9 +181,15 @@ const paymentRows = computed(() => (
       direction_label: payment.sens === 'encaissement'
         ? 'Encaissement' : 'Décaissement',
       origin_label: payment.origine === 'journal'
-        ? 'Journal' : payment.origine === 'lot' ? 'Lot' : 'Liquidités',
-      accounting_label: payment.ecriture_id
-        ? 'Comptabilisé' : 'À comptabiliser',
+        ? 'Journal'
+        : payment.origine === 'lot'
+          ? 'Lot'
+          : payment.origine === 'salaires' ? 'Salaires' : 'Liquidités',
+      accounting_label: payment.source_type === 'payroll'
+        ? (payment.ecriture_id
+            ? 'Comptabilisé'
+            : 'Décaissement à comptabiliser')
+        : (payment.ecriture_id ? 'Comptabilisé' : 'À comptabiliser'),
       contact_label: payment.contact || 'Plusieurs / non attribué'
     }))
 ));
@@ -342,30 +405,30 @@ watch(
   () => { void loadMarketTab(); }
 );
 watch(
-  () => allocationDraft.payment_id,
+  () => allocationDraft.payment_key,
   () => {
-    allocationDraft.document_id = 0;
+    allocationDraft.target_key = '';
     allocationDraft.amount = '';
-    if (compatibleAllocationDocuments.value.length === 1) {
-      const document = compatibleAllocationDocuments.value[0];
-      allocationDraft.document_id = document.id;
+    if (compatibleAllocationTargets.value.length === 1) {
+      const target = compatibleAllocationTargets.value[0];
+      allocationDraft.target_key = target.target_key;
       allocationDraft.amount = inputMoney(Math.min(
         selectedAllocationPayment.value?.non_alloue_centimes ?? 0,
-        document.open_cents
+        target.open_cents
       ));
     }
   }
 );
 watch(
-  () => allocationDraft.document_id,
+  () => allocationDraft.target_key,
   () => {
-    const document = compatibleAllocationDocuments.value.find(
-      (item) => item.id === Number(allocationDraft.document_id)
+    const target = compatibleAllocationTargets.value.find(
+      (item) => item.target_key === allocationDraft.target_key
     );
-    if (!document || !selectedAllocationPayment.value) return;
+    if (!target || !selectedAllocationPayment.value) return;
     allocationDraft.amount = inputMoney(Math.min(
       selectedAllocationPayment.value.non_alloue_centimes,
-      document.open_cents
+      target.open_cents
     ));
   }
 );
@@ -464,14 +527,7 @@ function statusLabel(status: string): string {
 }
 
 function dateLabel(value: string): string {
-  const [year, month, day] = value.split('-').map(Number);
-  if (!year || !month || !day) return value || '—';
-  return new Intl.DateTimeFormat('fr-CH', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    timeZone: 'UTC'
-  }).format(new Date(Date.UTC(year, month - 1, day)));
+  return formatDate(value);
 }
 
 function fileSize(bytes: number): string {
@@ -685,30 +741,91 @@ async function openAllocatedDocument(row: Record<string, unknown>): Promise<void
   });
 }
 
-async function startAllocation(paymentId: number): Promise<void> {
-  allocationDraft.payment_id = paymentId;
+async function startAllocation(paymentKey: string): Promise<void> {
+  allocationDraft.payment_key = paymentKey;
   await router.push('/liquidites/lettrage');
 }
 
-async function allocatePayment(): Promise<void> {
+function canMatchPayment(row: Record<string, unknown>): boolean {
+  return String(row.source_type) === 'payroll'
+    ? payrollMatchingEnabled.value
+    : billingMatchingEnabled.value;
+}
+
+function canPostPayrollPayment(row: Record<string, unknown>): boolean {
+  return String(row.source_type) === 'payroll'
+    && treasury.workspace?.capabilities.payroll_match === true
+    && !row.ecriture_id
+    && String(row.statut) === 'valide'
+    && Number(row.non_alloue_centimes) === 0;
+}
+
+async function postPayrollPayment(row: Record<string, unknown>): Promise<void> {
+  const paymentDate = String(row.date_paiement || today);
+  const exercise = treasury.workspace?.catalog.exercises.find(
+    (item) => item.statut === 'ouvert'
+      && paymentDate >= String(item.date_debut)
+      && paymentDate <= String(item.date_fin)
+  ) ?? treasury.workspace?.catalog.exercises.find((item) => item.statut === 'ouvert');
+  const journal = treasury.workspace?.catalog.journals.find(
+    (item) => item.type === 'banque'
+  ) ?? treasury.workspace?.catalog.journals.find((item) => item.type === 'general');
+  if (!exercise || !journal) {
+    notifications.push(
+      'Configurez un exercice ouvert et un journal de banque ou général.',
+      'warning'
+    );
+    return;
+  }
   try {
-    await treasury.mutate('/liquidites/lettrage/allocations', {
-      payment_id: Number(allocationDraft.payment_id),
-      document_id: Number(allocationDraft.document_id),
-      amount_cents: cents(allocationDraft.amount)
+    await treasury.mutate('/salaires/paiements/comptabiliser', {
+      id: Number(row.source_id),
+      version: 0,
+      exercise_id: exercise.id,
+      journal_id: journal.id,
+      date: paymentDate
     });
+    notifications.push('Décaissement salarial comptabilisé.', 'success');
+  } catch {
+    notifications.push(treasury.error, 'warning');
+  }
+}
+
+async function allocatePayment(): Promise<void> {
+  const payment = selectedAllocationPayment.value;
+  if (!payment || !allocationDraft.target_key) return;
+  try {
+    if (payment.source_type === 'payroll') {
+      await treasury.mutate('/salaires/allocations', {
+        payment_id: payment.source_id,
+        liability_id: Number(allocationDraft.target_key.split(':')[1]),
+        amount_cents: cents(allocationDraft.amount)
+      });
+    } else {
+      await treasury.mutate('/liquidites/lettrage/allocations', {
+        payment_id: payment.source_id,
+        document_id: Number(allocationDraft.target_key.split(':')[1]),
+        amount_cents: cents(allocationDraft.amount)
+      });
+    }
     notifications.push('Paiement lettré.', 'success');
   } catch {
     notifications.push(treasury.error, 'warning');
   }
 }
 
-async function unallocate(id: number): Promise<void> {
+async function unallocate(row: Record<string, unknown>): Promise<void> {
   if (!window.confirm('Délettrer cette allocation ?')) return;
   try {
-    await treasury.mutate('/liquidites/lettrage/allocations/annuler', {
-      allocation_id: id
-    });
+    if (String(row.source_type) === 'payroll') {
+      await treasury.mutate('/salaires/allocations/annuler', {
+        id: Number(row.id), version: 0
+      });
+    } else {
+      await treasury.mutate('/liquidites/lettrage/allocations/annuler', {
+        allocation_id: Number(row.id)
+      });
+    }
     notifications.push('Allocation annulée.', 'success');
   } catch {
     notifications.push(treasury.error, 'warning');
@@ -1017,6 +1134,7 @@ async function toggleRecurrence(item: {
         ]"
         :rows="expenseRows"
       >
+        <template #cell-due_date="{ row }">{{ formatDate(String(row.due_date)) }}</template>
         <template #cell-display_number="{ row }">
           <button class="table-link" type="button" @click="openExpense(row as ExpenseItem)">{{ row.display_number }}</button>
         </template>
@@ -1195,6 +1313,7 @@ async function toggleRecurrence(item: {
           :columns="[{ key: 'label', label: 'Modèle' }, { key: 'supplier', label: 'Fournisseur' }, { key: 'cadence', label: 'Cadence' }, { key: 'next_date', label: 'Prochaine' }, { key: 'generations', label: 'Générées' }, { key: 'status_label', label: 'Statut' }, { key: 'actions', label: 'Actions' }]"
           :rows="recurrenceRows"
         >
+          <template #cell-next_date="{ row }">{{ formatDate(String(row.next_date)) }}</template>
           <template #cell-actions="{ row }">
             <ActionMenu :label="`Actions pour ${row.label}`">
               <button v-if="row.status !== 'termine' && workspace.capabilities.manage" type="button" @click="toggleRecurrence(row as { id: number; version: number; status: string })">{{ row.status === 'actif' ? 'Mettre en pause' : 'Reprendre' }}</button>
@@ -1264,7 +1383,7 @@ async function toggleRecurrence(item: {
             <template #default="{ describedBy }">
               <select id="suggestion-bank-line" v-model.number="suggestionDraft.bank_line_id" :aria-describedby="describedBy" required>
                 <option :value="0" disabled>Sélectionner</option>
-                <option v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id)" :key="line.id" :value="line.id">{{ line.booking_date }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
+                <option v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id)" :key="line.id" :value="line.id">{{ formatDate(line.booking_date) }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
               </select>
             </template>
           </FormField>
@@ -1337,7 +1456,7 @@ async function toggleRecurrence(item: {
               class="selection-row"
             >
               <input v-model="selectedBankLines" type="checkbox" :value="line.id">
-              <span>{{ line.booking_date }} · {{ line.label || line.counterparty }}</span>
+              <span>{{ formatDate(line.booking_date) }} · {{ line.label || line.counterparty }}</span>
               <strong>{{ money(line.amount_cents, line.currency) }}</strong>
             </label>
           </div>
@@ -1349,7 +1468,7 @@ async function toggleRecurrence(item: {
               class="selection-row"
             >
               <input v-model="selectedAccountingLines" type="checkbox" :value="line.id">
-              <span>{{ line.accounting_date }} · {{ line.entry_number }} · {{ line.label }}</span>
+              <span>{{ formatDate(line.accounting_date) }} · {{ line.entry_number }} · {{ line.label }}</span>
               <strong>{{ money(line.amount_cents) }}</strong>
             </label>
           </div>
@@ -1389,6 +1508,7 @@ async function toggleRecurrence(item: {
         ]"
         :rows="treasury.workspace.reconciliations"
       >
+        <template #cell-created_at="{ row }">{{ formatDateTime(String(row.created_at)) }}</template>
         <template #cell-difference_cents="{ row }">{{ money(Number(row.difference_cents)) }}</template>
         <template #cell-status="{ row }">{{ statusLabel(String(row.status)) }}</template>
         <template #cell-actions="{ row }">
@@ -1403,12 +1523,12 @@ async function toggleRecurrence(item: {
 
     <template v-else-if="workspace && treasury.workspace && activeTab === 'lettrage'">
       <div class="toolbar">
-        <div><p>Un paiement reste indépendant et peut couvrir plusieurs documents.</p></div>
+        <div><p>{{ matchingIntro }}</p></div>
       </div>
-      <form v-if="treasury.workspace.capabilities.match" class="editor-card" @submit.prevent="allocatePayment">
+      <form v-if="canMatchOpenItems" class="editor-card" @submit.prevent="allocatePayment">
         <div class="form-grid">
-          <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model.number="allocationDraft.payment_id" :aria-describedby="describedBy" required><option :value="0" disabled>Sélectionner</option><option v-for="item in availableAllocationPayments" :key="item.id" :value="item.id">{{ item.date_paiement }} · {{ item.sens === 'encaissement' ? 'Encaissement' : 'Décaissement' }} · {{ item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes, item.monnaie) }}</option></select></template></FormField>
-          <FormField id="allocation-document" label="Facture compatible" :hint="selectedAllocationPayment && !compatibleAllocationDocuments.length ? 'Aucune facture comptabilisée du même sens, de la même devise et du même compte de paiement.' : undefined"><template #default="{ describedBy }"><select id="allocation-document" v-model.number="allocationDraft.document_id" :aria-describedby="describedBy" :disabled="!selectedAllocationPayment || !compatibleAllocationDocuments.length" required><option :value="0" disabled>{{ selectedAllocationPayment ? 'Sélectionner' : 'Choisir d’abord un paiement' }}</option><option v-for="item in compatibleAllocationDocuments" :key="item.id" :value="item.id">{{ item.number }} · {{ item.contact }} · {{ money(item.open_cents, item.currency) }}</option></select></template></FormField>
+          <FormField id="allocation-payment" label="Paiement"><template #default="{ describedBy }"><select id="allocation-payment" v-model="allocationDraft.payment_key" :aria-describedby="describedBy" required><option value="" disabled>Sélectionner</option><option v-for="item in availableAllocationPayments" :key="item.payment_key" :value="item.payment_key">{{ item.source_type === 'payroll' ? 'Salaires' : 'Facturation' }} · {{ formatDate(item.date_paiement) }} · {{ item.contact || item.reference || `#${item.id}` }} · {{ money(item.non_alloue_centimes, item.monnaie) }}</option></select></template></FormField>
+          <FormField id="allocation-document" :label="matchingTargetLabel" :hint="selectedAllocationPayment && !compatibleAllocationTargets.length ? `Aucune ${matchingTargetLabel.toLocaleLowerCase()} pour ce paiement.` : undefined"><template #default="{ describedBy }"><select id="allocation-document" v-model="allocationDraft.target_key" :aria-describedby="describedBy" :disabled="!selectedAllocationPayment || !compatibleAllocationTargets.length" required><option value="" disabled>{{ selectedAllocationPayment ? 'Sélectionner' : 'Choisir d’abord un paiement' }}</option><option v-for="item in compatibleAllocationTargets" :key="item.target_key" :value="item.target_key">{{ item.label }} · {{ money(item.open_cents, item.currency) }}</option></select></template></FormField>
           <FormField id="allocation-amount" label="Montant alloué"><template #default="{ describedBy }"><input id="allocation-amount" v-model="allocationDraft.amount" inputmode="decimal" :aria-describedby="describedBy" required></template></FormField>
         </div>
         <button class="button primary" :disabled="treasury.saving">Lettrer</button>
@@ -1418,8 +1538,8 @@ async function toggleRecurrence(item: {
         v-if="treasury.workspace.allocations.length"
         caption="Allocations et délettrages"
         :columns="[
-          { key: 'document_numero', label: 'Document' },
-          { key: 'contact', label: 'Contact' },
+          { key: 'target_label', label: billingMatchingEnabled && payrollMatchingEnabled ? 'Document / dette' : payrollMatchingEnabled ? 'Dette salariale' : 'Document' },
+          { key: 'beneficiary_label', label: paymentPartyLabel },
           { key: 'paiement_reference', label: 'Paiement' },
           { key: 'montant_centimes', label: 'Montant' },
           { key: 'statut', label: 'Statut' },
@@ -1428,27 +1548,31 @@ async function toggleRecurrence(item: {
         :rows="treasury.workspace.allocations"
         sortable
       >
-        <template #cell-document_numero="{ row }">
+        <template #cell-target_label="{ row }">
           <button
+            v-if="row.source_type === 'billing'"
             class="table-primary-link"
             type="button"
             @click="openAllocatedDocument(row)"
-          >{{ row.document_numero }}</button>
+          >{{ row.target_label }}</button>
+          <span v-else>{{ row.target_label }}</span>
         </template>
         <template #cell-montant_centimes="{ row }">{{ money(Number(row.montant_centimes)) }}</template>
-        <template #cell-contact="{ row }">
+        <template #cell-beneficiary_label="{ row }">
           <button
+            v-if="row.source_type === 'billing'"
             class="table-secondary-link"
             type="button"
             @click="openContact(Number(row.contact_id))"
-          >{{ row.contact }}</button>
+          >{{ row.beneficiary_label }}</button>
+          <span v-else>{{ row.beneficiary_label }}</span>
         </template>
         <template #cell-actions="{ row }">
           <ActionMenu :label="`Actions pour l’allocation ${row.id}`">
             <button
-              v-if="row.statut === 'valide' && treasury.workspace?.capabilities.match"
+              v-if="row.statut === 'valide' && canMatchPayment(row)"
               type="button"
-              @click="unallocate(Number(row.id))"
+              @click="unallocate(row)"
             >Délettrer</button>
           </ActionMenu>
         </template>
@@ -1458,7 +1582,7 @@ async function toggleRecurrence(item: {
     <template v-else-if="workspace && treasury.workspace && activeTab === 'paiements'">
       <nav class="subtabs secondary-tabs section-tabs" aria-label="Sections des paiements">
         <button :class="{ active: paymentSection === 'list' }" type="button" @click="paymentSection = 'list'">
-          Liste et paiement individuel
+          {{ treasury.workspace.sources.billing ? 'Liste et paiement individuel' : 'Liste des paiements' }}
         </button>
         <button :class="{ active: paymentSection === 'batches' }" type="button" @click="paymentSection = 'batches'">
           Lots
@@ -1467,7 +1591,7 @@ async function toggleRecurrence(item: {
       <template v-if="paymentSection === 'list'">
       <div class="toolbar">
         <div>
-          <p>Les paiements non entièrement lettrés sont affichés par défaut.</p>
+          <p>Les paiements{{ treasury.workspace.sources.payroll ? ' de facturation et de salaires' : '' }} non entièrement lettrés sont affichés par défaut.</p>
         </div>
         <label class="compact-control">
           Afficher
@@ -1478,7 +1602,7 @@ async function toggleRecurrence(item: {
           </select>
         </label>
         <button
-          v-if="treasury.workspace.capabilities.match"
+          v-if="billingMatchingEnabled"
           class="button primary"
           type="button"
           @click="openPaymentDialog"
@@ -1487,7 +1611,7 @@ async function toggleRecurrence(item: {
         </button>
       </div>
       <ModalDialog
-        v-if="treasury.workspace.capabilities.match"
+        v-if="billingMatchingEnabled"
         ref="paymentDialog"
         title="Saisir un paiement"
         description="Le paiement reste indépendant des factures jusqu’à son lettrage."
@@ -1532,7 +1656,7 @@ async function toggleRecurrence(item: {
                     v-for="line in treasury.workspace.bank_lines.filter((item) => paymentDraft.direction === 'encaissement' ? item.amount_cents > 0 : item.amount_cents < 0)"
                     :key="line.id"
                     :value="line.id"
-                  >{{ line.booking_date }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
+                  >{{ formatDate(line.booking_date) }} · {{ line.label || line.counterparty }} · {{ money(line.amount_cents, line.currency) }}</option>
                 </select>
               </template>
             </FormField>
@@ -1549,7 +1673,7 @@ async function toggleRecurrence(item: {
           { key: 'display_reference', label: 'Paiement' },
           { key: 'date_paiement', label: 'Date' },
           { key: 'direction_label', label: 'Sens' },
-          { key: 'contact_label', label: 'Contact indicatif' },
+          { key: 'contact_label', label: paymentPartyLabel },
           { key: 'montant_centimes', label: 'Montant', type: 'number' },
           { key: 'alloue_centimes', label: 'Lettré', type: 'number' },
           { key: 'non_alloue_centimes', label: 'À lettrer', type: 'number' },
@@ -1560,6 +1684,7 @@ async function toggleRecurrence(item: {
         :rows="paymentRows"
         sortable
       >
+        <template #cell-date_paiement="{ row }">{{ formatDate(String(row.date_paiement)) }}</template>
         <template #cell-contact_label="{ row }">
           <button
             v-if="Number(row.contact_id) > 0"
@@ -1573,17 +1698,30 @@ async function toggleRecurrence(item: {
         <template #cell-alloue_centimes="{ row }">{{ money(Number(row.alloue_centimes), String(row.monnaie)) }}</template>
         <template #cell-non_alloue_centimes="{ row }">{{ money(Number(row.non_alloue_centimes), String(row.monnaie)) }}</template>
         <template #cell-accounting_label="{ row }">
-          <span :class="['status-chip', row.ecriture_id ? 'ok' : 'warning']">
-            {{ row.accounting_label }}
-          </span>
+          <div class="payment-accounting-status">
+            <span :class="['status-chip', row.ecriture_id ? 'ok' : 'warning']">
+              {{ row.accounting_label }}
+            </span>
+            <small v-if="row.source_type === 'payroll' && !row.ecriture_id && row.dette_ecriture_numeros">
+              Dette comptabilisée · {{ row.dette_ecriture_numeros }}
+            </small>
+          </div>
         </template>
         <template #cell-actions="{ row }">
-          <ActionMenu :label="`Actions pour ${row.display_reference}`">
+          <ActionMenu
+            v-if="(row.matching_eligible && Number(row.non_alloue_centimes) > 0 && row.statut === 'valide' && canMatchPayment(row)) || canPostPayrollPayment(row)"
+            :label="`Actions pour ${row.display_reference}`"
+          >
             <button
-              v-if="row.matching_eligible && Number(row.non_alloue_centimes) > 0 && row.statut === 'valide'"
+              v-if="row.matching_eligible && Number(row.non_alloue_centimes) > 0 && row.statut === 'valide' && canMatchPayment(row)"
               type="button"
-              @click="startAllocation(Number(row.id))"
+              @click="startAllocation(String(row.payment_key))"
             >Lettrer</button>
+            <button
+              v-if="canPostPayrollPayment(row)"
+              type="button"
+              @click="postPayrollPayment(row)"
+            >Comptabiliser</button>
           </ActionMenu>
         </template>
       </DataTable>
@@ -1602,7 +1740,7 @@ async function toggleRecurrence(item: {
         </div>
         <label v-for="debt in treasury.workspace.payable_debts" :key="debt.id" class="selection-row">
           <input v-model="selectedDebtIds" type="checkbox" :value="debt.id" :disabled="!debt.iban">
-          <span>{{ debt.number }} · {{ debt.supplier }} · échéance {{ debt.due_date }}<small v-if="!debt.iban">IBAN fournisseur manquant dans Configuration</small></span>
+          <span>{{ debt.number }} · {{ debt.supplier }} · échéance {{ formatDate(debt.due_date) }}<small v-if="!debt.iban">IBAN fournisseur manquant dans Configuration</small></span>
           <strong>{{ money(debt.open_cents, debt.currency) }}</strong>
         </label>
         <button class="button primary" :disabled="!selectedDebtIds.length || treasury.saving">Préparer le lot</button>
@@ -1625,7 +1763,7 @@ async function toggleRecurrence(item: {
           <div v-if="batch.status === 'exporte' && treasury.workspace.capabilities.confirm_payments" class="confirmation-row">
             <select v-model.number="confirmationDraft.bank_line_id" aria-label="Ligne bancaire de confirmation" required>
               <option :value="0" disabled>Ligne bancaire débitée</option>
-              <option v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id && item.amount_cents < 0 && item.treasury_account_id === batch.treasury_account_id)" :key="line.id" :value="line.id">{{ line.booking_date }} · {{ line.label }} · {{ money(line.amount_cents, line.currency) }}</option>
+              <option v-for="line in treasury.workspace.bank_lines.filter((item) => !item.reconciliation_id && item.amount_cents < 0 && item.treasury_account_id === batch.treasury_account_id)" :key="line.id" :value="line.id">{{ formatDate(line.booking_date) }} · {{ line.label }} · {{ money(line.amount_cents, line.currency) }}</option>
             </select>
             <AccountCombobox
               v-model="confirmationDraft.fee_account_id"
@@ -1682,7 +1820,7 @@ async function toggleRecurrence(item: {
           </div>
           <div>
             <span>Dernière synchronisation BNS</span>
-            <strong>{{ treasury.exchangeHistory.refresh.monthly.succeeded_at || 'Pas encore disponible' }}</strong>
+            <strong>{{ formatDateTime(treasury.exchangeHistory.refresh.monthly.succeeded_at, 'Pas encore disponible') }}</strong>
           </div>
           <div>
             <span>Convention</span>
@@ -1725,7 +1863,7 @@ async function toggleRecurrence(item: {
                 <tr v-for="item in treasury.exchangeHistory.daily" :key="item.currency">
                   <th scope="row">{{ item.currency }}</th>
                   <td>{{ rate(item.per_unit) }}</td>
-                  <td>{{ item.publication_date }}</td>
+                  <td>{{ formatDate(item.publication_date) }}</td>
                   <td>{{ item.validity.join(', ') }}</td>
                   <td><a :href="item.source_url" target="_blank" rel="noreferrer">OFDF</a></td>
                 </tr>
@@ -1815,7 +1953,7 @@ async function toggleRecurrence(item: {
           </div>
           <div>
             <span>Dernière synchronisation BNS</span>
-            <strong>{{ treasury.interestHistory.refresh.monthly.succeeded_at || 'Pas encore disponible' }}</strong>
+            <strong>{{ formatDateTime(treasury.interestHistory.refresh.monthly.succeeded_at, 'Pas encore disponible') }}</strong>
           </div>
         </section>
 
@@ -1895,6 +2033,18 @@ async function toggleRecurrence(item: {
 .expense-lines tfoot th { color: var(--ink); border-bottom: 0; }
 .status-chip { display: inline-flex; align-items: center; padding: .28rem .55rem; border-radius: 999px; color: var(--ink); background: #ebecf5; font-size: .75rem; font-weight: 800; white-space: nowrap; }
 .status-approuve, .status-comptabilise { color: #16603d; background: #e9f7ef; }
+.payment-accounting-status {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: .3rem;
+}
+.payment-accounting-status small {
+  color: var(--muted);
+  font-size: .76rem;
+  line-height: 1.25;
+  white-space: nowrap;
+}
 .status-a_approuver { color: #765000; background: #fff4d5; }
 .status-annule { color: #8d2727; background: #fdecec; }
 .recurrence-section { display: grid; gap: 1rem; }

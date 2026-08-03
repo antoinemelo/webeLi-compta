@@ -419,6 +419,13 @@ final class DashboardReadService
                   AND d.dossier_id = :dossier
                   AND d.statut = 'comptabilise'
                   AND d.date_document <= :as_of_date
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM comptes_tresorerie treasury_account
+                    WHERE treasury_account.organisation_id = d.organisation_id
+                      AND treasury_account.dossier_id = d.dossier_id
+                      AND treasury_account.compte_comptable_id = d.compte_collectif_id
+                  )
              ),
              bucketed AS (
                 SELECT side, open_cents,

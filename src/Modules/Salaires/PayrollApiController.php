@@ -235,7 +235,7 @@ final class PayrollApiController
                 $organisationId, $dossierId, $data['beneficiary_type'],
                 $data['employee_id'], $data['date'], $data['amount_cents'],
                 $data['account_id'], $data['reference'], $userId,
-                $data['treasury_account_id']
+                $data['treasury_account_id'], $data['liability_id']
             ),
         ]);
     }
@@ -262,6 +262,40 @@ final class PayrollApiController
                 $data['exercise_id'], $data['journal_id'], $userId
             ),
         ]);
+    }
+
+    public function unallocate(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('salaires.pay');
+        $data = $this->validator->cancellation($request);
+        return $this->execute($request, function () use (
+            $organisationId, $dossierId, $data, $userId
+        ): array {
+            $this->payments->unallocate(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $userId
+            );
+            return ['cancelled' => true, 'id' => $data['id']];
+        });
+    }
+
+    public function cancelPayment(Request $request): Response
+    {
+        [$userId, $organisationId, $dossierId] = $this->scope('salaires.pay');
+        $data = $this->validator->cancellation($request);
+        return $this->execute($request, function () use (
+            $organisationId, $dossierId, $data, $userId
+        ): array {
+            $this->payments->cancel(
+                $organisationId,
+                $dossierId,
+                $data['id'],
+                $userId
+            );
+            return ['cancelled' => true, 'id' => $data['id']];
+        });
     }
 
     public function previewOcas(Request $request): Response
