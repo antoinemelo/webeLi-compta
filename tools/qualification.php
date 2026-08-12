@@ -167,11 +167,12 @@ function qualificationPackage(string $root): bool
     if (
         !is_file($root . '/vendor/autoload.php')
         && !is_file(dirname($root) . '/vendor/autoload.php')
+        && !is_file(dirname($root, 2) . '/vendor/autoload.php')
     ) {
         fwrite(
             STDERR,
             "Élément de livraison absent : vendor/autoload.php "
-            . "(recherché aussi dans ../vendor)\n"
+            . "(recherché aussi dans ../vendor et ../../vendor)\n"
         );
         return false;
     }

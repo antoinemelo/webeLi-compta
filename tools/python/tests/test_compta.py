@@ -62,10 +62,12 @@ class ComptaAdminTests(unittest.TestCase):
             for call in output.call_args_list
         )
         self.assertIn("4. Créer une photographie SQLite autonome", rendered)
-        self.assertIn("6. Étape 1 — Préparer la copie locale dev → main", rendered)
-        self.assertIn("7. Étape 2 — Installer main", rendered)
+        self.assertIn("6. Réaliser une copie locale", rendered)
+        self.assertIn(
+            "7. Installer une copie local sur un nouveau site, par FTP/FTPS",
+            rendered,
+        )
         self.assertIn("8. Mettre à jour un site existant", rendered)
-        self.assertIn("option 6, puis option 7", rendered)
 
     def test_runtime_filter_excludes_sources_and_private_data(self) -> None:
         self.assertTrue(ADMIN.is_runtime_path("src/Core/App.php"))
@@ -76,6 +78,32 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertFalse(ADMIN.is_runtime_path("config/local.php"))
         self.assertFalse(ADMIN.is_runtime_path("vendor/autoload.php"))
         self.assertFalse(ADMIN.is_runtime_path("livrables/SPECS_V02/README.md"))
+
+    def test_vendor_lookup_uses_local_parent_then_grandparent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            root = workspace / "erp/dev"
+            root.mkdir(parents=True)
+
+            def create_vendor(path: Path, marker: str) -> None:
+                (path / "composer").mkdir(parents=True)
+                (path / "autoload.php").write_text(marker, encoding="utf-8")
+                (path / "composer/installed.json").write_text(
+                    '{"packages": []}\n',
+                    encoding="utf-8",
+                )
+
+            grandparent_vendor = workspace / "vendor"
+            create_vendor(grandparent_vendor, "grandparent")
+            self.assertEqual(grandparent_vendor, ADMIN.vendor_directory(root))
+
+            parent_vendor = workspace / "erp/vendor"
+            create_vendor(parent_vendor, "parent")
+            self.assertEqual(parent_vendor, ADMIN.vendor_directory(root))
+
+            local_vendor = root / "vendor"
+            create_vendor(local_vendor, "local")
+            self.assertEqual(local_vendor, ADMIN.vendor_directory(root))
 
     def test_initial_deployment_contains_the_complete_runtime_tree(self) -> None:
         commit = ADMIN.git("rev-parse", "HEAD")
@@ -118,27 +146,47 @@ class ComptaAdminTests(unittest.TestCase):
             ))
             self.assertNotIn(str(root), json.dumps(manifest))
 
-    def test_runtime_copy_creates_a_self_contained_delivery_without_data(
+    def test_runtime_copy_reuses_shared_vendor_and_creates_empty_storage(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            parent = Path(directory)
+            parent = Path(directory) / "erp"
             source = parent / "dev"
             destination = parent / "main"
             self.make_runtime_source(source)
-            inventory = ADMIN.direct_install_files(source)
-            vendor = ADMIN.vendor_directory(source)
+            shared_vendor = parent.parent / "vendor"
+            (source / "vendor").rename(shared_vendor)
+            source_vendor = ADMIN.vendor_directory(source)
+            self.assertEqual(
+                shared_vendor,
+                ADMIN.shared_vendor_for_runtime_copy(
+                    source_vendor,
+                    destination,
+                ),
+            )
+            inventory = ADMIN.direct_install_files(
+                source,
+                include_vendor=False,
+            )
             backup = ADMIN.copy_runtime_directory(
                 source,
                 destination,
                 inventory,
-                vendor,
             )
             self.assertIsNone(backup)
-            self.assertEqual(inventory, ADMIN.direct_install_files(destination))
-            self.assertTrue((destination / "vendor/autoload.php").is_file())
+            self.assertEqual(
+                inventory,
+                ADMIN.direct_install_files(
+                    destination,
+                    include_vendor=False,
+                ),
+            )
+            self.assertFalse((destination / "vendor").exists())
+            self.assertTrue((shared_vendor / "autoload.php").is_file())
             self.assertTrue((destination / "public/app/index.html").is_file())
             self.assertFalse((destination / "config/local.php").exists())
+            self.assertTrue((destination / "storage/database").is_dir())
+            self.assertEqual([], list((destination / "storage/database").iterdir()))
             self.assertFalse((destination / "storage/database/app.sqlite").exists())
             self.assertFalse((destination / "frontend").exists())
             self.assertFalse((destination / "tools").exists())
@@ -151,7 +199,6 @@ class ComptaAdminTests(unittest.TestCase):
                 source,
                 destination,
                 inventory,
-                vendor,
                 replace=True,
             )
             self.assertIsNotNone(backup)
@@ -176,13 +223,15 @@ class ComptaAdminTests(unittest.TestCase):
                 ADMIN.validate_runtime_copy_target(source, source / "main")
             destination = Path(directory) / "main"
             destination.mkdir()
-            inventory = ADMIN.direct_install_files(source)
+            inventory = ADMIN.direct_install_files(
+                source,
+                include_vendor=False,
+            )
             with self.assertRaisesRegex(ADMIN.AdminError, "existe déjà"):
                 ADMIN.copy_runtime_directory(
                     source,
                     destination,
                     inventory,
-                    ADMIN.vendor_directory(source),
                 )
 
     def test_direct_ftp_install_rejects_incomplete_build_and_unsafe_target(self) -> None:
@@ -241,6 +290,7 @@ class ComptaAdminTests(unittest.TestCase):
         class FakeFtp:
             def __init__(self) -> None:
                 self.files: dict[str, bytes] = {}
+                self.directories: list[str] = []
 
             def __enter__(self) -> "FakeFtp":
                 return self
@@ -248,8 +298,8 @@ class ComptaAdminTests(unittest.TestCase):
             def __exit__(self, *_: object) -> None:
                 return None
 
-            def mkd(self, _path: str) -> None:
-                return None
+            def mkd(self, path: str) -> None:
+                self.directories.append(path)
 
             def storbinary(self, command: str, stream: object) -> None:
                 path = command.removeprefix("STOR ")
@@ -279,6 +329,7 @@ class ComptaAdminTests(unittest.TestCase):
                 (root / "index.php").read_bytes(),
                 ftp.files["/www/compta/index.php"],
             )
+            self.assertIn("/www/compta/storage/database", ftp.directories)
             marker = json.loads(
                 ftp.files[
                     f"/www/compta/{ADMIN.REMOTE_MANIFEST}"
@@ -321,14 +372,14 @@ class ComptaAdminTests(unittest.TestCase):
                         manifest,
                     )
 
-    def test_direct_ftp_install_can_reuse_parent_vendor_without_uploading_it(
+    def test_direct_ftp_install_can_reuse_ancestor_vendor_without_uploading_it(
         self,
     ) -> None:
         class SharedVendorFtp:
-            def __init__(self, installed: bytes) -> None:
+            def __init__(self, installed: bytes, vendor_root: str) -> None:
                 self.files = {
-                    "/www/instances/vendor/autoload.php": b"<?php shared",
-                    "/www/instances/vendor/composer/installed.json": installed,
+                    f"{vendor_root}/autoload.php": b"<?php shared",
+                    f"{vendor_root}/composer/installed.json": installed,
                 }
                 self.uploaded: list[str] = []
 
@@ -366,23 +417,27 @@ class ComptaAdminTests(unittest.TestCase):
                 vendor_mode="skip",
                 vendor=vendor,
             )
-            ftp = SharedVendorFtp(
-                (vendor / "composer/installed.json").read_bytes()
-            )
-            with patch.object(ADMIN, "ftp_connect", return_value=ftp):
-                ADMIN.install_directory_ftp(
-                    {"transport": "ftps"},
-                    root,
-                    "/www/instances/compta",
-                    inventory,
-                    manifest,
-                )
-            self.assertTrue(
-                "/www/instances/compta/index.php" in ftp.uploaded
-            )
-            self.assertFalse(any(
-                "/vendor/" in path for path in ftp.uploaded
-            ))
+            for vendor_root in ("/www/instances/vendor", "/www/vendor"):
+                with self.subTest(vendor_root=vendor_root):
+                    ftp = SharedVendorFtp(
+                        (vendor / "composer/installed.json").read_bytes(),
+                        vendor_root,
+                    )
+                    with patch.object(ADMIN, "ftp_connect", return_value=ftp):
+                        ADMIN.install_directory_ftp(
+                            {"transport": "ftps"},
+                            root,
+                            "/www/instances/compta",
+                            inventory,
+                            manifest,
+                        )
+                    self.assertIn(
+                        "/www/instances/compta/index.php",
+                        ftp.uploaded,
+                    )
+                    self.assertFalse(any(
+                        "/vendor/" in path for path in ftp.uploaded
+                    ))
 
     def test_ftp_install_command_exposes_source_and_remote_directories(self) -> None:
         arguments = ADMIN.parser().parse_args([

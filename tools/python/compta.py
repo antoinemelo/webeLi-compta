@@ -743,9 +743,17 @@ def runtime_files_at(commit: str) -> list[str]:
     })
 
 
-def vendor_directory(root: Path) -> Path:
+def vendor_candidates(root: Path) -> tuple[Path, Path, Path]:
     project = root.expanduser().resolve()
-    candidates = (project / "vendor", project.parent / "vendor")
+    return (
+        project / "vendor",
+        project.parent / "vendor",
+        project.parent.parent / "vendor",
+    )
+
+
+def vendor_directory(root: Path) -> Path:
+    candidates = vendor_candidates(root)
     for candidate in candidates:
         if (
             (candidate / "autoload.php").is_file()
@@ -754,7 +762,8 @@ def vendor_directory(root: Path) -> Path:
             return candidate
     raise AdminError(
         "Dépendances PHP absentes. vendor a été recherché dans "
-        f"{candidates[0]} puis {candidates[1]}."
+        + ", puis ".join(str(candidate) for candidate in candidates)
+        + "."
     )
 
 
@@ -893,7 +902,7 @@ def direct_install_files(
     root = source.expanduser().resolve()
     if not root.is_dir():
         raise AdminError(f"Répertoire source introuvable : {root}")
-    vendor = vendor_directory(root)
+    vendor = vendor_directory(root) if include_vendor else None
     files: list[str] = []
     for candidate in root.rglob("*"):
         if candidate.is_symlink():
@@ -911,6 +920,8 @@ def direct_install_files(
         if is_direct_install_path(relative):
             files.append(relative)
     if include_vendor:
+        if vendor is None:
+            raise AdminError("Dépendances PHP introuvables pour la livraison.")
         for candidate in vendor.rglob("*"):
             if candidate.is_symlink():
                 relative = candidate.relative_to(vendor).as_posix()
@@ -1005,9 +1016,11 @@ def direct_install_manifest(
         "vendor_source": (
             "none"
             if vendor_mode == "skip"
-            else "parent"
-            if resolved_vendor.parent != root
             else "local"
+            if resolved_vendor.parent == root
+            else "parent"
+            if resolved_vendor.parent == root.parent
+            else "grandparent"
         ),
         "source_fingerprint": fingerprint.hexdigest(),
         "version": version,
@@ -1054,11 +1067,36 @@ def runtime_copy_backup_path(destination: Path) -> Path:
     return candidate
 
 
+def shared_vendor_for_runtime_copy(source_vendor: Path, destination: Path) -> Path:
+    source_installed = source_vendor / "composer/installed.json"
+    shared_candidates = vendor_candidates(destination)[1:]
+    detected: list[Path] = []
+    for shared in shared_candidates:
+        installed = shared / "composer/installed.json"
+        autoload = shared / "autoload.php"
+        if not installed.is_file() or not autoload.is_file():
+            continue
+        detected.append(shared)
+        if installed.read_bytes() == source_installed.read_bytes():
+            return shared.resolve()
+    locations = ", puis ".join(str(path) for path in shared_candidates)
+    if detected:
+        raise AdminError(
+            "Les vendors mutualisés trouvés ne correspondent pas au vendor "
+            "de dev. Refus de préparer une livraison incohérente. "
+            f"Emplacements contrôlés : {locations}."
+        )
+    raise AdminError(
+        "Aucun vendor mutualisé compatible avec main. Emplacements "
+        f"recherchés : {locations}. Créez ou installez ce vendor avant "
+        "runtime-copy."
+    )
+
+
 def copy_runtime_directory(
     source: Path,
     destination: Path,
     inventory: list[str],
-    vendor: Path,
     *,
     replace: bool = False,
 ) -> Path | None:
@@ -1078,11 +1116,15 @@ def copy_runtime_directory(
     try:
         temporary.mkdir()
         for path in inventory:
-            source_path = direct_source_path(root, path, vendor)
+            source_path = root / path
             copied = temporary / path
             copied.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, copied)
-        copied_inventory = direct_install_files(temporary)
+        (temporary / "storage/database").mkdir(parents=True)
+        copied_inventory = direct_install_files(
+            temporary,
+            include_vendor=False,
+        )
         if copied_inventory != inventory:
             raise AdminError(
                 "La copie locale ne correspond pas à l’inventaire préparé."
@@ -1109,30 +1151,38 @@ def runtime_copy(args: argparse.Namespace) -> int:
             "La destination existe déjà. Relancez avec --replace uniquement "
             "si vous souhaitez conserver l’ancienne copie comme sauvegarde."
         )
-    vendor = vendor_directory(source)
-    inventory = direct_install_files(source)
+    source_vendor = vendor_directory(source)
+    shared_vendor = shared_vendor_for_runtime_copy(
+        source_vendor,
+        destination,
+    )
+    inventory = direct_install_files(source, include_vendor=False)
     manifest = direct_install_manifest(
         source,
         inventory,
-        vendor_mode="local",
-        vendor=vendor,
+        vendor_mode="skip",
+        vendor=source_vendor,
     )
     total_bytes = sum(int(item["size"]) for item in manifest["files"])
     print("Préparation d’une copie locale de livraison")
     print(f"Source de développement : {source}")
     print(f"Destination prête à envoyer : {destination}")
     print(f"Version : {manifest['version']}")
-    print(f"Vendor source : {vendor}")
+    print(f"Vendor non copié, mutualisé dans un parent : {shared_vendor}")
     print(
         f"Runtime livrable : {len(inventory)} fichier(s), "
         f"{total_bytes / (1024 * 1024):.1f} Mio"
     )
     print(
-        "Copiés : code PHP, migrations, ressources, build Vue et vendor local."
+        "Copiés : code PHP, migrations, ressources et build Vue."
     )
     print(
-        "Exclus : Git, sources frontend, documentation, tests, outils, "
-        "config/local.php, bases SQLite, journaux et stockage persistant."
+        "Créé vide : storage/database/."
+    )
+    print(
+        "Exclus : vendor local, Git, sources frontend, documentation, tests, "
+        "outils, config/local.php, bases SQLite, journaux et autres données "
+        "persistantes."
     )
     print(
         "Cette destination est une livraison applicative, pas une copie des "
@@ -1156,7 +1206,6 @@ def runtime_copy(args: argparse.Namespace) -> int:
         source,
         destination,
         inventory,
-        vendor,
         replace=args.replace,
     )
     print(f"Copie locale créée et vérifiée : {destination}")
@@ -1246,12 +1295,24 @@ def install_directory_ftp(
                     "Utilisez deploy pour une mise à jour, ou --replace-runtime "
                     "pour remplacer explicitement ses fichiers applicatifs."
                 )
+        ftp_mkdirs(
+            client,
+            posixpath.join(remote_root, "storage/database"),
+        )
+        print(
+            "Répertoire persistant distant préparé : "
+            f"{posixpath.join(remote_root, 'storage/database')}"
+        )
         skipped_vendor: set[str] = set()
         local_installed = (vendor / "composer/installed.json").read_bytes()
         if vendor_mode == "skip":
             dependency_roots = (
                 posixpath.join(remote_root, "vendor"),
                 posixpath.join(posixpath.dirname(remote_root), "vendor"),
+                posixpath.join(
+                    posixpath.dirname(posixpath.dirname(remote_root)),
+                    "vendor",
+                ),
             )
             selected = ""
             for dependency_root in dependency_roots:
@@ -1277,7 +1338,7 @@ def install_directory_ftp(
             if not selected:
                 raise AdminError(
                     "Transfert sans vendor impossible : aucun vendor compatible "
-                    "dans ./vendor ou ../vendor sur la destination."
+                    "dans ./vendor, ../vendor ou ../../vendor sur la destination."
                 )
             print(f"Vendor distant réutilisé : {selected}")
         elif vendor_mode == "shared":
@@ -2058,7 +2119,7 @@ def interactive_runtime_copy() -> int:
 def interactive_ftp_install() -> int:
     print(
         "Cette étape envoie une copie locale déjà préparée. Pour le parcours "
-        "dev → main → serveur, utilisez d’abord l’option 6."
+        "dev → NEW → serveur, utilisez d’abord l’option 6."
     )
     source = Path(ask(
         "Copie locale prête à envoyer",
@@ -2382,9 +2443,9 @@ def parser() -> argparse.ArgumentParser:
         choices=("auto", "local", "shared", "skip"),
         default=None,
         help=(
-            "auto : reproduire l’emplacement local ; local : envoyer dans "
-            "./vendor ; shared : mutualiser dans ../vendor ; skip : ne pas "
-            "transférer vendor"
+            "auto : déduire local ou mutualisé depuis ./vendor, ../vendor "
+            "ou ../../vendor ; local : envoyer dans ./vendor ; shared : "
+            "mutualiser dans ../vendor ; skip : ne pas transférer vendor"
         ),
     )
     direct_delivery.add_argument(

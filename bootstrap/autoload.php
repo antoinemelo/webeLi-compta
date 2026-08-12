@@ -5,6 +5,7 @@ $root = dirname(__DIR__);
 foreach ([
     $root . '/vendor/autoload.php',
     dirname($root) . '/vendor/autoload.php',
+    dirname($root, 2) . '/vendor/autoload.php',
 ] as $composerAutoload) {
     if (is_file($composerAutoload)) {
         require_once $composerAutoload;

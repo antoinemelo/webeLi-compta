@@ -194,10 +194,15 @@ distinctes :
 
 Le script continue d’être exécuté depuis `dev/`. Le répertoire `main/` produit
 est un runtime applicatif complet contenant PHP, les migrations, les
-ressources, le build Vue et un `vendor/` local. Il ne contient volontairement
-ni dépôt Git, ni sources Vue, ni documentation, ni tests, ni outils
-d’administration, ni
-`config/local.php`, ni base SQLite, ni stockage persistant.
+ressources et le build Vue. Il ne duplique pas `vendor/` : comme `dev/` et
+`main/` sont frères, les deux utilisent un vendor mutualisé que le script
+recherche dans `erp/vendor/`, puis un niveau plus haut dans `web/vendor/`.
+`main/storage/database/` est créé vide pour matérialiser l’emplacement de la
+future base.
+
+La copie ne contient volontairement ni dépôt Git, ni sources Vue, ni
+documentation, ni tests, ni outils d’administration, ni `config/local.php`,
+ni base SQLite, ni autre donnée persistante.
 
 Avec l’arborescence actuelle, commencer par une simulation :
 
@@ -222,13 +227,14 @@ déplace d’abord l’ancienne copie vers un répertoire voisin horodaté, puis
 la nouvelle livraison. Elle ne supprime donc pas silencieusement la copie
 précédente.
 
-Dans le menu interactif, cette opération est nommée
-**Étape 1 — Préparer la copie locale dev → main**.
+Dans le menu interactif, cette opération correspond au point 6,
+**Réaliser une copie locale**.
 
 ## Installer main sur un nouveau site par FTP/FTPS
 
-L’étape 2 du menu est nommée
-**Installer main sur un nouveau site par FTP/FTPS**. Elle demande explicitement :
+Le point 7 du menu est nommé
+**Installer une copie local sur un nouveau site, par FTP/FTPS**. Il demande
+explicitement :
 
 1. la copie locale prête à envoyer, `main/` par défaut ;
 2. le fichier contenant la connexion FTP/FTPS ;
@@ -246,27 +252,28 @@ python3 tools/python/compta.py ftp-install \
 python3 tools/python/compta.py ftp-install \
   --source /home/amelo/Documents/DEV/WebeLi/web/erp/main \
   --remote-root /www/nouveau-site/compta \
-  --vendor-mode local \
+  --vendor-mode shared \
   --list-files \
   --apply
 ```
 
 Cette installation ne dépend pas de Git : elle inspecte directement le dossier
 choisi. Elle exige une livraison complète comprenant le code PHP, les
-migrations, les templates, `vendor/autoload.php` et un build Vue cohérent. Les
-assets référencés par le manifeste Vite doivent tous exister.
+migrations, les templates, un `vendor/autoload.php` sous `./vendor` ou
+`../vendor` ou `../../vendor`, et un build Vue cohérent. Les assets référencés
+par le manifeste Vite doivent tous exister.
 
 Le répertoire Composer est recherché d’abord sous `./vendor`, puis
-automatiquement sous `../vendor`. Le choix `--vendor-mode` détermine son
-traitement :
+automatiquement sous `../vendor`, puis sous `../../vendor`. Le choix
+`--vendor-mode` détermine son traitement :
 
-- `auto` reproduit la disposition locale : `./vendor` reste propre à
-  l’instance, tandis qu’un `../vendor` détecté est mutualisé dans le parent
-  distant ;
+- `auto` conserve un `./vendor` propre à l’instance ; un vendor détecté sous
+  `../vendor` ou `../../vendor` est traité comme mutualisé et transféré sous
+  `../vendor` sur la destination ;
 - `local` transfère les dépendances dans le `vendor` de l’instance ;
 - `shared` les transfère dans le `vendor` du répertoire parent ;
-- `skip` n’envoie aucune dépendance et exige qu’un `./vendor` ou `../vendor`
-  compatible soit déjà présent sur le serveur.
+- `skip` n’envoie aucune dépendance et exige qu’un `./vendor`, `../vendor` ou
+  `../../vendor` compatible soit déjà présent sur le serveur.
 
 Le menu interactif présente les mêmes choix sous forme de questions « avec ou
 sans vendor ». Lorsqu’un vendor mutualisé compatible existe déjà, son transfert
@@ -277,10 +284,11 @@ Le choix peut aussi être conservé dans le fichier de connexion avec
 
 Seuls les fichiers nécessaires à l’exécution sont envoyés. Sont notamment
 exclus `frontend/`, `tests/`, `tools/`, `.git/`, `node_modules/`,
-`config/local.php`, les bases SQLite, les journaux et tout `storage/`. Aucun
-fichier distant n’est supprimé. Après l’envoi, chaque fichier est relu par FTP
-et comparé à son empreinte SHA-256 ; le marqueur de livraison est écrit en
-dernier.
+`config/local.php`, les bases SQLite, les journaux et le contenu persistant de
+`storage/`. Le répertoire vide `storage/database/` est néanmoins créé sur la
+destination afin de préparer l’emplacement de la base. Aucun fichier distant
+n’est supprimé. Après l’envoi, chaque fichier est relu par FTP et comparé à son
+empreinte SHA-256 ; le marqueur de livraison est écrit en dernier.
 
 Une destination contenant déjà `index.php` ou un marqueur Compta est refusée
 par défaut. Une mise à jour normale doit passer par `deploy`. L’option experte
@@ -297,8 +305,9 @@ Après le transfert, le script affiche donc la checklist restante :
    de la destination ;
 2. créer `config/local.php` ou les variables d’environnement de production,
    sans les reprendre aveuglément depuis `dev/` ;
-3. créer une nouvelle base ou restaurer une photographie SQLite autonome sous
-   un `storage/` inscriptible ;
+3. vérifier que `storage/` est inscriptible, puis créer une nouvelle base ou
+   restaurer une photographie SQLite autonome sous le `storage/database/`
+   préparé par le transfert ;
 4. appliquer et contrôler les migrations `001` à `008`, vérifier l’intégrité,
    puis tester l’URL HTTPS publique.
 
