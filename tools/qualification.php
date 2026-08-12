@@ -9,7 +9,7 @@ declare(strict_types=1);
 function runQualification(string $root): int
 {
     $steps = [
-        'base initiale canonique inchangée' => static fn (): bool =>
+        'migrations 001 à 008 inchangées' => static fn (): bool =>
             qualificationMigrationHashes($root),
         'syntaxe PHP' => static fn (): bool => qualificationLint($root),
         'tests rapides' => static fn (): bool => qualificationCommand(

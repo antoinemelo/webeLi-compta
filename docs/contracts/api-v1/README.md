@@ -2,6 +2,8 @@
 
 Version de contrat : `compta-api-v1`.
 
+Version applicative documentée : **0.6.1**, sur le schéma SQLite `001` à `008`.
+
 L’API est servie sous `/api/v1` avec le cookie de session COMPTA existant. Elle
 reste interne au monolithe et n’est ni une API publique ni une seconde source
 de vérité métier.
@@ -418,8 +420,8 @@ générique sans nom ni métadonnée de la ressource visée.
 
 ## Retour arrière
 
-La base est construite par `001_initial.sql`, puis enrichie par les migrations
-additives immuables telles que `002_consolidation_governance.sql`. Tout retour
-arrière de schéma se fait par restauration de la sauvegarde SQLite créée avant
-migration. Voir
+La base 0.6.1 est construite par les migrations immuables `001` à `008`. La
+prochaine évolution structurelle commence à `009`. Tout retour arrière de
+schéma se fait par restauration de la sauvegarde SQLite créée avant migration.
+Voir [`../../migrations.md`](../../migrations.md) et
 [`../../configuration.md`](../../configuration.md).

@@ -268,17 +268,17 @@ n’est jamais déduit d’une propriété de l’organisation ou de l’exercic
 
 ## Base canonique et retour arrière
 
-L'identité, les modules et les conditions de paiement font partie de
-`database/migrations/001_initial.sql`. Une installation de développement est
-donc créée directement dans son état fonctionnel courant, sans rejouer
-l'historique intermédiaire des lots.
+L'identité, les modules et les conditions de paiement font partie du socle
+`database/migrations/001_initial.sql`. Le schéma complet de COMPTA 0.6.1 est
+toutefois obtenu après application des migrations immuables `001` à `008`.
 
-Jusqu'au gel de production, une modification structurelle cohérente met à jour
-cette base initiale et reconstruit la base de développement après une sauvegarde
-de confort. Après le gel, les évolutions seront additives et
-`php bin/console db:migrate --apply --backup` redeviendra obligatoire pour une
-base en service. Un retour arrière s'effectue toujours par restauration d'une
-sauvegarde contrôlée, jamais en retirant manuellement des colonnes.
+Une modification structurelle ultérieure reçoit une migration additive à
+partir de `009`; elle ne réécrit jamais les huit versions publiées. Sur une base
+en service, la mise à niveau passe par
+`php bin/console db:migrate --apply --backup`. Un retour arrière s'effectue
+toujours par restauration d'une sauvegarde contrôlée, jamais en retirant
+manuellement des colonnes ou une version enregistrée. Voir
+[`migrations.md`](migrations.md).
 
 Les taux de charges sociales restent ceux du module Salaires, issus de la
 correspondance OCAS documentée. Leur import et leur évolution annuelle

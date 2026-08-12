@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Administration sûre de WebeLi / Compta.
+"""Administration de WebeLi / ERP - Compta.
 
 Les opérations qui modifient une base, Git ou un site distant exigent
 explicitement ``--apply``. Le déploiement lit exclusivement le contenu du
 commit Git ciblé : un fichier local non commité ne peut donc pas partir en
-production par accident.
+production par accident. Pour une première installation depuis une copie
+locale, le parcours explicite est ``runtime-copy`` puis ``ftp-install``.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DEPLOY_CONFIG = ROOT / "ops" / "compta.deploy.json"
+DEFAULT_RUNTIME_COPY = ROOT.parent / "main"
 REMOTE_MANIFEST = "storage/deployments/current.json"
 REMOTE_RELEASES = "storage/deployments/releases"
 DEPLOY_MANIFEST_SCHEMA = 2
@@ -1016,6 +1018,157 @@ def direct_install_manifest(
     }
 
 
+def validate_runtime_copy_target(source: Path, destination: Path) -> None:
+    if not source.is_dir():
+        raise AdminError(f"Répertoire source introuvable : {source}")
+    if source == destination:
+        raise AdminError("La source et la destination de la copie sont identiques.")
+    if source in destination.parents:
+        raise AdminError(
+            "La destination ne peut pas être créée à l’intérieur de la source."
+        )
+    if destination in source.parents:
+        raise AdminError(
+            "La destination ne peut pas contenir le répertoire source."
+        )
+    if (
+        destination == Path(destination.anchor)
+        or destination == Path.home().resolve()
+    ):
+        raise AdminError("Destination trop large refusée pour la copie locale.")
+    if destination.exists() and not destination.is_dir():
+        raise AdminError(
+            f"La destination existe et n’est pas un répertoire : {destination}"
+        )
+
+
+def runtime_copy_backup_path(destination: Path) -> Path:
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    candidate = destination.with_name(
+        f"{destination.name}-before-runtime-copy-{stamp}"
+    )
+    if candidate.exists():
+        candidate = destination.with_name(
+            f"{candidate.name}-{os.urandom(3).hex()}"
+        )
+    return candidate
+
+
+def copy_runtime_directory(
+    source: Path,
+    destination: Path,
+    inventory: list[str],
+    vendor: Path,
+    *,
+    replace: bool = False,
+) -> Path | None:
+    root = source.expanduser().resolve()
+    target = destination.expanduser().resolve()
+    validate_runtime_copy_target(root, target)
+    if target.exists() and not replace:
+        raise AdminError(
+            "La destination existe déjà. Utilisez --replace pour la déplacer "
+            "vers une sauvegarde puis créer la nouvelle copie."
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.parent / (
+        f".{target.name}.runtime-copy-{os.urandom(4).hex()}"
+    )
+    backup: Path | None = None
+    try:
+        temporary.mkdir()
+        for path in inventory:
+            source_path = direct_source_path(root, path, vendor)
+            copied = temporary / path
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, copied)
+        copied_inventory = direct_install_files(temporary)
+        if copied_inventory != inventory:
+            raise AdminError(
+                "La copie locale ne correspond pas à l’inventaire préparé."
+            )
+        if target.exists():
+            backup = runtime_copy_backup_path(target)
+            os.replace(target, backup)
+        os.replace(temporary, target)
+    except Exception:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        if backup is not None and backup.exists() and not target.exists():
+            os.replace(backup, target)
+        raise
+    return backup
+
+
+def runtime_copy(args: argparse.Namespace) -> int:
+    source = args.source.expanduser().resolve()
+    destination = args.destination.expanduser().resolve()
+    validate_runtime_copy_target(source, destination)
+    if destination.exists() and not args.replace:
+        raise AdminError(
+            "La destination existe déjà. Relancez avec --replace uniquement "
+            "si vous souhaitez conserver l’ancienne copie comme sauvegarde."
+        )
+    vendor = vendor_directory(source)
+    inventory = direct_install_files(source)
+    manifest = direct_install_manifest(
+        source,
+        inventory,
+        vendor_mode="local",
+        vendor=vendor,
+    )
+    total_bytes = sum(int(item["size"]) for item in manifest["files"])
+    print("Préparation d’une copie locale de livraison")
+    print(f"Source de développement : {source}")
+    print(f"Destination prête à envoyer : {destination}")
+    print(f"Version : {manifest['version']}")
+    print(f"Vendor source : {vendor}")
+    print(
+        f"Runtime livrable : {len(inventory)} fichier(s), "
+        f"{total_bytes / (1024 * 1024):.1f} Mio"
+    )
+    print(
+        "Copiés : code PHP, migrations, ressources, build Vue et vendor local."
+    )
+    print(
+        "Exclus : Git, sources frontend, documentation, tests, outils, "
+        "config/local.php, bases SQLite, journaux et stockage persistant."
+    )
+    print(
+        "Cette destination est une livraison applicative, pas une copie des "
+        "données de l’instance de développement."
+    )
+    if args.list_files:
+        for path in inventory:
+            print(f"  + {path}")
+    if destination.exists() and args.replace:
+        print(
+            "La destination actuelle sera déplacée vers une sauvegarde "
+            "horodatée voisine."
+        )
+    if getattr(args, "interactive_confirmation", False):
+        if not confirm("Créer maintenant cette copie locale prête à livrer"):
+            print("Opération annulée.")
+            return 0
+        args.apply = True
+    ensure_apply(args, "aucun répertoire local n’a été créé ou remplacé")
+    backup = copy_runtime_directory(
+        source,
+        destination,
+        inventory,
+        vendor,
+        replace=args.replace,
+    )
+    print(f"Copie locale créée et vérifiée : {destination}")
+    if backup is not None:
+        print(f"Copie précédente conservée : {backup}")
+    print(
+        "Étape suivante : utilisez ftp-install avec "
+        f"--source {destination} pour envoyer cette livraison."
+    )
+    return 0
+
+
 def normalize_remote_root(value: str) -> str:
     candidate = value.strip()
     if not candidate.startswith("/"):
@@ -1228,7 +1381,8 @@ def ftp_install(args: argparse.Namespace) -> int:
         vendor=vendor,
     )
     total_bytes = sum(int(item["size"]) for item in manifest["files"])
-    print(f"Répertoire source : {source}")
+    print("Installation initiale d’un runtime par FTP/FTPS")
+    print(f"Copie locale envoyée : {source}")
     print(f"Répertoire FTP d’arrivée : {remote_root}")
     print(f"Vendor détecté : {vendor}")
     print(
@@ -1260,6 +1414,12 @@ def ftp_install(args: argparse.Namespace) -> int:
         "site. La base et la configuration locale restent à provisionner "
         "séparément."
     )
+    if source == ROOT:
+        print(
+            "INFO : la source est le répertoire dev. Cet envoi direct est "
+            "possible, mais runtime-copy permet de contrôler d’abord une "
+            "copie locale main séparée."
+        )
     if getattr(args, "interactive_confirmation", False):
         if not confirm("Envoyer cette livraison complète par FTP"):
             print("Opération annulée.")
@@ -1278,6 +1438,16 @@ def ftp_install(args: argparse.Namespace) -> int:
     print(
         "Installation applicative FTP terminée et vérifiée. "
         f"Marqueur distant : {REMOTE_MANIFEST}"
+    )
+    print("Le transfert du runtime est terminé, mais le site n’est pas encore initialisé.")
+    print("À terminer sur l’hébergement :")
+    print(f"  1. faire pointer le webroot vers {remote_root}/public ;")
+    print("  2. créer la configuration locale et les secrets de production ;")
+    print("  3. créer ou restaurer la base SQLite dans un storage inscriptible ;")
+    print("  4. contrôler les migrations, l’intégrité et l’URL HTTPS du site.")
+    print(
+        "Ces éléments persistants sont volontairement exclus de runtime-copy "
+        "et de ftp-install."
     )
     return 0
 
@@ -1851,10 +2021,56 @@ def interactive_deploy() -> int:
     ))
 
 
-def interactive_ftp_install() -> int:
-    source = Path(ask("Répertoire local de départ", str(ROOT)))
+def interactive_runtime_copy() -> int:
+    print(
+        "Cette étape extrait uniquement le runtime livrable de dev. "
+        "Elle ne copie ni la base, ni les secrets, ni les fichiers de travail."
+    )
+    source = Path(ask("Répertoire de développement source", str(ROOT)))
     if not source.is_absolute():
         source = ROOT / source
+    destination = Path(ask(
+        "Répertoire local de livraison à créer",
+        str(DEFAULT_RUNTIME_COPY),
+    ))
+    if not destination.is_absolute():
+        destination = ROOT / destination
+    replace = False
+    if destination.exists():
+        replace = confirm(
+            "La destination existe. Conserver l’ancienne sous un nom "
+            "horodaté puis la remplacer"
+        )
+        if not replace:
+            print("Opération annulée : choisissez une destination vide ou absente.")
+            return 0
+    list_files = confirm("Afficher la liste détaillée des fichiers copiés")
+    return runtime_copy(argparse.Namespace(
+        source=source,
+        destination=destination,
+        replace=replace,
+        list_files=list_files,
+        apply=False,
+        interactive_confirmation=True,
+    ))
+
+
+def interactive_ftp_install() -> int:
+    print(
+        "Cette étape envoie une copie locale déjà préparée. Pour le parcours "
+        "dev → main → serveur, utilisez d’abord l’option 6."
+    )
+    source = Path(ask(
+        "Copie locale prête à envoyer",
+        str(DEFAULT_RUNTIME_COPY),
+    ))
+    if not source.is_absolute():
+        source = ROOT / source
+    if not source.is_dir():
+        raise AdminError(
+            "Copie locale introuvable. Préparez-la d’abord avec l’option 6 "
+            "ou indiquez un autre répertoire source."
+        )
     detected_vendor = vendor_directory(source)
     print(f"Vendor détecté : {detected_vendor}")
     transfer_vendor = confirm("Transférer le répertoire vendor", default=True)
@@ -1920,16 +2136,23 @@ def interactive_menu() -> int:
             "Créer une photographie SQLite autonome",
             interactive_backup_database,
         ),
-        "5": ("Créer un commit Git puis le pousser", interactive_publish),
-        "6": ("Déployer le delta applicatif versionné", interactive_deploy),
+        "5": ("Effectuer un commit Git puis le pousser", interactive_publish),
+        "6": (
+            "Réaliser une copie locale",
+            interactive_runtime_copy,
+        ),
         "7": (
-            "Installer un nouveau site depuis un dossier par FTP/FTPS",
+            "Installer une copie local sur un nouveau site, par FTP/FTPS",
             interactive_ftp_install,
+        ),
+        "8": (
+            "Mettre à jour un site existant par delta Git",
+            interactive_deploy,
         ),
     }
     while True:
         print()
-        print("WebeLi / Compta — administration")
+        print("WebeLi / ERP - Compta")
         print("=" * 42)
         for key, (title, _) in actions.items():
             print(f" {key}. {title}")
@@ -1953,7 +2176,17 @@ def interactive_menu() -> int:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="Administration WebeLi / Compta")
+    root = argparse.ArgumentParser(
+        description="Administration WebeLi / Compta",
+        epilog=(
+            "Première installation conseillée :\n"
+            "  1. runtime-copy  prépare une livraison locale dev → main ;\n"
+            "  2. ftp-install   envoie main → nouveau site FTP/FTPS ;\n"
+            "  3. provisionner séparément config/local.php et la base SQLite.\n"
+            "Les mises à jour ultérieures utilisent deploy depuis un commit Git."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     commands = root.add_subparsers(dest="command")
 
     database = commands.add_parser(
@@ -2074,7 +2307,46 @@ def parser() -> argparse.ArgumentParser:
     publish.add_argument("--apply", action="store_true")
     publish.set_defaults(handler=git_publish)
 
-    delivery = commands.add_parser("deploy", help="Déployer le delta entre deux commits")
+    local_copy = commands.add_parser(
+        "runtime-copy",
+        help="Préparer une copie locale livrable, par exemple dev vers main",
+    )
+    local_copy.add_argument(
+        "--source",
+        type=Path,
+        default=ROOT,
+        help="Répertoire de développement source (par défaut : dev courant)",
+    )
+    local_copy.add_argument(
+        "--destination",
+        type=Path,
+        default=DEFAULT_RUNTIME_COPY,
+        help="Répertoire local à créer (par défaut : ../main)",
+    )
+    local_copy.add_argument(
+        "--replace",
+        action="store_true",
+        help=(
+            "Déplacer une destination existante vers une sauvegarde horodatée "
+            "avant de créer la nouvelle copie"
+        ),
+    )
+    local_copy.add_argument(
+        "--list-files",
+        action="store_true",
+        help="Afficher chaque fichier retenu",
+    )
+    local_copy.add_argument(
+        "--apply",
+        action="store_true",
+        help="Créer réellement la copie locale (sinon simulation)",
+    )
+    local_copy.set_defaults(handler=runtime_copy)
+
+    delivery = commands.add_parser(
+        "deploy",
+        help="Mettre à jour un site existant par delta entre deux commits",
+    )
     delivery.add_argument("--config", type=Path, default=DEFAULT_DEPLOY_CONFIG)
     delivery.add_argument("--commit", default="HEAD")
     delivery.add_argument("--from", dest="from_commit")
@@ -2084,7 +2356,7 @@ def parser() -> argparse.ArgumentParser:
 
     direct_delivery = commands.add_parser(
         "ftp-install",
-        help="Installer le runtime d’un nouveau site depuis un dossier",
+        help="Installer un nouveau site depuis une copie locale préparée",
     )
     direct_delivery.add_argument(
         "--config",
@@ -2096,7 +2368,10 @@ def parser() -> argparse.ArgumentParser:
         "--source",
         type=Path,
         default=ROOT,
-        help="Répertoire local contenant la livraison complète",
+        help=(
+            "Copie locale contenant la livraison complète, idéalement créée "
+            "avec runtime-copy"
+        ),
     )
     direct_delivery.add_argument(
         "--remote-root",

@@ -55,23 +55,21 @@ préserver les colonnes et limite le retour à la ligne.
 
 ## Schéma de développement
 
-Le modèle canonique est contenu dans `database/migrations/001_initial.sql`.
-Les migrations additives 002 à 005 complètent respectivement la gouvernance de
-consolidation, le lien contact/employé, la suppression contrôlée des archives
-et la récupération du mot de passe. Une installation neuve applique les cinq
-versions. Tant que le produit n'est pas gelé pour la production, la procédure
-normale est :
+La version 0.6.1 est construite par les migrations immuables `001` à `008`.
+`001_initial.sql` fournit le socle canonique ; `002` à `008` ajoutent la
+gouvernance de consolidation, le lien contact/employé, la suppression
+contrôlée des archives, la récupération du mot de passe, la ventilation des
+comptes de trésorerie opérationnels, les sous-totaux des états financiers et
+les bénéficiaires précis des paiements salariaux.
 
-1. sauvegarder la base locale si son contenu peut être utile ;
-2. reconstruire une base vide depuis `001_initial.sql` ;
-3. recréer les données de développement ;
-4. lancer `db:integrity`, les tests et le build Vue.
-
-Après le gel de production, `001_initial.sql` devient immuable et toute
-évolution reçoit une migration additive.
+Une installation neuve applique les huit versions. Une base existante reçoit
+uniquement les versions manquantes avec
+`php bin/console db:migrate --apply --backup`. Les fichiers `001` à `008` ne
+sont plus modifiés ; la prochaine évolution structurelle commence à `009`.
+Voir [`migrations.md`](migrations.md).
 
 ## Retour arrière
 
 Le code revient par le commit Git précédent. Une base reconstruite revient
 uniquement par restauration de sa sauvegarde ; aucune tentative de suppression
-manuelle de tables ou colonnes n'est supportée.
+manuelle de tables, colonnes ou lignes de `schema_migrations` n'est supportée.

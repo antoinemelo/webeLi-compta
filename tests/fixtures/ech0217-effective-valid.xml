@@ -16,7 +16,7 @@
     <eCH-0217:sendingApplication>
       <eCH-0058:manufacturer>WebeLi</eCH-0058:manufacturer>
       <eCH-0058:product>Compta</eCH-0058:product>
-      <eCH-0058:productVersion>0.4.0-dev</eCH-0058:productVersion>
+      <eCH-0058:productVersion>0.6.1</eCH-0058:productVersion>
     </eCH-0217:sendingApplication>
   </eCH-0217:generalInformation>
   <eCH-0217:turnoverComputation>

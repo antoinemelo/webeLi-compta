@@ -1,6 +1,7 @@
 # Compta
 
-Socle PHP 8.2 / SQLite.
+Version applicative **0.6.1** — socle PHP 8.2 / SQLite, schéma couvert par les
+migrations immuables `001` à `008`.
 
 ## Installation locale
 
@@ -38,10 +39,12 @@ COMPTA_RESET_PASSWORD='une phrase secrète unique' \
   php bin/console user:reset-password --email=utilisateur@example.test
 ```
 
-`qualify` est la porte unique avant livraison : garde des migrations 001–005,
+`qualify` est la porte unique avant livraison : garde des migrations 001–008,
 lint PHP, deux suites de tests, migration vierge avec sauvegarde, diagnostic,
 intégrité SQLite et vérification du contenu de l'archive mutualisée. Voir
-[`docs/qualification.md`](docs/qualification.md).
+[`docs/qualification.md`](docs/qualification.md). La matrice des migrations,
+la procédure de mise à niveau et le retour arrière sont détaillés dans
+[`docs/migrations.md`](docs/migrations.md).
 
 ## API interne
 
@@ -280,7 +283,10 @@ Le lancement sans argument ouvre le menu interactif. Les sous-commandes
 documentées par `--help` restent utilisables pour l’automatisation. Voir
 [le guide d’administration Python](docs/administration-python.md).
 
-Le menu permet aussi de choisir un dossier local et un dossier FTP/FTPS
-d’arrivée pour installer directement le runtime minimal d’un nouveau site.
-`vendor` peut rester propre à l’instance, être mutualisé dans le répertoire
-parent ou ne pas être retransféré s’il existe déjà sur le serveur.
+Pour une première installation, le menu présente deux étapes explicites :
+préparer une copie locale de livraison `dev → main`, puis installer
+`main → nouveau site FTP/FTPS`. Cette copie contient uniquement le runtime ;
+elle exclut les secrets, la base et le stockage persistant. `vendor` peut
+rester propre à l’instance, être mutualisé dans le répertoire parent ou ne pas
+être retransféré s’il existe déjà sur le serveur. Les mises à jour ultérieures
+passent par le déploiement du delta Git versionné.

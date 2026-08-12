@@ -1,9 +1,14 @@
 # Administration Python
 
+Ce guide administre COMPTA **0.6.1** et son schéma SQLite couvert par les
+migrations immuables `001` à `008`. Les règles de mise à niveau et de retour
+arrière sont centralisées dans [`migrations.md`](migrations.md).
+
 Le point d’entrée est `tools/python/compta.py`. Lancé sans argument, il affiche
 un menu qui donne accès au diagnostic des extensions PHP, à la qualification,
 à la création ou restauration d’une base, à la création directe d’une
-photographie SQLite autonome, à la publication Git et au déploiement :
+photographie SQLite autonome, à la publication Git et au parcours explicite
+**dev → main → serveur FTP/FTPS** :
 
 ```bash
 python3 tools/python/compta.py
@@ -179,27 +184,69 @@ Pour une cible montée localement, le même protocole se teste avec :
 }
 ```
 
-## Installer directement un nouveau site par FTP/FTPS
+## Préparer une copie locale dev → main
 
-Le menu interactif propose également **Installer un nouveau site depuis un
-dossier par FTP/FTPS**. Il demande explicitement :
+Pour un premier test serveur, le parcours recommandé comporte deux étapes
+distinctes :
 
-1. le répertoire local de départ ;
+1. préparer sous `main/` une livraison locale contrôlable ;
+2. envoyer cette livraison vers un nouveau répertoire FTP/FTPS.
+
+Le script continue d’être exécuté depuis `dev/`. Le répertoire `main/` produit
+est un runtime applicatif complet contenant PHP, les migrations, les
+ressources, le build Vue et un `vendor/` local. Il ne contient volontairement
+ni dépôt Git, ni sources Vue, ni documentation, ni tests, ni outils
+d’administration, ni
+`config/local.php`, ni base SQLite, ni stockage persistant.
+
+Avec l’arborescence actuelle, commencer par une simulation :
+
+```bash
+python3 tools/python/compta.py runtime-copy \
+  --source /home/amelo/Documents/DEV/WebeLi/web/erp/dev \
+  --destination /home/amelo/Documents/DEV/WebeLi/web/erp/main \
+  --list-files
+```
+
+Après contrôle, créer réellement la copie :
+
+```bash
+python3 tools/python/compta.py runtime-copy \
+  --source /home/amelo/Documents/DEV/WebeLi/web/erp/dev \
+  --destination /home/amelo/Documents/DEV/WebeLi/web/erp/main \
+  --apply
+```
+
+Si `main/` existe déjà, la commande refuse de l’écraser. L’option `--replace`
+déplace d’abord l’ancienne copie vers un répertoire voisin horodaté, puis crée
+la nouvelle livraison. Elle ne supprime donc pas silencieusement la copie
+précédente.
+
+Dans le menu interactif, cette opération est nommée
+**Étape 1 — Préparer la copie locale dev → main**.
+
+## Installer main sur un nouveau site par FTP/FTPS
+
+L’étape 2 du menu est nommée
+**Installer main sur un nouveau site par FTP/FTPS**. Elle demande explicitement :
+
+1. la copie locale prête à envoyer, `main/` par défaut ;
 2. le fichier contenant la connexion FTP/FTPS ;
 3. le répertoire FTP absolu d’arrivée ;
 4. une confirmation après présentation du volume à envoyer.
 
-La même opération est automatisable :
+Depuis `dev/`, la même opération est automatisable. La première commande
+simule l’envoi, la seconde l’applique :
 
 ```bash
 python3 tools/python/compta.py ftp-install \
-  --source /chemin/vers/compta \
+  --source /home/amelo/Documents/DEV/WebeLi/web/erp/main \
   --remote-root /www/nouveau-site/compta
 
 python3 tools/python/compta.py ftp-install \
-  --source /chemin/vers/compta \
+  --source /home/amelo/Documents/DEV/WebeLi/web/erp/main \
   --remote-root /www/nouveau-site/compta \
-  --vendor-mode auto \
+  --vendor-mode local \
   --list-files \
   --apply
 ```
@@ -242,8 +289,33 @@ applicatifs existants ; elle ne supprime toujours aucune donnée distante.
 
 Le transfert installe le moteur d’un nouveau site, sans copier les secrets ni
 les données d’une autre instance. La configuration locale de production et la
-base initiale doivent ensuite être provisionnées pour ce nouveau site. Une
-instance utilisant un vendor mutualisé peut être rafraîchie sans le retransférer
-avec `ftp-install --replace-runtime --vendor-mode skip`. Le déploiement
-incrémental `deploy` reste disponible pour les installations dont le vendor
-demeure propre à chaque instance.
+base initiale doivent ensuite être provisionnées pour ce nouveau site.
+
+Après le transfert, le script affiche donc la checklist restante :
+
+1. faire pointer le webroot de l’hébergement vers le sous-répertoire `public/`
+   de la destination ;
+2. créer `config/local.php` ou les variables d’environnement de production,
+   sans les reprendre aveuglément depuis `dev/` ;
+3. créer une nouvelle base ou restaurer une photographie SQLite autonome sous
+   un `storage/` inscriptible ;
+4. appliquer et contrôler les migrations `001` à `008`, vérifier l’intégrité,
+   puis tester l’URL HTTPS publique.
+
+Le transfert FTP valide les empreintes des fichiers déposés, mais il ne peut
+pas confirmer à lui seul que la configuration HTTP, les droits du stockage et
+la base distante sont opérationnels. Avec un hébergement uniquement FTP/FTPS,
+une base initialisée peut être préparée localement avec `db-create`, figée avec
+`db-backup`, puis déposée séparément et prudemment. Elle ne doit jamais être
+transmise en FTP non chiffré lorsqu’elle contient des données ou identifiants
+réels.
+
+Une instance utilisant un vendor mutualisé peut être rafraîchie sans le
+retransférer avec `ftp-install --replace-runtime --vendor-mode skip`. Le
+déploiement incrémental `deploy` reste disponible pour les installations dont
+le vendor demeure propre à chaque instance.
+
+En résumé : `runtime-copy` prépare `main`, `ftp-install` installe un nouveau
+site, puis `deploy` sert aux mises à jour versionnées ultérieures. Copier tout
+le dossier `dev` avec ses données et secrets vers le serveur n’est ni nécessaire
+ni autorisé par ce parcours.

@@ -135,8 +135,9 @@ les écarts, les périodes closes, les allocations partielles, les frais et la
 séparation des permissions. Le scénario navigateur vérifie le parcours Vue et
 le refus d’un rapprochement incomplet.
 
-En développement, le schéma canonique reste `database/migrations/001_initial.sql`.
-Une base active incompatible est sauvegardée et contrôlée avant reconstruction.
-Après un gel de production, un changement de schéma devra passer par une
-migration additive et un retour arrière par restauration de la sauvegarde
-SQLite vérifiée.
+Dans COMPTA 0.6.1, ce périmètre dépend notamment de la migration immuable
+`006_multi_treasury_accounts.sql`, au sein de la couverture `001` à `008`.
+Toute évolution suivante passe par une migration additive à partir de `009`.
+Une base active est sauvegardée et contrôlée avant mise à niveau ; le retour
+arrière restaure cette sauvegarde SQLite vérifiée. Voir
+[`migrations.md`](migrations.md).

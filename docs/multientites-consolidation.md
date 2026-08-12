@@ -95,4 +95,6 @@ php bin/console db:migrate --apply --backup
 
 Le retour arrière consiste à arrêter les écritures et restaurer la sauvegarde
 SQLite créée juste avant la migration. Une période clôturée ou une élimination
-validée ne se corrige jamais directement en base.
+validée ne se corrige jamais directement en base. Dans COMPTA 0.6.1, `002`
+fait partie de la couverture immuable `001` à `008`; voir
+[`migrations.md`](migrations.md).

@@ -73,15 +73,17 @@ peut donc couvrir plusieurs contacts. Le rapprochement et le lettrage restent
 des actions distinctes, mais partagent le même paiement et la même écriture
 comptable idempotente.
 
-## Retour arrière en développement
+## Retour arrière
 
-Le schéma n’étant pas gelé, sauvegarder la base de confort, reconstruire depuis
-`database/migrations/001_initial.sql`, puis exécuter :
+Le schéma 0.6.1 couvre les migrations immuables `001` à `008`. Il ne doit pas
+être reconstruit en modifiant `001_initial.sql`. Avant une mise à niveau,
+créer la sauvegarde prévue par le moteur de migration, puis exécuter :
 
 ```bash
 php bin/console db:integrity
 php bin/console qualify
 ```
 
-Après le gel de production, cette évolution devra être portée par une migration
-additive et une restauration de sauvegarde constituera le retour arrière.
+Toute évolution suivante est portée par une migration additive à partir de
+`009`. Une restauration de sauvegarde constitue le retour arrière. Voir
+[`migrations.md`](migrations.md).

@@ -541,7 +541,7 @@ final class Tests
             (int) $pdo->query(
                 "SELECT COUNT(*) FROM schema_migrations"
             )->fetchColumn(),
-            'base initiale canonique et migrations additives présentes'
+            'couverture des migrations 001 à 008 présente'
         );
         $this->same(
             5,

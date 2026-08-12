@@ -186,7 +186,8 @@ utilisent `facturation.manage`, l’émission/PDF `facturation.issue`, la
 comptabilisation `facturation.post`, les paiements/allocations
 `facturation.pay` et les rappels `facturation.remind`.
 
-En développement, les tables de récurrence et l’idempotence des contacts font
-partie de `database/migrations/001_initial.sql`. Une reconstruction doit être
-précédée d’une sauvegarde de confort puis suivie de `db:integrity`. Après gel
-de production, cette évolution devra être portée par une migration additive.
+Les tables de récurrence et l'idempotence des contacts appartiennent au socle
+`001_initial.sql`, au sein de la couverture immuable `001` à `008` de la
+version 0.6.1. Toute évolution structurelle suivante reçoit une migration
+additive à partir de `009`. La mise à niveau sauvegarde la base et reste suivie
+de `db:integrity`; voir [`migrations.md`](migrations.md).

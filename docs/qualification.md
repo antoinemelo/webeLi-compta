@@ -1,5 +1,8 @@
 # Qualification et archive mutualisée
 
+Ce guide s'applique à COMPTA **0.6.1**, dont le schéma courant couvre les
+migrations immuables `001` à `008`.
+
 ## Porte unique
 
 Avant chaque livraison :
@@ -10,7 +13,7 @@ php bin/console qualify
 
 La commande vérifie successivement :
 
-1. l’empreinte de la base initiale canonique ;
+1. les empreintes des migrations immuables `001` à `008` ;
 2. la syntaxe de tous les fichiers PHP applicatifs ;
 3. les suites `quick` puis `integration` ;
 4. une installation SQLite vierge ;
@@ -18,14 +21,23 @@ La commande vérifie successivement :
 6. les préconditions de l'archive de production.
 
 La suite d’intégration vérifie qu’une base vide atteint le schéma courant par
-les versions immuables `001` à `005`, que leur rejeu est idempotent et que
+les versions immuables `001` à `008`, que leur rejeu est idempotent et que
 toute altération d’un checksum est refusée :
 
 - `001_initial.sql` : base canonique et référentiels ;
 - `002_consolidation_governance.sql` : gouvernance des groupes ;
 - `003_contact_employee_link.sql` : rattachement contrôlé contact/employé ;
 - `004_deletable_financial_archives.sql` : suppression protégée des archives ;
-- `005_password_recovery.sql` : jetons de récupération à usage unique.
+- `005_password_recovery.sql` : jetons de récupération à usage unique ;
+- `006_multi_treasury_accounts.sql` : ventilation par compte de trésorerie
+  opérationnel ;
+- `007_financial_statement_rubric_subtotals.sql` : sous-totaux configurables
+  des rubriques ;
+- `008_payroll_payment_beneficiaries.sql` : bénéficiaires précis des paiements
+  salariaux.
+
+La procédure complète de mise à niveau et de restauration est décrite dans
+[`migrations.md`](migrations.md).
 
 Les tests ne sont pas dupliqués. `quick` contient les contrôles purs de
 configuration et la parité de calcul OCAS ; `integration` contient SQLite,
@@ -111,7 +123,7 @@ production, seul `public/` est exposé par le serveur HTTP.
 ## Restaurer la référence
 
 Le commit qualifié et sa sauvegarde sont les points de restauration du socle.
-Le fichier `docs/baseline/migrations.sha256` protège la base initiale canonique et
-`tests/fixtures/baseline-reports.json` fixe les résultats comptables minimaux.
-Une restauration de base s'effectue uniquement depuis une sauvegarde validée
-par `db:integrity`.
+Le fichier `docs/baseline/migrations.sha256` protège les huit migrations de la
+couverture 0.6.1 et `tests/fixtures/baseline-reports.json` fixe les résultats
+comptables minimaux. Une restauration de base s'effectue uniquement depuis une
+sauvegarde validée par `db:integrity`.

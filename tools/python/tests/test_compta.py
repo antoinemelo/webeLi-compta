@@ -62,7 +62,10 @@ class ComptaAdminTests(unittest.TestCase):
             for call in output.call_args_list
         )
         self.assertIn("4. Créer une photographie SQLite autonome", rendered)
-        self.assertIn("7. Installer un nouveau site", rendered)
+        self.assertIn("6. Étape 1 — Préparer la copie locale dev → main", rendered)
+        self.assertIn("7. Étape 2 — Installer main", rendered)
+        self.assertIn("8. Mettre à jour un site existant", rendered)
+        self.assertIn("option 6, puis option 7", rendered)
 
     def test_runtime_filter_excludes_sources_and_private_data(self) -> None:
         self.assertTrue(ADMIN.is_runtime_path("src/Core/App.php"))
@@ -114,6 +117,73 @@ class ComptaAdminTests(unittest.TestCase):
                 inventory,
             ))
             self.assertNotIn(str(root), json.dumps(manifest))
+
+    def test_runtime_copy_creates_a_self_contained_delivery_without_data(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            source = parent / "dev"
+            destination = parent / "main"
+            self.make_runtime_source(source)
+            inventory = ADMIN.direct_install_files(source)
+            vendor = ADMIN.vendor_directory(source)
+            backup = ADMIN.copy_runtime_directory(
+                source,
+                destination,
+                inventory,
+                vendor,
+            )
+            self.assertIsNone(backup)
+            self.assertEqual(inventory, ADMIN.direct_install_files(destination))
+            self.assertTrue((destination / "vendor/autoload.php").is_file())
+            self.assertTrue((destination / "public/app/index.html").is_file())
+            self.assertFalse((destination / "config/local.php").exists())
+            self.assertFalse((destination / "storage/database/app.sqlite").exists())
+            self.assertFalse((destination / "frontend").exists())
+            self.assertFalse((destination / "tools").exists())
+
+            (destination / "index.php").write_text(
+                "ancienne copie\n",
+                encoding="utf-8",
+            )
+            backup = ADMIN.copy_runtime_directory(
+                source,
+                destination,
+                inventory,
+                vendor,
+                replace=True,
+            )
+            self.assertIsNotNone(backup)
+            assert backup is not None
+            self.assertEqual(
+                "ancienne copie\n",
+                (backup / "index.php").read_text(encoding="utf-8"),
+            )
+            self.assertEqual(
+                (source / "index.php").read_text(encoding="utf-8"),
+                (destination / "index.php").read_text(encoding="utf-8"),
+            )
+
+    def test_runtime_copy_refuses_overlapping_or_existing_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "dev"
+            self.make_runtime_source(source)
+            with self.assertRaisesRegex(
+                ADMIN.AdminError,
+                "à l’intérieur de la source",
+            ):
+                ADMIN.validate_runtime_copy_target(source, source / "main")
+            destination = Path(directory) / "main"
+            destination.mkdir()
+            inventory = ADMIN.direct_install_files(source)
+            with self.assertRaisesRegex(ADMIN.AdminError, "existe déjà"):
+                ADMIN.copy_runtime_directory(
+                    source,
+                    destination,
+                    inventory,
+                    ADMIN.vendor_directory(source),
+                )
 
     def test_direct_ftp_install_rejects_incomplete_build_and_unsafe_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -328,6 +398,20 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertFalse(arguments.replace_runtime)
         self.assertIsNone(arguments.vendor_mode)
         self.assertFalse(arguments.replace_shared_vendor)
+
+    def test_runtime_copy_command_exposes_dev_to_main_workflow(self) -> None:
+        arguments = ADMIN.parser().parse_args([
+            "runtime-copy",
+            "--source",
+            "/tmp/dev",
+            "--destination",
+            "/tmp/main",
+        ])
+        self.assertEqual(Path("/tmp/dev"), arguments.source)
+        self.assertEqual(Path("/tmp/main"), arguments.destination)
+        self.assertFalse(arguments.apply)
+        self.assertFalse(arguments.replace)
+        self.assertFalse(arguments.list_files)
 
     def test_only_complete_v2_manifests_are_trusted_for_deltas(self) -> None:
         commit = ADMIN.git("rev-parse", "HEAD")

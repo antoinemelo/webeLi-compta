@@ -5,7 +5,10 @@ Ce document est une photographie historique servant aux comparaisons et aux
 empreintes ; il ne décrit pas l’application courante. Pour l’état actuel,
 consulter le [README](../../README.md), la
 [qualification](../qualification.md) et
-[l’audit de l’interface](../vue-retirement-audit.md).
+[l’audit de l’interface](../vue-retirement-audit.md). En particulier, la série
+historique `001` à `010` mentionnée ci-dessous ne doit pas être confondue avec
+la couverture de COMPTA 0.6.1, constituée des migrations immuables `001` à
+`008` et décrite dans le [guide des migrations](../migrations.md).
 
 ## Socle
 
