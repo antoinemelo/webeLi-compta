@@ -192,6 +192,7 @@ test('typographie du login stable avant, pendant et après le focus', async ({ p
   expect(await typography(emailFields)).toEqual(emailBefore);
   await page.getByLabel('Adresse e-mail').fill('lecteur@example.test');
   await page.getByRole('button', { name: 'Continuer' }).click();
+  await expect(page.locator('#password')).toBeFocused();
   await page.evaluate(() => document.fonts.ready);
   const passwordFields = page.locator('label[for="password"], #password');
   const passwordBefore = await typography(passwordFields);

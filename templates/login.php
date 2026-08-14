@@ -103,7 +103,8 @@ $hasIdentification = !$hasChallenge
                 <div class="login-password-field">
                   <input class="form-control form-control-lg" id="password"
                     name="password" type="password" autocomplete="current-password"
-                    maxlength="4096" required>
+                    maxlength="4096" required
+                    <?= $hasError ? '' : 'data-auto-focus' ?>>
                   <button class="login-password-toggle" type="button"
                     data-password-toggle="password"
                     aria-label="Afficher le mot de passe" aria-pressed="false">

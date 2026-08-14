@@ -3905,8 +3905,13 @@ final class Tests
         $this->true(
             str_contains($identifiedLogin->body, 'http@example.test')
             && str_contains($identifiedLogin->body, 'id="password"')
+            && preg_match(
+                '/id="password"[^>]*data-auto-focus/',
+                $identifiedLogin->body
+            ) === 1
             && !str_contains($identifiedLogin->body, 'id="email"'),
-            'second écran rappelle le compte et ne demande que le mot de passe'
+            'second écran rappelle le compte, demande le mot de passe'
+            . ' et active automatiquement son champ'
         );
         $csrfAfterIdentification = $csrf->token();
         $this->true(

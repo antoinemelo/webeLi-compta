@@ -4,7 +4,7 @@
   "branch": "main",
   "files": {
     ".htaccess": "447f96f30c5f226fd1fd215ba799abf1e2584072ee0e3dbaf673196850746aef",
-    "VERSION": "a466ef209f5c3aee5ff0c702e2e9d5cced4783d2a655e8ab66330f21a5557b3f",
+    "VERSION": "c9f56eb9348cbc8345bdaea7ca24c9f960e1598af05472794760a2682ff07a8c",
     "bin/console": "2ef98fdd37ba541c29cdd34535da396378e23d9baf70eec8e228306d33f0a88a",
     "bootstrap/app.php": "e78336874c5ab34674440f07784981c09239638106bd9a6cfaeccefdd35ff016",
     "bootstrap/autoload.php": "8b1d6d9c1a8812d808ae90fd776820ce6cdba9a25f3ab265de2521482e43a143",
@@ -202,7 +202,7 @@
     "templates/dashboard.php": "1f2ecdbfadb098d89558219014d65fa5a1072cb4f12b0942ebdccb513673ce14",
     "templates/error.php": "9086247ee84295c69448abd84e5a86a7c654d0fc7e3c41244af42b6767ed49c6",
     "templates/layout.php": "119912062a5b4d5af1099a190954e8f8f37d6c65b23758cc657278925ea78017",
-    "templates/login.php": "840c5a751d348599b515c321773ab44f046ab2eda2e75cb17d0fc0e454d804bf",
+    "templates/login.php": "730253e42389f0c6ae464252bd5c177557f4e93a6ae0ca081fc5e88e42d58989",
     "templates/password-reset-request.php": "4761ca515c43d6815718653abe8265126fded3bc378b8d5d67f1fd1a292024ab",
     "templates/password-reset.php": "c071880e69abd44f56905f592b094243c304cbe4392877668cd5b871e8ef09e3",
     "templates/salaires/fiche.php": "e6b1732a97da22bf7a939ebb7ec3b9400a65e0980545f88d92e714372f97dcf9",
@@ -210,7 +210,7 @@
     "templates/vue-shell.php": "fc9b15a72c1f352a1070b769c41a1b8092ea469376adb71495f1b294fdc0d585"
   },
   "format": 1,
-  "generated_at": "2026-08-14T15:51:12+00:00",
+  "generated_at": "2026-08-14T16:23:35+00:00",
   "manifest_url": "https://raw.githubusercontent.com/antoinemelo/webeLi-compta/main/RELEASE.json",
   "preserve_on_update": [
     "storage/",
@@ -218,5 +218,5 @@
     "vendor/"
   ],
   "repository": "git@github.com:antoinemelo/webeLi-compta.git",
-  "version": "0.6.2"
+  "version": "0.6.3"
 }
