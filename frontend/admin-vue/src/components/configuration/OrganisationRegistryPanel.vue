@@ -577,24 +577,6 @@ async function removeDossier(): Promise<void> {
 
 <template>
   <section class="registry-stack" aria-label="Gestion des organisations et dossiers">
-    <div class="panel registry-heading registry-intro">
-      <div>
-        <h2>Choisissez une organisation pour commencer</h2>
-        <p>
-          Sélectionnez une organisation existante, puis gérez séparément ses
-          dossiers, ses informations et ses accès.
-        </p>
-      </div>
-      <button
-        v-if="canAdminister"
-        type="button"
-        class="button"
-        @click="creating = !creating"
-      >
-        {{ creating ? 'Fermer' : 'Créer une organisation' }}
-      </button>
-    </div>
-
     <ErrorSummary :message="store.error" />
 
     <form
@@ -696,6 +678,14 @@ async function removeDossier(): Promise<void> {
         </template>
       </FormField>
       <button type="submit" class="button secondary">Appliquer</button>
+      <button
+        v-if="canAdminister"
+        type="button"
+        class="button"
+        @click="creating = !creating"
+      >
+        {{ creating ? 'Fermer' : 'Créer une organisation' }}
+      </button>
     </form>
 
     <div class="registry-browser">
@@ -1548,7 +1538,7 @@ async function removeDossier(): Promise<void> {
 .registry-heading, .panel-heading, .registry-actions, .inline-editor, .registry-filters {
   display: flex; gap: 1rem; align-items: end; justify-content: space-between;
 }
-.registry-intro h2, .directory-heading h2, .registry-section h3 { margin: 0; }
+.directory-heading h2, .registry-section h3 { margin: 0; }
 .registry-form, .registry-detail { display: grid; gap: 1rem; }
 .registry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 .registry-filters { justify-content: flex-start; }

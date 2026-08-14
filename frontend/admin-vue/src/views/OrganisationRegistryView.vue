@@ -11,10 +11,19 @@ const canManageRegistry = computed(() => (
 </script>
 
 <template>
-  <MaintenancePanel v-if="context.can('installation.admin')" />
-  <OrganisationRegistryPanel v-if="canManageRegistry" />
-  <section v-else class="access-message denied" role="alert">
-    <strong>Accès refusé</strong>
-    <p>La gestion d’une organisation ou de l’installation est requise.</p>
-  </section>
+  <div class="organisation-registry-view">
+    <MaintenancePanel v-if="context.can('installation.admin')" />
+    <OrganisationRegistryPanel v-if="canManageRegistry" />
+    <section v-else class="access-message denied" role="alert">
+      <strong>Accès refusé</strong>
+      <p>La gestion d’une organisation ou de l’installation est requise.</p>
+    </section>
+  </div>
 </template>
+
+<style scoped>
+.organisation-registry-view {
+  display: grid;
+  gap: 1rem;
+}
+</style>

@@ -81,7 +81,7 @@ onMounted(() => check(false));
     <div class="maintenance-heading">
       <div>
         <p class="eyebrow">Maintenance de l’installation</p>
-        <h2 id="maintenance-title">Versions et mise à jour Git</h2>
+        <h2 id="maintenance-title">Versions et mise à jour</h2>
       </div>
       <span
         class="status-badge"
@@ -106,10 +106,6 @@ onMounted(() => check(false));
       L’installation téléchargera la publication depuis GitHub, vérifiera chaque
       empreinte, sauvegardera la base et le code, puis appliquera les migrations.
     </p>
-    <p v-else class="maintenance-copy">
-      La synchronisation est déclenchée uniquement à votre demande. Les données,
-      secrets locaux et fichiers de stockage ne sont jamais remplacés.
-    </p>
     <p v-if="release && !release.writable" class="maintenance-error" role="alert">
       Le serveur Web ne peut pas écrire dans le runtime ou le stockage. La mise à
       jour automatique est désactivée jusqu’à correction des permissions.
@@ -133,14 +129,7 @@ onMounted(() => check(false));
       >
         {{ applying ? 'Installation en cours…' : `Installer ${release.latest}` }}
       </button>
-      <a
-        class="source-link"
-        href="https://github.com/antoinemelo/webeLi-compta"
-        target="_blank"
-        rel="noopener noreferrer"
-      >Dépôt source GitHub</a>
     </div>
-    <small>Cette fonction est réservée aux administrateurs de l’installation.</small>
   </section>
 </template>
 
@@ -170,7 +159,7 @@ onMounted(() => check(false));
 }
 .version-grid dt { color: var(--muted); font-size: .76rem; font-weight: 750; }
 .version-grid dd { margin: 0; font-weight: 800; overflow-wrap: anywhere; }
-.maintenance-copy, .maintenance-panel small { color: var(--muted); }
+.maintenance-copy { color: var(--muted); }
 .maintenance-error {
   margin: 0;
   padding: .75rem;
@@ -179,11 +168,9 @@ onMounted(() => check(false));
   border-left: .25rem solid #b64034;
 }
 .maintenance-actions { justify-content: flex-start; }
-.source-link { margin-left: auto; color: var(--accent); font-weight: 750; }
 .status-attention { color: #714900; background: #fff2ce; }
 @media (max-width: 820px) {
   .version-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .source-link { width: 100%; margin-left: 0; }
 }
 @media (max-width: 520px) {
   .version-grid { grid-template-columns: 1fr; }

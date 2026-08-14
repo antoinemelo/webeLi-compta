@@ -877,6 +877,26 @@ test('registre des organisations : création, historique et cycle de vie', async
     name: 'Organisations',
     exact: true
   })).toBeVisible();
+  await expect(page.getByRole('heading', {
+    name: 'Versions et mise à jour',
+    exact: true
+  })).toBeVisible();
+  await expect(page.getByText(
+    'La synchronisation est déclenchée uniquement à votre demande.'
+  )).toHaveCount(0);
+  await expect(page.getByText(
+    'Cette fonction est réservée aux administrateurs de l’installation.'
+  )).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Dépôt source GitHub' })).toHaveCount(0);
+  await expect(page.getByRole('heading', {
+    name: 'Choisissez une organisation pour commencer'
+  })).toHaveCount(0);
+  const registrySearch = page.getByRole('search');
+  await expect(registrySearch.getByRole('button', { name: 'Appliquer' })).toBeVisible();
+  await expect(registrySearch.getByRole('button', {
+    name: 'Créer une organisation'
+  })).toBeVisible();
+  await expect(page.locator('.organisation-registry-view')).toHaveCSS('gap', '16px');
 
   await page.getByRole('button', { name: 'Créer une organisation' }).click();
   const creation = page.locator('form').filter({

@@ -4,7 +4,7 @@
   "branch": "main",
   "files": {
     ".htaccess": "447f96f30c5f226fd1fd215ba799abf1e2584072ee0e3dbaf673196850746aef",
-    "VERSION": "c9f56eb9348cbc8345bdaea7ca24c9f960e1598af05472794760a2682ff07a8c",
+    "VERSION": "20c121886eb4f762044c6507745f6494525432ac22b41f5a73a8e5bf15b8b90e",
     "bin/console": "2ef98fdd37ba541c29cdd34535da396378e23d9baf70eec8e228306d33f0a88a",
     "bootstrap/app.php": "e78336874c5ab34674440f07784981c09239638106bd9a6cfaeccefdd35ff016",
     "bootstrap/autoload.php": "8b1d6d9c1a8812d808ae90fd776820ce6cdba9a25f3ab265de2521482e43a143",
@@ -24,10 +24,10 @@
     "database/seeds/veb_pme_2024_fr.csv": "c231f295c65908878a0b9fb1830921a5d8dbd89397d80175743e42c97f34ec5b",
     "index.php": "a0eac6a0c291fe620dc2c1594d2cd69a5e885b3115ea625c1bd77f0463496827",
     "public/.htaccess": "f6dc480145b0e8eec13511f727c39f67bf5de0c08199e8c4c61bf638b8d91193",
-    "public/app/.vite/manifest.json": "8041067ee3c04e51460ea5013b7f6e8a66d125178859a94bb23861e9833e2a3e",
-    "public/app/assets/index-BW5HfOax.css": "d74efa90814c5557099ab3b36a2e639e41da98be454d11b25a1fd89ff79584ef",
-    "public/app/assets/index-CjhdNSSr.js": "bfa985bf642121d83b92b56bc9b063395173f82e58ca8061d12aa189d48bb288",
-    "public/app/index.html": "15ccb102880778bc53d79df8b2f84850cd284a0d633c8727267a9cfcfd06e24c",
+    "public/app/.vite/manifest.json": "77c447288b89d958874b4d38e5402a5f6966a8bd4c662c1881233f876b2abd75",
+    "public/app/assets/index-It7i8ChR.css": "321bf972352676a52f40cdb6597b874d2d3771f2e7fe9df6daf2208f8372b5b2",
+    "public/app/assets/index-jrXvZVyo.js": "e29e70960871ff325c5c18b1703810c0fb3bbd6d875bd4e7cff225eb540d7d68",
+    "public/app/index.html": "fe2011bd6072fb87edf81ba7835efcf8822850381fd3c42dbfab5efcc6305cde",
     "public/assets/app.css": "e8527e228c1acf68dd925d4857a43e65a47b784c1767bc10fa2c7b2587b82ae6",
     "public/assets/app.js": "5645af5b28f0cc4a44c5e0dcf9bf16ccc7dc3ed95ab81a3f907df0e019d5bfc0",
     "public/assets/fonts/montserrat/Montserrat-Variable.ttf": "15afee3bc7a2c934e3ba264d6d7dbe6ba05c160f1edf9ad9b420d6a602fc55cc",
@@ -210,7 +210,7 @@
     "templates/vue-shell.php": "fc9b15a72c1f352a1070b769c41a1b8092ea469376adb71495f1b294fdc0d585"
   },
   "format": 1,
-  "generated_at": "2026-08-14T16:23:35+00:00",
+  "generated_at": "2026-08-14T16:36:37+00:00",
   "manifest_url": "https://raw.githubusercontent.com/antoinemelo/webeLi-compta/main/RELEASE.json",
   "preserve_on_update": [
     "storage/",
@@ -218,5 +218,5 @@
     "vendor/"
   ],
   "repository": "git@github.com:antoinemelo/webeLi-compta.git",
-  "version": "0.6.3"
+  "version": "0.6.4"
 }
