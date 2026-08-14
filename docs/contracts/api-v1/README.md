@@ -66,6 +66,8 @@ Les exemples versionnés sont :
 | POST | `/api/v1/security/email/confirm` | confirmation du second facteur par e-mail |
 | POST | `/api/v1/security/disable` | retour au mot de passe seul et révocation des sessions |
 | POST | `/api/v1/security/password` | changement de phrase secrète et révocation des sessions |
+| GET | `/api/v1/maintenance/release` | version installée et publication Git stable, réservées à `installation.admin` |
+| POST | `/api/v1/maintenance/release/apply` | installation confirmée par version et empreinte, avec CSRF, sauvegarde et migrations |
 | GET | `/api/v1/configuration` | identité, modules, paiements et audit |
 | GET | `/api/v1/configuration/setup-guide` | état métier ordonné du parcours initial du dossier |
 | POST | `/api/v1/configuration/setup-guide/confirm` | confirmation contrôlée d’une étape prête |

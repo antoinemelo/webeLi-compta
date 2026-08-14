@@ -16,6 +16,8 @@ use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
 use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Mail\ConfiguredMailer;
+use Compta\Core\Maintenance\MaintenanceApiController;
+use Compta\Core\Maintenance\UpdateService;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Security\NativeSessionStore;
 use Compta\Core\Security\TotpService;
@@ -346,7 +348,18 @@ $apiRoutes = new ApiRouteRegistry(
         $structureAccess,
         new StructureAccessInputValidator()
     ),
-    new SecurityApiController($auth, $mfa)
+    new SecurityApiController($auth, $mfa),
+    new MaintenanceApiController(
+        $auth,
+        $access,
+        new UpdateService(
+            $pdo,
+            $root,
+            $config->string('storage_path'),
+            $config->string('instance_id')
+        ),
+        $audit
+    )
 );
 $shellPage = new ShellPageController(
     $config,

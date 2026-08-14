@@ -79,6 +79,29 @@ class ComptaAdminTests(unittest.TestCase):
         self.assertFalse(ADMIN.is_runtime_path("vendor/autoload.php"))
         self.assertFalse(ADMIN.is_runtime_path("livrables/SPECS_V02/README.md"))
 
+    def test_git_release_manifest_contains_only_verified_runtime(self) -> None:
+        self.assertEqual("0.6.2", ADMIN.next_git_release_version("0.6.1"))
+        self.assertEqual("2026Q3.8", ADMIN.next_git_release_version("2026Q3.7"))
+        manifest = ADMIN.git_release_manifest("0.6.2")
+        self.assertEqual(1, manifest["format"])
+        self.assertEqual("webeli-compta", manifest["application"])
+        self.assertEqual(ADMIN.GIT_RELEASE_REPOSITORY, manifest["repository"])
+        self.assertEqual(
+            ["storage/", "config/local.php", "vendor/"],
+            manifest["preserve_on_update"],
+        )
+        self.assertIn("bootstrap/app.php", manifest["files"])
+        self.assertIn("public/app/.vite/manifest.json", manifest["files"])
+        self.assertNotIn("config/local.php", manifest["files"])
+        self.assertNotIn("tests/run.php", manifest["files"])
+        self.assertNotIn("tools/python/compta.py", manifest["files"])
+        self.assertNotIn("RELEASE.json", manifest["files"])
+        for path, digest in manifest["files"].items():
+            self.assertEqual(
+                digest,
+                ADMIN.hashlib.sha256((ADMIN.ROOT / path).read_bytes()).hexdigest(),
+            )
+
     def test_vendor_lookup_uses_local_parent_then_grandparent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

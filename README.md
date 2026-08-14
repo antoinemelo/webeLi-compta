@@ -85,6 +85,12 @@ La section **Accès** distingue les rôles d’installation, hérités et direct
 prévisualise toute modification, protège le dernier administrateur et permet
 de recopier explicitement la matrice directe d’un dossier frère lors de sa
 création.
+Pour un utilisateur possédant `installation.admin`, ce même écran expose la
+version installée et la dernière publication stable de
+`antoinemelo/webeLi-compta`. La vérification et l’installation restent
+manuelles ; chaque fichier Git est contrôlé par SHA-256 avant sauvegarde du
+code et de SQLite, passage en maintenance et application transactionnelle des
+migrations. Voir [le guide de mise à jour Git](docs/mise-a-jour-git.md).
 
 ## Initialiser la comptabilité
 
@@ -272,7 +278,7 @@ sont documentés dans le
 ## Administration
 
 La création d’une instance utilisable, les bases techniques, la restauration
-contrôlée, la publication Git et le déploiement incrémental FTPS sont regroupés
+contrôlée, la publication Git installable et le déploiement incrémental FTPS sont regroupés
 dans :
 
 ```bash
@@ -288,5 +294,7 @@ préparer une copie locale de livraison `dev → main`, puis installer
 `main → nouveau site FTP/FTPS`. Cette copie contient uniquement le runtime ;
 elle exclut les secrets, la base et le stockage persistant. `vendor` peut
 rester propre à l’instance, être mutualisé dans le répertoire parent ou ne pas
-être retransféré s’il existe déjà sur le serveur. Les mises à jour ultérieures
-passent par le déploiement du delta Git versionné.
+être retransféré s’il existe déjà sur le serveur. Après l’amorçage initial du
+client de maintenance, les mises à jour ultérieures peuvent être installées à
+la demande directement depuis l’interface live, GitHub restant l’unique
+intermédiaire entre `dev` et l’instance Web.

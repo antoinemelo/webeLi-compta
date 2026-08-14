@@ -17,6 +17,7 @@ import io
 import json
 import os
 import posixpath
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -32,11 +33,35 @@ REMOTE_MANIFEST = "storage/deployments/current.json"
 REMOTE_RELEASES = "storage/deployments/releases"
 DEPLOY_MANIFEST_SCHEMA = 2
 DIRECT_INSTALL_MANIFEST_SCHEMA = 1
+GIT_RELEASE_MANIFEST_FORMAT = 1
+GIT_RELEASE_REPOSITORY = "git@github.com:antoinemelo/webeLi-compta.git"
+GIT_RELEASE_BRANCH = "main"
+GIT_RELEASE_MANIFEST_URL = (
+    "https://raw.githubusercontent.com/antoinemelo/webeLi-compta/main/RELEASE.json"
+)
+GIT_RELEASE_ARCHIVE_URL = (
+    "https://codeload.github.com/antoinemelo/webeLi-compta/tar.gz/refs/heads/main"
+)
+GIT_RELEASE_REQUIRED_FILES = {
+    ".htaccess",
+    "index.php",
+    "VERSION",
+    "composer.json",
+    "composer.lock",
+    "bootstrap/app.php",
+    "config/app.php",
+    "database/migrations/001_initial.sql",
+    "public/.htaccess",
+    "public/index.php",
+    "public/app/index.html",
+    "public/app/.vite/manifest.json",
+}
 
 RUNTIME_FILES = {
     ".htaccess",
     "index.php",
     "VERSION",
+    "RELEASE.json",
     "composer.json",
     "composer.lock",
 }
@@ -691,21 +716,136 @@ def unsafe_git_path(path: str) -> bool:
     )
 
 
+def next_git_release_version(current: str) -> str:
+    value = current.strip()
+    quarter = re.fullmatch(r"(\d{4}Q[1-4])\.(\d+)", value)
+    if quarter:
+        return f"{quarter.group(1)}.{int(quarter.group(2)) + 1}"
+    semantic = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value)
+    if semantic:
+        return (
+            f"{semantic.group(1)}.{semantic.group(2)}."
+            f"{int(semantic.group(3)) + 1}"
+        )
+    now = datetime.now(timezone.utc)
+    return f"{now.year}Q{((now.month - 1) // 3) + 1}.1"
+
+
+def validate_git_release_source(remote: str, branch: str) -> None:
+    if branch != GIT_RELEASE_BRANCH:
+        raise AdminError(
+            f"La publication installable doit cibler la branche {GIT_RELEASE_BRANCH}."
+        )
+    try:
+        remote_url = git("remote", "get-url", remote)
+    except subprocess.CalledProcessError as error:
+        raise AdminError(f"Dépôt Git distant introuvable : {remote}") from error
+    normalized = remote_url.strip().removesuffix("/").removesuffix(".git")
+    allowed = {
+        "git@github.com:antoinemelo/webeLi-compta",
+        "https://github.com/antoinemelo/webeLi-compta",
+        "ssh://git@github.com/antoinemelo/webeLi-compta",
+    }
+    if normalized not in allowed:
+        raise AdminError(
+            "La publication installable est limitée au dépôt "
+            "antoinemelo/webeLi-compta."
+        )
+
+
+def worktree_runtime_files() -> list[str]:
+    fields = run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        capture=True,
+    ).stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    files: list[str] = []
+    for path in fields:
+        if not path or path == "RELEASE.json" or not is_runtime_path(path):
+            continue
+        source = ROOT / path
+        if source.is_symlink():
+            raise AdminError(f"Lien symbolique refusé dans la publication : {path}")
+        if source.is_file():
+            files.append(path)
+    inventory = sorted(set(files))
+    missing = sorted(GIT_RELEASE_REQUIRED_FILES.difference(inventory))
+    if missing:
+        raise AdminError(
+            "Publication Git incomplète, fichiers indispensables absents : "
+            + ", ".join(missing)
+        )
+    return inventory
+
+
+def git_release_manifest(version: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", version):
+        raise AdminError(
+            "La version doit contenir uniquement lettres, chiffres, points, "
+            "tirets ou tirets bas."
+        )
+    inventory = worktree_runtime_files()
+    files = {
+        path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+        for path in inventory
+    }
+    return {
+        "format": GIT_RELEASE_MANIFEST_FORMAT,
+        "application": "webeli-compta",
+        "version": version,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "repository": GIT_RELEASE_REPOSITORY,
+        "branch": GIT_RELEASE_BRANCH,
+        "manifest_url": GIT_RELEASE_MANIFEST_URL,
+        "archive_url": GIT_RELEASE_ARCHIVE_URL,
+        "preserve_on_update": ["storage/", "config/local.php", "vendor/"],
+        "files": files,
+    }
+
+
+def write_git_release(version: str) -> None:
+    (ROOT / "VERSION").write_text(version + "\n", encoding="utf-8")
+    manifest = git_release_manifest(version)
+    (ROOT / "RELEASE.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
 def git_publish(args: argparse.Namespace) -> int:
     paths = status_paths()
     unsafe = [path for path in paths if unsafe_git_path(path)]
     if unsafe:
         raise AdminError("Fichiers locaux sensibles refusés par Git : " + ", ".join(unsafe))
-    if not paths:
+    initial_release = not (ROOT / "RELEASE.json").is_file()
+    meaningful = [path for path in paths if path not in {"VERSION", "RELEASE.json"}]
+    if not meaningful and not initial_release:
         print("Aucun changement à publier.")
         return 0
+    validate_git_release_source(args.remote, args.branch)
+    current_version = (
+        (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+        if (ROOT / "VERSION").is_file()
+        else ""
+    )
+    release_version = (
+        str(getattr(args, "release_version", "") or "").strip()
+        or next_git_release_version(current_version)
+    )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", release_version):
+        raise AdminError("Version de publication invalide.")
     print("Changements qui seront indexés :")
-    for path in paths:
+    for path in sorted(set(paths + ["VERSION", "RELEASE.json"])):
         print(f"  - {path}")
+    print(f"Version installable : {current_version or 'non versionnée'} -> {release_version}")
     print(f"Commit : {args.message}")
     print(f"Push : {args.remote}/{args.branch}")
     ensure_apply(args, "aucun commit ni push n’a été effectué")
 
+    write_git_release(release_version)
+    paths = status_paths()
+    unsafe = [path for path in paths if unsafe_git_path(path)]
+    if unsafe:
+        raise AdminError("Fichiers locaux sensibles refusés par Git : " + ", ".join(unsafe))
     run(["git", "add", "-A", "--", *paths])
     run(["git", "diff", "--cached", "--check"])
     run(["git", "commit", "-m", args.message])
@@ -2054,6 +2194,11 @@ def interactive_publish() -> int:
         return 0
     remote = ask("Dépôt distant", "origin")
     branch = ask("Branche distante", "main")
+    current_version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    release_version = ask(
+        "Version installable",
+        next_git_release_version(current_version),
+    )
     if not confirm(f"Créer le commit et le pousser vers {remote}/{branch}"):
         print("Opération annulée.")
         return 0
@@ -2061,6 +2206,7 @@ def interactive_publish() -> int:
         message=message,
         remote=remote,
         branch=branch,
+        release_version=release_version,
         apply=True,
     ))
 
@@ -2365,6 +2511,10 @@ def parser() -> argparse.ArgumentParser:
     publish.add_argument("--message", required=True)
     publish.add_argument("--remote", default="origin")
     publish.add_argument("--branch", default="main")
+    publish.add_argument(
+        "--release-version",
+        help="version installable (défaut : incrément automatique de VERSION)",
+    )
     publish.add_argument("--apply", action="store_true")
     publish.set_defaults(handler=git_publish)
 

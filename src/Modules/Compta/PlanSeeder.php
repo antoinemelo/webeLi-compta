@@ -239,7 +239,7 @@ final class PlanSeeder
              VALUES
                 (:organisation, :dossier, :code, :label, :structure_level,
                  :type, :parent, :position, :source, :actor)
-             ON CONFLICT(dossier_id, code) WHERE code <> "" DO NOTHING'
+             ON CONFLICT(dossier_id, code) WHERE code <> \'\' DO NOTHING'
         );
         $existingRubric = $this->pdo->prepare(
             'SELECT id FROM rubriques_comptables

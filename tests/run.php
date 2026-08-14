@@ -21,6 +21,8 @@ use Compta\Core\Http\View;
 use Compta\Core\Http\WebApplication;
 use Compta\Core\Http\VueShellRenderer;
 use Compta\Core\Mail\Mailer;
+use Compta\Core\Maintenance\UpdateService;
+use Compta\Core\Maintenance\MaintenanceApiController;
 use Compta\Core\Security\ArraySessionStore;
 use Compta\Core\Security\Csrf;
 use Compta\Core\Security\TotpService;
@@ -504,6 +506,161 @@ final class Tests
         $_SERVER['REQUEST_METHOD'] = 'GET';
         $request = Request::fromGlobals('/edu');
         $this->same('/education/login', $request->path, 'base path ne coupe pas un préfixe voisin');
+
+        $maintenanceRoot = $this->tempDir();
+        mkdir($maintenanceRoot . '/storage', 0770, true);
+        file_put_contents($maintenanceRoot . '/VERSION', "0.6.1\n");
+        $releaseFiles = [];
+        foreach ([
+            '.htaccess', 'index.php', 'VERSION', 'composer.json', 'composer.lock',
+            'bootstrap/app.php', 'config/app.php',
+            'database/migrations/001_initial.sql', 'public/.htaccess',
+            'public/index.php', 'public/app/index.html',
+            'public/app/.vite/manifest.json',
+        ] as $path) {
+            $releaseFiles[$path] = str_repeat('a', 64);
+        }
+        $releaseManifest = [
+            'format' => 1,
+            'application' => 'webeli-compta',
+            'version' => '0.6.2',
+            'repository' => UpdateService::REPOSITORY,
+            'branch' => UpdateService::BRANCH,
+            'manifest_url' => UpdateService::MANIFEST_URL,
+            'archive_url' => UpdateService::ARCHIVE_URL,
+            'preserve_on_update' => ['storage/', 'config/local.php', 'vendor/'],
+            'files' => $releaseFiles,
+        ];
+        $updates = new UpdateService(
+            new PDO('sqlite::memory:'),
+            $maintenanceRoot,
+            $maintenanceRoot . '/storage',
+            'unit-test',
+            static fn (): string => json_encode(
+                $releaseManifest,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES
+            )
+        );
+        $releaseStatus = $updates->status(true);
+        $this->same('0.6.1', $releaseStatus['installed'], 'maintenance lit la version installée');
+        $this->same('0.6.2', $releaseStatus['latest'], 'maintenance lit la publication Git');
+        $this->true($releaseStatus['available'], 'maintenance détecte une version Git plus récente');
+        $this->same(64, strlen((string) $releaseStatus['release_fingerprint']), 'publication Git liée à une empreinte');
+        $this->throws(
+            function () use ($updates, $releaseManifest): void {
+                $releaseManifest['files']['storage/database/app.sqlite'] = str_repeat('b', 64);
+                $updates->validateManifest($releaseManifest);
+            },
+            'manifeste Git interdit tout remplacement du stockage'
+        );
+        $this->throws(
+            function () use ($updates, $releaseManifest): void {
+                $releaseManifest['repository'] = 'git@github.com:example/compromis.git';
+                $updates->validateManifest($releaseManifest);
+            },
+            'manifeste Git refuse une autre source'
+        );
+
+        $applyRoot = $this->tempDir();
+        mkdir($applyRoot . '/storage/database', 0770, true);
+        mkdir($applyRoot . '/config', 0770, true);
+        file_put_contents($applyRoot . '/VERSION', "0.6.1\n");
+        file_put_contents($applyRoot . '/config/local.php', "<?php return ['secret'=>'stable'];\n");
+        file_put_contents($applyRoot . '/storage/sentinel.txt', 'donnée persistante');
+        $migration001 = "CREATE TABLE base_initiale (id INTEGER PRIMARY KEY);\n";
+        $database = ConnectionFactory::sqlite(
+            $applyRoot . '/storage/database/app.sqlite'
+        );
+        $database->exec(
+            'CREATE TABLE schema_migrations ('
+            . 'version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)'
+        );
+        $journal = $database->prepare(
+            "INSERT INTO schema_migrations VALUES ('001', ?, datetime('now'))"
+        );
+        $journal->execute([hash('sha256', $migration001)]);
+        $database->exec('CREATE TABLE base_initiale (id INTEGER PRIMARY KEY)');
+
+        $bundle = $applyRoot . '/bundle';
+        $releaseRoot = $bundle . '/webeLi-compta-release';
+        mkdir($releaseRoot, 0770, true);
+        $releaseContents = [
+            '.htaccess' => "Options -Indexes\n",
+            'index.php' => "<?php\n",
+            'VERSION' => "0.6.2\n",
+            'composer.json' => "{}\n",
+            'composer.lock' => "{\"packages\":[]}\n",
+            'bootstrap/app.php' => "<?php return [];\n",
+            'config/app.php' => "<?php return [];\n",
+            'database/migrations/001_initial.sql' => $migration001,
+            'database/migrations/002_update_test.sql' =>
+                "CREATE TABLE mise_a_jour_test (id INTEGER PRIMARY KEY);\n",
+            'public/.htaccess' => "Options -Indexes\n",
+            'public/index.php' => "<?php\n",
+            'public/app/index.html' => "<main>0.6.2</main>\n",
+            'public/app/.vite/manifest.json' => "{}\n",
+        ];
+        $applyFiles = [];
+        foreach ($releaseContents as $path => $contents) {
+            $target = $releaseRoot . '/' . $path;
+            if (!is_dir(dirname($target))) {
+                mkdir(dirname($target), 0770, true);
+            }
+            file_put_contents($target, $contents);
+            $applyFiles[$path] = hash('sha256', $contents);
+        }
+        $applyManifest = $releaseManifest;
+        $applyManifest['files'] = $applyFiles;
+        $applyRaw = json_encode(
+            $applyManifest,
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES
+        );
+        file_put_contents($releaseRoot . '/RELEASE.json', $applyRaw);
+        $tarPath = $applyRoot . '/release.tar';
+        $tar = new PharData($tarPath);
+        $tar->buildFromDirectory($bundle);
+        $tar->compress(Phar::GZ);
+        unset($tar);
+        $archiveBytes = (string) file_get_contents($tarPath . '.gz');
+        $appUpdater = new UpdateService(
+            $database,
+            $applyRoot,
+            $applyRoot . '/storage',
+            'apply-test',
+            static fn (string $url): string => $url === UpdateService::MANIFEST_URL
+                ? $applyRaw
+                : $archiveBytes
+        );
+        $appliedRelease = $appUpdater->apply($applyManifest);
+        $this->same('0.6.2', $appliedRelease['version'], 'publication Git appliquée au runtime');
+        $this->same(['002'], $appliedRelease['migrations'], 'migration Git appliquée avec la publication');
+        $this->same(
+            'donnée persistante',
+            (string) file_get_contents($applyRoot . '/storage/sentinel.txt'),
+            'mise à jour conserve le stockage de l’instance'
+        );
+        $this->true(
+            str_contains(
+                (string) file_get_contents($applyRoot . '/config/local.php'),
+                'stable'
+            ),
+            'mise à jour conserve la configuration locale'
+        );
+        $this->same(
+            1,
+            (int) $database->query(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'mise_a_jour_test'"
+            )->fetchColumn(),
+            'base live migrée depuis la publication Git'
+        );
+        $this->true(
+            glob($applyRoot . '/storage/updates/backup-*/*.sqlite') !== [],
+            'sauvegarde SQLite créée avant synchronisation'
+        );
+        $this->false(
+            is_file($applyRoot . '/.maintenance'),
+            'mode maintenance retiré après succès'
+        );
     }
 
     private function databaseTests(): void
@@ -3332,6 +3489,37 @@ final class Tests
             $httpAccountingSetup,
             $httpFinancial
         );
+        $httpReleaseFiles = [];
+        foreach ([
+            '.htaccess', 'index.php', 'VERSION', 'composer.json', 'composer.lock',
+            'bootstrap/app.php', 'config/app.php',
+            'database/migrations/001_initial.sql', 'public/.htaccess',
+            'public/index.php', 'public/app/index.html',
+            'public/app/.vite/manifest.json',
+        ] as $path) {
+            $httpReleaseFiles[$path] = str_repeat('c', 64);
+        }
+        $httpReleaseManifest = [
+            'format' => 1,
+            'application' => 'webeli-compta',
+            'version' => '0.6.2',
+            'repository' => UpdateService::REPOSITORY,
+            'branch' => UpdateService::BRANCH,
+            'manifest_url' => UpdateService::MANIFEST_URL,
+            'archive_url' => UpdateService::ARCHIVE_URL,
+            'preserve_on_update' => ['storage/', 'config/local.php', 'vendor/'],
+            'files' => $httpReleaseFiles,
+        ];
+        $httpUpdates = new UpdateService(
+            $pdo,
+            dirname(__DIR__),
+            dirname($dbPath),
+            'http-test',
+            static fn (): string => json_encode(
+                $httpReleaseManifest,
+                JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES
+            )
+        );
         $apiRoutes = new ApiRouteRegistry(
             new ShellApiController(
                 $config,
@@ -3511,6 +3699,13 @@ final class Tests
                 $httpAccess,
                 new StructureAccessService($pdo, $httpAudit),
                 new StructureAccessInputValidator()
+            ),
+            null,
+            new MaintenanceApiController(
+                $httpAuth,
+                $httpAccess,
+                $httpUpdates,
+                $httpAudit
             )
         );
         $shellPage = new ShellPageController(
@@ -3543,6 +3738,36 @@ final class Tests
             $httpModuleAccess,
             $httpPasswordReset
         );
+
+        $maintenanceDenied = $app->handle(new Request(
+            'GET',
+            '/api/v1/maintenance/release',
+            query: ['refresh' => '1']
+        ));
+        $this->same(
+            403,
+            $maintenanceDenied->status,
+            'mise à jour Git réservée à l’administrateur installation'
+        );
+        $session->set('user_id', $registryAdminId);
+        $maintenanceStatus = $app->handle(new Request(
+            'GET',
+            '/api/v1/maintenance/release',
+            query: ['refresh' => '1']
+        ));
+        $maintenanceData = $this->responseJson($maintenanceStatus)['data'] ?? [];
+        $this->same(200, $maintenanceStatus->status, 'état Git accessible à l’administrateur');
+        $this->same('0.6.2', $maintenanceData['latest'] ?? '', 'API expose la dernière version Git');
+        $maintenanceWithoutCsrf = $app->handle(new Request(
+            'POST',
+            '/api/v1/maintenance/release/apply',
+            json: ['data' => [
+                'expected_version' => '0.6.2',
+                'release_fingerprint' => $maintenanceData['release_fingerprint'] ?? '',
+            ]]
+        ));
+        $this->same(403, $maintenanceWithoutCsrf->status, 'installation Git exige CSRF');
+        $session->set('user_id', $userId);
 
         $session->remove('user_id');
         $forgottenPage = $app->handle(new Request(

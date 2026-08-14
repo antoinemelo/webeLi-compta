@@ -7,6 +7,7 @@ use Compta\Core\Http\Request;
 use Compta\Core\Http\Response;
 use Compta\Core\Http\Router;
 use Compta\Core\Auth\SecurityApiController;
+use Compta\Core\Maintenance\MaintenanceApiController;
 use Compta\Core\Security\Csrf;
 use Compta\Modules\Compta\AccountingApiController;
 use Compta\Modules\Consolidation\ConsolidationApiController;
@@ -43,6 +44,7 @@ final class ApiRouteRegistry
         private readonly ?DossierApiController $dossiers = null,
         private readonly ?StructureAccessApiController $structureAccess = null,
         private readonly ?SecurityApiController $security = null,
+        private readonly ?MaintenanceApiController $maintenance = null,
     ) {
     }
 
@@ -64,6 +66,20 @@ final class ApiRouteRegistry
             $this->add($router, 'POST', '/api/v1/security/email/confirm', $this->security->confirmEmail(...));
             $this->add($router, 'POST', '/api/v1/security/disable', $this->security->disable(...));
             $this->add($router, 'POST', '/api/v1/security/password', $this->security->changePassword(...));
+        }
+        if ($this->maintenance !== null) {
+            $this->add(
+                $router,
+                'GET',
+                '/api/v1/maintenance/release',
+                $this->maintenance->status(...)
+            );
+            $this->add(
+                $router,
+                'POST',
+                '/api/v1/maintenance/release/apply',
+                $this->maintenance->apply(...)
+            );
         }
         if ($this->organisations !== null) {
             $this->add(

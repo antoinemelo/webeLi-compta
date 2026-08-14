@@ -114,7 +114,7 @@ Le rapport distingue la taille physique de l’espace réellement utilisé. Une
 copie SQLite cohérente peut donc être sensiblement plus petite que sa source
 lorsque celle-ci conserve des pages libres, sans perte de données.
 
-## Commit et push
+## Publier une version Git installable
 
 ```bash
 python3 tools/python/compta.py git-publish \
@@ -124,9 +124,23 @@ python3 tools/python/compta.py git-publish \
   --apply
 ```
 
-La prévisualisation énumère les fichiers. Les bases, journaux, secrets et
-configurations locales sont refusés. La commande indexe ensuite le périmètre,
-vérifie le diff, crée le commit et pousse `HEAD` vers `origin/main`.
+La prévisualisation énumère les fichiers et annonce la prochaine version. Par
+défaut, `0.6.1` devient `0.6.2`; une version explicite peut être fournie avec
+`--release-version`. Les bases, journaux, secrets et configurations locales
+sont refusés.
+
+Avec `--apply`, la commande met à jour `VERSION`, construit `RELEASE.json`,
+indexe le périmètre, vérifie le diff, crée le commit et pousse `HEAD` vers
+`origin/main`. Le manifeste désigne uniquement les fichiers utiles au runtime
+et conserve pour chacun une empreinte SHA-256. Il fixe également le dépôt,
+la branche, les URL GitHub et la politique de préservation. La commande refuse
+donc de produire une publication installable pour un autre dépôt ou une autre
+branche.
+
+`storage/`, `config/local.php` et `vendor/` ne figurent jamais dans
+l’inventaire remplaçable. Le dépôt Git conserve les sources, tests et outils,
+mais le client de production ignore ces fichiers et ne copie que la liste
+blanche du manifeste.
 
 Pour que les commandes Git usuelles affichent ensuite l’écart avec le dépôt
 distant, configurer une fois la branche de suivi :
@@ -138,6 +152,9 @@ git branch --set-upstream-to=origin/main main
 Après cette opération, `git status`, `git pull` et `git push` utilisent
 automatiquement `origin/main`. Cette configuration appartient au dépôt local ;
 elle ne crée aucun commit et ne se pousse pas.
+
+La consommation de cette publication depuis l’instance live est détaillée
+dans [`mise-a-jour-git.md`](mise-a-jour-git.md).
 
 ## Déployer uniquement le delta applicatif
 

@@ -169,6 +169,28 @@ export type OrganisationRegistryPayload = {
   };
 };
 
+export type MaintenanceReleaseStatus = {
+  installed: string;
+  latest: string | null;
+  checked_at: number;
+  error: string | null;
+  available: boolean;
+  current: boolean;
+  writable: boolean;
+  repository: string;
+  branch: string;
+  release_fingerprint: string | null;
+  file_count: number;
+};
+
+export type MaintenanceApplyResult = {
+  version: string;
+  migrations: string[];
+  backup_created: boolean;
+  file_count: number;
+  reload_required: boolean;
+};
+
 export type DossierRegistryItem = {
   id: number;
   organisation_id: number;

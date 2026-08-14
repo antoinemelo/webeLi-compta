@@ -14,12 +14,12 @@ RewriteRule ^assets/(.+)$ public/assets/$1 [END]
 
 # Never expose application code, persistent data, dependencies or metadata.
 RewriteRule ^(?:bin|bootstrap|config|database|public|resources|src|storage|templates|vendor)(?:/|$) - [F,END]
-RewriteRule ^(?:composer\.(?:json|lock)|VERSION)$ - [F,END]
+RewriteRule ^(?:composer\.(?:json|lock)|VERSION|RELEASE\.json)$ - [F,END]
 RewriteRule (^|/)\. - [F,END]
 
 # Vue routes, API routes and legacy redirects all use the PHP front controller.
 RewriteRule ^ index.php [QSA,END]
 
-<FilesMatch "^(?:\.|composer\.(?:json|lock)$|VERSION$)">
+<FilesMatch "^(?:\.|composer\.(?:json|lock)$|VERSION$|RELEASE\.json$)">
     Require all denied
 </FilesMatch>

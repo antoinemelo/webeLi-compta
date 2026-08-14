@@ -275,6 +275,8 @@ final class ShellApiController
                     ['key' => 'configuration_setup_guide', 'method' => 'GET', 'path' => '/configuration/setup-guide'],
                     ['key' => 'configuration_setup_guide_confirm', 'method' => 'POST', 'path' => '/configuration/setup-guide/confirm'],
                     ['key' => 'configuration_setup_guide_status', 'method' => 'POST', 'path' => '/configuration/setup-guide/status'],
+                    ['key' => 'maintenance_release', 'method' => 'GET', 'path' => '/maintenance/release'],
+                    ['key' => 'maintenance_release_apply', 'method' => 'POST', 'path' => '/maintenance/release/apply'],
                     ['key' => 'organisations', 'method' => 'GET', 'path' => '/structures/organisations'],
                     ['key' => 'structure_dossiers', 'method' => 'GET', 'path' => '/structures/dossiers'],
                     ['key' => 'structure_access', 'method' => 'GET', 'path' => '/structures/access'],
